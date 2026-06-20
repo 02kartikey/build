@@ -1,0 +1,18 @@
+{
+  "name": "nunew",
+  "version": "1.0.0",
+  "description": "Assessment App",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm rebuild better-sqlite3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "type": "commonjs",
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "dotenv": "^17.4.2"
+  }
+}
