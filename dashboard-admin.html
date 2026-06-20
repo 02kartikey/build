@@ -417,6 +417,7 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
     <div class="sb-sec">System</div>
     <div class="nav-item" onclick="show('users')" id="nav-users"><span class="ni">👤</span> User Management</div>
     <div class="nav-item" onclick="show('reminders')" id="nav-reminders"><span class="ni">📧</span> Reminder Log</div>
+    <div class="nav-item" onclick="show('queries')" id="nav-queries"><span class="ni">💬</span> Student Queries <span class="nb" id="queries-nb" style="display:none">0</span></div>
     <div class="nav-item" onclick="show('audit')" id="nav-audit"><span class="ni">📋</span> Audit Log</div>
     <div class="nav-item" onclick="show('testemail')" id="nav-testemail"><span class="ni">🔧</span> Test Email</div>
     <div class="nav-item" onclick="show('scheduled')" id="nav-scheduled"><span class="ni">⏰</span> Scheduled Reminders</div>
@@ -712,6 +713,40 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
           </div>
           <div id="remlog-wrap"><div class="empty"><div class="spinner spd"></div></div></div>
         </div>
+      </div>
+
+      <!-- ══ STUDENT QUERIES ══ -->
+      <div class="section" id="section-queries">
+        <div class="ph">
+          <div><h1>Student Queries</h1><p>Contact and scheduling requests submitted by students through the AI Counsellor.</p></div>
+          <div class="ph-r">
+            <input class="ti" type="search" id="qr-q" placeholder="🔍 Search name, email, message…" style="width:220px" oninput="filterQueries()">
+            <select class="ti" id="qr-status" onchange="filterQueries()">
+              <option value="">All statuses</option>
+              <option value="pending">Pending</option>
+              <option value="in-progress">In Progress</option>
+              <option value="resolved">Resolved</option>
+            </select>
+            <button class="btn btn-outline btn-sm" onclick="loadQueries()">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="card">
+          <div style="display:flex;gap:20px;padding:12px 20px;border-bottom:1px solid var(--border);background:var(--bg2);font-size:12px;color:var(--ink4)">
+            <span>Total: <strong id="qr-total" style="color:var(--ink)">—</strong></span>
+            <span>Pending: <strong id="qr-pending-count" style="color:var(--warn)">—</strong></span>
+            <span>Resolved: <strong id="qr-resolved-count" style="color:var(--ok)">—</strong></span>
+          </div>
+          <div id="qr-wrap"><div class="empty"><div class="spinner spd"></div></div></div>
+        </div>
+        <!-- Query detail slide-in drawer -->
+        <div id="qr-drawer" style="position:fixed;top:0;right:-480px;width:460px;height:100vh;background:var(--surface);border-left:1px solid var(--border);z-index:200;overflow-y:auto;transition:right .22s cubic-bezier(.4,0,.2,1);padding:0;box-shadow:var(--shadow-lg)">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 22px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface);z-index:1">
+            <span style="font-size:15px;font-weight:700;color:var(--ink)">Query Details</span>
+            <button onclick="closeQueryDrawer()" style="background:rgba(255,255,255,.07);border:none;color:var(--ink4);width:28px;height:28px;border-radius:50%;cursor:pointer;font-size:14px">✕</button>
+          </div>
+          <div id="qr-drawer-body" style="padding:22px"></div>
+        </div>
+        <div id="qr-overlay" onclick="closeQueryDrawer()" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:199"></div>
       </div>
 
       <!-- ══ AUDIT LOG ══ -->
@@ -1046,10 +1081,15 @@ async function initApp(){
     const r=new FileReader();r.onload=ev=>{_parsedRows=parseCsv(ev.target.result);const p=document.getElementById('import-prev');p.style.display='block';p.textContent='✓ '+_parsedRows.length+' rows parsed. Click Import to proceed.';};r.readAsText(file);
   });
   loadOverview();loadStudents();loadUsers();
+  // Pre-load pending query count for the sidebar badge
+  _api('GET','/api/dashboard/queries?limit=1').then(({pending})=>{
+    const nb=document.getElementById('queries-nb');
+    if(nb&&pending>0){nb.textContent=pending;nb.style.display='inline';}
+  }).catch(()=>{});
 }
 
 // ── NAV ──
-const TITLES={overview:['System Overview','All schools · all students'],students:['All Students','Search and manage student records'],atrisk:['At-Risk Students','In progress 3+ days'],schools:['All Schools','Completion per school'],'schools-reg':['School Registry','Manage registered schools'],users:['User Management','Dashboard accounts'],reminders:['Reminder Log','Email history'],audit:['Audit Log','System activity'],testemail:['Test Email','SMTP verification'],scheduled:['Scheduled Reminders','Automated reminder campaigns'],analytics:['Analytics','Deep-dive platform metrics']};
+const TITLES={overview:['System Overview','All schools · all students'],students:['All Students','Search and manage student records'],atrisk:['At-Risk Students','In progress 3+ days'],schools:['All Schools','Completion per school'],'schools-reg':['School Registry','Manage registered schools'],users:['User Management','Dashboard accounts'],reminders:['Reminder Log','Email history'],queries:['Student Queries','Contact and scheduling requests from students'],audit:['Audit Log','System activity'],testemail:['Test Email','SMTP verification'],scheduled:['Scheduled Reminders','Automated reminder campaigns'],analytics:['Analytics','Deep-dive platform metrics']};
 function show(name){
   document.querySelectorAll('.section').forEach(el=>el.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'));
@@ -1060,6 +1100,7 @@ function show(name){
   if(name==='audit')loadAuditLog();if(name==='reminders')loadReminderLog();
   if(name==='schools-reg')loadSchoolsReg();if(name==='schools')loadSchools();if(name==='atrisk')loadAtRisk();
   if(name==='analytics')loadAnalytics();if(name==='scheduled')loadScheduled();
+  if(name==='queries')loadQueries();
 }
 function refreshCurrent(){if(_curSection==='overview')loadOverview();else show(_curSection);document.getElementById('last-refresh').textContent='Updated '+new Date().toLocaleTimeString('en-IN');
     generateInsights();
@@ -1811,6 +1852,147 @@ function _aggBars(rows) {
     const pct = total ? Math.round(n/total*100) : 0;
     return `<div class="pa-bar-row"><div class="pa-dot" style="background:${col}"></div><div class="pa-bar-track"><div class="pa-bar-fill" style="width:${pct}%;background:${col}"></div></div><div class="pa-bar-val">${pct}%</div></div>`;
   }).join('');
+}
+
+// ── STUDENT QUERIES ──
+let _queries = [], _curQueryId = null;
+
+const _QR_STATUS_BADGE = {
+  'pending':     '<span class="badge" style="background:rgba(245,158,11,.15);color:#fcd34d">⏳ Pending</span>',
+  'in-progress': '<span class="badge" style="background:rgba(59,130,246,.15);color:#93c5fd">🔄 In Progress</span>',
+  'resolved':    '<span class="badge" style="background:rgba(16,185,129,.12);color:#6ee7b7">✅ Resolved</span>',
+};
+
+async function loadQueries() {
+  const wrap = document.getElementById('qr-wrap');
+  wrap.innerHTML = '<div class="empty"><div class="spinner spd"></div></div>';
+  try {
+    const { queries, pending } = await _api('GET', '/api/dashboard/queries');
+    _queries = queries || [];
+    // Update pending badge in nav
+    const nb = document.getElementById('queries-nb');
+    if (nb) { nb.textContent = pending; nb.style.display = pending > 0 ? 'inline' : 'none'; }
+    // Update counters
+    const tot = _queries.length;
+    const res = _queries.filter(q => q.status === 'resolved').length;
+    const pen = _queries.filter(q => q.status === 'pending').length;
+    const el = id => document.getElementById(id);
+    if (el('qr-total'))         el('qr-total').textContent         = tot;
+    if (el('qr-pending-count')) el('qr-pending-count').textContent = pen;
+    if (el('qr-resolved-count'))el('qr-resolved-count').textContent= res;
+    filterQueries();
+  } catch(e) {
+    wrap.innerHTML = '<div class="empty"><div class="et">' + _esc(e.message) + '</div></div>';
+  }
+}
+
+function filterQueries() {
+  const q      = (document.getElementById('qr-q')?.value || '').toLowerCase();
+  const status = document.getElementById('qr-status')?.value || '';
+  let list = _queries;
+  if (status) list = list.filter(r => r.status === status);
+  if (q) list = list.filter(r =>
+    (r.name    || '').toLowerCase().includes(q) ||
+    (r.email   || '').toLowerCase().includes(q) ||
+    (r.message || '').toLowerCase().includes(q)
+  );
+  renderQueries(list);
+}
+
+function renderQueries(list) {
+  const wrap = document.getElementById('qr-wrap');
+  if (!list.length) {
+    wrap.innerHTML = '<div class="empty"><div class="ei">💬</div><div class="et">No queries found</div><div class="es">Students can submit queries from the AI Counsellor contact form.</div></div>';
+    return;
+  }
+  wrap.innerHTML = '<table class="tbl"><thead><tr>' +
+    '<th>Student</th><th>Message</th><th>Preferred Slot</th><th>Submitted</th><th>Status</th><th></th>' +
+    '</tr></thead><tbody>' +
+    list.map(r => {
+      const slot = [r.preferred_date, r.preferred_time].filter(Boolean).join(' · ') || '—';
+      const msg  = (r.message || '').slice(0, 80) + (r.message && r.message.length > 80 ? '…' : '');
+      return '<tr>' +
+        '<td><div class="tbl-name" onclick="openQueryDrawer(' + r.id + ')">' + _esc(r.name) + '</div>' +
+        '<div class="tbl-meta" style="font-family:var(--mono)">' + _esc(r.email) + '</div></td>' +
+        '<td style="max-width:260px;font-size:12px;color:var(--ink4)">' + _esc(msg) + '</td>' +
+        '<td style="font-size:12px;white-space:nowrap;color:var(--ink4)">' + _esc(slot) + '</td>' +
+        '<td style="font-size:11px;color:var(--ink5);white-space:nowrap;font-family:var(--mono)">' + _fmtDate(r.submitted_at) + '</td>' +
+        '<td>' + (_QR_STATUS_BADGE[r.status] || _QR_STATUS_BADGE['pending']) + '</td>' +
+        '<td><button class="btn btn-outline btn-xs" onclick="openQueryDrawer(' + r.id + ')">View</button></td>' +
+        '</tr>';
+    }).join('') + '</tbody></table>';
+}
+
+function openQueryDrawer(id) {
+  const q = _queries.find(r => r.id === id);
+  if (!q) return;
+  _curQueryId = id;
+  const slot  = [q.preferred_date, q.preferred_time].filter(Boolean).join(' at ') || 'Not specified';
+  const body  = document.getElementById('qr-drawer-body');
+  body.innerHTML =
+    '<div style="margin-bottom:18px">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);margin-bottom:6px">Student</div>' +
+      '<div style="font-size:15px;font-weight:700;color:var(--ink)">' + _esc(q.name) + '</div>' +
+      '<div style="font-size:12px;font-family:var(--mono);color:var(--ink4);margin-top:2px">' + _esc(q.email) + '</div>' +
+    '</div>' +
+    '<div style="margin-bottom:18px">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);margin-bottom:6px">Preferred Slot</div>' +
+      '<div style="font-size:13px;color:var(--ink2)">' + _esc(slot) + '</div>' +
+    '</div>' +
+    '<div style="margin-bottom:18px">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);margin-bottom:6px">Message</div>' +
+      '<div style="font-size:13px;color:var(--ink2);line-height:1.6;white-space:pre-wrap;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px">' + _esc(q.message) + '</div>' +
+    '</div>' +
+    '<div style="margin-bottom:18px">' +
+      '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);margin-bottom:6px">Submitted</div>' +
+      '<div style="font-size:12px;color:var(--ink4);font-family:var(--mono)">' + _fmtDate(q.submitted_at) + '</div>' +
+    '</div>' +
+    '<hr style="border-color:var(--border);margin:18px 0">' +
+    '<div style="margin-bottom:12px">' +
+      '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);display:block;margin-bottom:6px">Status</label>' +
+      '<select id="qr-d-status" class="fi" style="margin-bottom:0">' +
+        '<option value="pending"' +    (q.status==='pending'?    ' selected':'') + '>⏳ Pending</option>' +
+        '<option value="in-progress"'+ (q.status==='in-progress'?' selected':'') + '>🔄 In Progress</option>' +
+        '<option value="resolved"'+    (q.status==='resolved'?   ' selected':'') + '>✅ Resolved</option>' +
+      '</select>' +
+    '</div>' +
+    '<div style="margin-bottom:16px">' +
+      '<label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--brand3);display:block;margin-bottom:6px">Admin Note</label>' +
+      '<textarea id="qr-d-note" class="fi" rows="4" placeholder="Add internal notes about this query…" style="resize:vertical;margin-bottom:0">' + _esc(q.admin_note || '') + '</textarea>' +
+    '</div>' +
+    '<button onclick="saveQueryUpdate()" class="btn btn-primary" style="width:100%">Save Changes</button>';
+
+  document.getElementById('qr-drawer').style.right = '0';
+  document.getElementById('qr-overlay').style.display = 'block';
+}
+
+function closeQueryDrawer() {
+  document.getElementById('qr-drawer').style.right = '-480px';
+  document.getElementById('qr-overlay').style.display = 'none';
+  _curQueryId = null;
+}
+
+async function saveQueryUpdate() {
+  if (!_curQueryId) return;
+  const status    = document.getElementById('qr-d-status')?.value;
+  const adminNote = document.getElementById('qr-d-note')?.value || '';
+  try {
+    await _api('PATCH', '/api/dashboard/queries/' + _curQueryId, { status, adminNote });
+    toast('Query updated.', 'success');
+    // Update local cache
+    const q = _queries.find(r => r.id === _curQueryId);
+    if (q) { q.status = status; q.admin_note = adminNote; }
+    closeQueryDrawer();
+    filterQueries();
+    // Refresh pending badge
+    const pen = _queries.filter(r => r.status === 'pending').length;
+    const nb  = document.getElementById('queries-nb');
+    if (nb) { nb.textContent = pen; nb.style.display = pen > 0 ? 'inline' : 'none'; }
+    if (document.getElementById('qr-pending-count'))
+      document.getElementById('qr-pending-count').textContent = pen;
+  } catch(e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 (async function(){

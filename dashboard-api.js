@@ -137,6 +137,10 @@ async function handle(req, res) {
     if (method === 'GET' && url === '/api/dashboard/schools')      return _schools(req, res);
     if (method === 'GET' && url === '/api/dashboard/reminder-log') return _reminderLog(req, res);
 
+    // ── Student Counsellor Queries ──────────────────────────────
+    if (method === 'GET'   && url.startsWith('/api/dashboard/queries')) return _listQueries(req, res);
+    if (method === 'PATCH' && url.startsWith('/api/dashboard/queries/')) return await _updateQuery(req, res);
+
     // ── Schools registry (admin only) ────────────────────────────
     if (method === 'GET'    && url === '/api/dashboard/schools-registry')              return _listSchoolsReg(req, res);
     if (method === 'POST'   && url === '/api/dashboard/schools-registry')              return await _upsertSchoolReg(req, res);
@@ -474,6 +478,43 @@ function _reminderLog(req, res) {
   const user = _requireRole(req, res, 'management', 'admin');
   if (!user) return;
   _json(res, 200, { log: _ddb.getReminderLog({ limit: 200 }) });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   COUNSELLOR QUERIES — student contact/schedule form submissions
+   Accessible by: admin, management, counsellor (own school scoped)
+══════════════════════════════════════════════════════════════════ */
+function _listQueries(req, res) {
+  const user = _requireRole(req, res, 'admin', 'management', 'counsellor');
+  if (!user) return;
+  const qs     = Object.fromEntries(new URL('http://x' + req.url).searchParams);
+  const status = qs.status || '';     // 'pending' | 'in-progress' | 'resolved' | ''
+  const limit  = Math.min(parseInt(qs.limit || '200', 10), 500);
+  const offset = parseInt(qs.offset || '0', 10);
+  const rows   = _cdb.listQueries({ status: status || undefined, limit, offset });
+  // Count pending for badge
+  const pending = _cdb.listQueries({ status: 'pending', limit: 500 }).length;
+  _json(res, 200, { queries: rows, pending });
+}
+
+async function _updateQuery(req, res) {
+  const user = _requireRole(req, res, 'admin', 'management', 'counsellor');
+  if (!user) return;
+  const id   = parseInt(req.url.split('/').pop(), 10);
+  if (!id) return _json(res, 400, { error: 'Invalid query id' });
+  const body = await _readBody(req).catch(() => ({}));
+  const { status, adminNote } = body || {};
+  const allowed = ['pending', 'in-progress', 'resolved'];
+  if (status && !allowed.includes(status)) {
+    return _json(res, 400, { error: 'status must be pending | in-progress | resolved' });
+  }
+  _cdb.updateQuery(id, { status, adminNote });
+  _ddb.auditLog({
+    userId: user.id, userEmail: user.email,
+    action: 'update_query', target: String(id),
+    detail: status ? `status=${status}` : 'note updated',
+  });
+  _json(res, 200, { ok: true });
 }
 
 /* ══════════════════════════════════════════════════════════════════

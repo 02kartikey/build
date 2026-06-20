@@ -110,6 +110,10 @@ function init(db) {
   /* ── Step 2: ALTER TABLE guard for conversation_id ── */
   try { _db.exec('ALTER TABLE chat_history ADD COLUMN conversation_id TEXT'); } catch (_) {}
 
+  /* ── Step 3: ALTER TABLE guards for counsellor_queries new columns ── */
+  try { _db.exec('ALTER TABLE counsellor_queries ADD COLUMN admin_note TEXT'); }  catch (_) {}
+  try { _db.exec('ALTER TABLE counsellor_queries ADD COLUMN updated_at TEXT'); }  catch (_) {}
+
   /* ── Step 3: Index on conversation_id (must follow ALTER TABLE) ── */
   _db.exec(`CREATE INDEX IF NOT EXISTS idx_ch_conv ON chat_history(conversation_id);`);
 }
@@ -132,7 +136,7 @@ function saveQuery({ name, email, message, preferredDate, preferredTime }) {
   return info.lastInsertRowid;
 }
 
-function listQueries({ status, limit = 100, offset = 0 } = {}) {
+function listQueries({ status, limit = 200, offset = 0 } = {}) {
   if (!_db) throw new Error('counsellor-db not initialised');
   if (status) {
     return _db.prepare(
@@ -142,6 +146,19 @@ function listQueries({ status, limit = 100, offset = 0 } = {}) {
   return _db.prepare(
     `SELECT * FROM counsellor_queries ORDER BY submitted_at DESC LIMIT ? OFFSET ?`
   ).all(limit, offset);
+}
+
+function updateQuery(id, { status, adminNote } = {}) {
+  if (!_db) throw new Error('counsellor-db not initialised');
+  const fields = [];
+  const vals   = [];
+  if (status)    { fields.push('status = ?');     vals.push(String(status).slice(0, 50)); }
+  if (adminNote !== undefined) {
+                   fields.push('admin_note = ?'); vals.push(adminNote ? String(adminNote).slice(0, 2000) : null); }
+  if (!fields.length) return;
+  fields.push('updated_at = ?');
+  vals.push(new Date().toISOString(), Number(id));
+  _db.prepare(`UPDATE counsellor_queries SET ${fields.join(', ')} WHERE id = ?`).run(...vals);
 }
 
 /* ─── Report lookup by email ────────────────────────────────────── */
@@ -550,7 +567,7 @@ function close() { /* shares DB from db.js — stub for graceful shutdown */ }
 
 module.exports = {
   init,
-  saveQuery, listQueries,
+  saveQuery, listQueries, updateQuery,
   getReportByEmail, hasCompletedAssessment,
   saveMessage, getHistory, getConversations, clearHistory,
   saveConversationSummary, getConversationSummary,
