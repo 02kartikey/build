@@ -1,0 +1,2552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NuMind MAPS — Multi-dimensional Assessments for Personalized Success</title>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,700&family=Inter:wght@400;500;600&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- Supabase SDK removed — DB layer uses plain fetch() instead -->
+<link rel="stylesheet" href="styles.css?v=20260429">
+</head>
+<body>
+
+<!-- ═══════════════════════════
+     NAV
+═══════════════════════════ -->
+<nav class="nav">
+  <div class="nav-logo" onclick="navLogoClick()">
+    <img src="https://numind.co.in/wp-content/uploads/2025/12/numind_logo.png" alt="NuMind" onerror="this.classList.add('errored')" />
+    <span class="nav-logo-text">NuMind</span>
+    <span class="nav-maps-tag">MAPS</span>
+  </div>
+
+
+  <!-- Staff Login button - always visible in nav -->
+  <div style="position:relative;margin-left:12px;flex-shrink:0" id="staff-menu-wrap">
+    <button
+      id="staff-login-btn"
+      onclick="toggleStaffMenu()"
+      style="display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:20px;border:1.5px solid rgba(14,79,92,.2);background:rgba(14,79,92,.05);color:var(--brand);font-family:'Poppins',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap"
+      onmouseover="this.style.background='rgba(14,79,92,.1)';this.style.borderColor='rgba(14,79,92,.4)'"
+      onmouseout="this.style.background='rgba(14,79,92,.05)';this.style.borderColor='rgba(14,79,92,.2)'"
+    >
+      <span>🔑</span> Staff Login <span id="staff-chevron" style="font-size:10px;transition:transform .15s">▾</span>
+    </button>
+
+    <!-- Dropdown -->
+    <div id="staff-dropdown" style="display:none;position:absolute;top:calc(100% + 8px);right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,.12);min-width:210px;overflow:hidden;z-index:500">
+      <div style="padding:10px 14px 8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;border-bottom:1px solid #f1f5f9">Select your role</div>
+      <a href="/dashboard-counsellor.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;transition:background .12s"
+        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
+      >
+        <span style="font-size:22px">🎓</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#0f172a">Counsellor</div>
+          <div style="font-size:11px;color:#64748b">View your school's students</div>
+        </div>
+      </a>
+      <a href="/dashboard-management.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;border-top:1px solid #f1f5f9;transition:background .12s"
+        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
+      >
+        <span style="font-size:22px">🏫</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#0f172a">Management</div>
+          <div style="font-size:11px;color:#64748b">Multi-school overview</div>
+        </div>
+      </a>
+      <a href="/dashboard-admin.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;border-top:1px solid #f1f5f9;transition:background .12s"
+        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
+      >
+        <span style="font-size:22px">⚡</span>
+        <div>
+          <div style="font-size:13px;font-weight:700;color:#0f172a">Admin</div>
+          <div style="font-size:11px;color:#64748b">Full system access</div>
+        </div>
+      </a>
+    </div>
+  </div>
+</nav>
+
+<script>
+// Staff login dropdown toggle
+function toggleStaffMenu() {
+  const dd  = document.getElementById('staff-dropdown');
+  const ch  = document.getElementById('staff-chevron');
+  const open = dd.style.display === 'none';
+  dd.style.display = open ? 'block' : 'none';
+  ch.style.transform = open ? 'rotate(180deg)' : '';
+}
+// Close dropdown when clicking outside
+document.addEventListener('click', function(e) {
+  if (!document.getElementById('staff-menu-wrap').contains(e.target)) {
+    document.getElementById('staff-dropdown').style.display = 'none';
+    document.getElementById('staff-chevron').style.transform = '';
+  }
+});
+
+// goToCounsellor — navigate to the AI counsellor page.
+// Called from results page and landing page "Open AI Counsellor" buttons.
+// Defined here (in a plain script) so it is available immediately,
+// before any ES module (ai-counsellor.js / main.js) has finished loading.
+function goToCounsellor() {
+  if (typeof window.goPage === 'function') {
+    window.goPage('counsellor');
+  } else {
+    setTimeout(function() {
+      if (typeof window.goPage === 'function') window.goPage('counsellor');
+    }, 200);
+  }
+}
+
+// Navigate back from counsellor page — go to results if scores exist, else landing.
+function goBackFromCounsellor() {
+  var _S = window.S;
+  var hasResults = _S && _S.cpi && _S.cpi.scores !== null && _S.nmap && _S.nmap.scores !== null;
+  if (typeof window.goPage === 'function') {
+    window.goPage(hasResults ? 'results' : 'landing');
+  }
+}
+
+// Counsellor contact form submission (results page section)
+function submitCounsellorQuery() {
+  var btn = document.getElementById('cq-submit-btn');
+  var name = (document.getElementById('cq-name') || {}).value || '';
+  var email = (document.getElementById('cq-email') || {}).value || '';
+  var message = (document.getElementById('cq-message') || {}).value || '';
+  if (!name || !email || !message) return;
+  if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+  var tok = (typeof window._APP_TOKEN !== 'undefined') ? window._APP_TOKEN : '';
+  var headers = { 'Content-Type': 'application/json' };
+  if (tok) headers['X-App-Token'] = tok;
+  fetch('/api/counsellor-query', {
+    method: 'POST', headers: headers,
+    body: JSON.stringify({ name: name, email: email, message: message })
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var success = document.getElementById('cq-success');
+      if (success) success.style.display = '';
+      var form = document.getElementById('cq-form');
+      if (form) form.style.display = 'none';
+    })
+    .catch(function() {
+      if (btn) { btn.disabled = false; btn.textContent = 'Send Request'; }
+    });
+}
+
+// Textarea auto-resize for AI counsellor input
+function _acResizeTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 140) + 'px';
+}
+
+// Keyboard handler for AI counsellor textarea — send on Enter, newline on Shift+Enter
+function _acInputKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    if (typeof window.acSend === 'function') window.acSend();
+  }
+}
+
+// ── Registration: State → City → School cascading dropdowns ──────
+// Inlined here as a plain script so it works regardless of whether
+// ES modules (main.js) have finished loading or are blocked by CORS.
+
+var _INDIA_DATA=(function(){var d={};
+d["Andhra Pradesh"]={"Visakhapatnam":["Bhashyam Public School","DAV Public School","Delhi Public School","Kendriya Vidyalaya No.1","Little Flower High School","Narayana E-Techno School","Sri Chaitanya School","St. Joseph's English Medium School","Timpany Senior Secondary School","Vikasa School"],"Vijayawada":["Bhashyam Public School","Delhi Public School","Kendriya Vidyalaya","Narayana School","Sri Chaitanya School","St. Ann's High School","St. Xavier's High School","Vivekananda High School"],"Guntur":["Delhi Public School","Kendriya Vidyalaya","Narayana School","Sri Chaitanya School","St. Joseph's High School"],"Tirupati":["Delhi Public School","Kendriya Vidyalaya","Narayana School","Sri Padmavathi School","Sri Venkateswara School"],"Nellore":["Bhashyam School","Delhi Public School","Kendriya Vidyalaya","Narayana School"],"Other":[]};
+d["Arunachal Pradesh"]={"Itanagar":["Delhi Public School","Donyi Polo Vidyalaya","Kendriya Vidyalaya","Vivekananda Kendra Vidyalaya"],"Naharlagun":["Delhi Public School","Kendriya Vidyalaya","Jawahar Navodaya Vidyalaya"],"Other":[]};
+d["Assam"]={"Guwahati":["Asian Higher Secondary School","Cotton Collegiate","Delhi Public School","Don Bosco School","Guru Nanak Higher Secondary School","Holy Child School","Kendriya Vidyalaya","Mahatma Gandhi International School","Modern English Academy","Sainik School Goalpara","South Point School","St. Mary's Higher Secondary School"],"Dibrugarh":["Don Bosco School","Kendriya Vidyalaya","St. Paul's School"],"Jorhat":["Kendriya Vidyalaya","St. Paul's School","Assam Valley School"],"Silchar":["Kendriya Vidyalaya","Holy Cross School","St. Paul's Higher Secondary"],"Other":[]};
+d["Bihar"]={"Patna":["Carmel High School","D.A.V. Public School","Delhi Public School","Don Bosco Academy","Kendriya Vidyalaya","Loyola High School","Notre Dame Academy","Sacred Heart Convent School","St. Joseph's Convent","St. Michael's High School","St. Xavier's High School"],"Gaya":["Delhi Public School","Kendriya Vidyalaya","Notre Dame Academy","St. Joseph's School"],"Bhagalpur":["Kendriya Vidyalaya","St. Joseph's School","Trinity High School"],"Muzaffarpur":["Delhi Public School","Kendriya Vidyalaya","St. Michael's School"],"Other":[]};
+d["Chhattisgarh"]={"Raipur":["Delhi Public School","Kendriya Vidyalaya","Nalanda School","Sacred Heart School","Sri Satya Sai Vidya Vihar","St. Francis School","St. Thomas College"],"Bilaspur":["Delhi Public School","Kendriya Vidyalaya","St. Xavier's School"],"Durg":["Delhi Public School","Kendriya Vidyalaya","Sai Baba School"],"Other":[]};
+d["Goa"]={"Panaji":["Carmel College","Kendriya Vidyalaya","People's High School","Rosary High School","St. Britto's High School"],"Margao":["Kendriya Vidyalaya","Our Lady of Grace High School","People's English Medium School"],"Vasco da Gama":["Kendriya Vidyalaya","New English High School","St. Andrew's High School"],"Other":[]};
+d["Gujarat"]={"Ahmedabad":["Adani Vidya Mandir","Delhi Public School","G.D. Goenka School","Kendriya Vidyalaya","Navrachana International School","Riverside School","Sandipani School","St. Kabir School","Udgam School for Children","Zydus School for Excellence"],"Surat":["Delhi Public School","G.D. Goenka School","Kendriya Vidyalaya","Shree Swaminarayan High School"],"Vadodara":["Delhi Public School","Kendriya Vidyalaya","Navrachana International","Podar International School"],"Rajkot":["Delhi Public School","Kendriya Vidyalaya","Royal Academy"],"Gandhinagar":["Delhi Public School","Kendriya Vidyalaya","Udgam School"],"Other":[]};
+d["Haryana"]={"Gurugram":["Amity International School","Delhi Public School","G.D. Goenka World School","Heritage Xperiential Learning School","Kendriya Vidyalaya","Pathways School Gurgaon","Scottish High International School","Shri Ram School Aravali","The Shri Ram School","The Vivekananda School"],"Faridabad":["Bal Bharati Public School","Delhi Public School","Kendriya Vidyalaya","Ryan International School","The Yadavindra Public School"],"Hisar":["Delhi Public School","Kendriya Vidyalaya","Om Public School"],"Rohtak":["Delhi Public School","Kendriya Vidyalaya","Ryan International School"],"Ambala":["Delhi Public School","Kendriya Vidyalaya","St. Helen's Convent School"],"Sonipat":["Delhi Public School","Kendriya Vidyalaya","Ryan International School"],"Panipat":["Delhi Public School","Kendriya Vidyalaya","Lovely Public School"],"Other":[]};
+d["Himachal Pradesh"]={"Shimla":["Auckland House School","Bishop Cotton School","Loreto Convent","Sanawarian School","St. Edward's School"],"Dharamsala":["Central School for Tibetans","Kendriya Vidyalaya","St. John's School"],"Manali":["Delhi Public School","Kendriya Vidyalaya"],"Other":[]};
+d["Jharkhand"]={"Ranchi":["Carmel Junior College","D.A.V. Public School","Delhi Public School","Don Bosco School","Kendriya Vidyalaya","Loyola School","St. John's School","St. Xavier's College","St. Xavier's School","Ursuline Convent School"],"Jamshedpur":["Carmel Junior College","Delhi Public School","Kendriya Vidyalaya","Loyola School","Sacred Heart Convent","St. Mary's School"],"Dhanbad":["Delhi Public School","Kendriya Vidyalaya","St. Paul's School"],"Other":[]};
+d["Karnataka"]={"Bengaluru":["Bishop Cotton Boys' School","Bishop Cotton Girls' School","Clarence High School","CMR National Public School","Deens Academy","Delhi Public School Bangalore East","Delhi Public School Bangalore South","Greenwood High International School","Indus International School","Inventure Academy","Kendriya Vidyalaya","Mallya Aditi International School","National Public School (Indiranagar)","National Public School (Rajajinagar)","New Horizon Gurukul","Podar International School","Ryan International School","Sophia High School","St. Joseph's Boys' High School","The International School Bangalore","Vidya Mandir Senior Secondary School"],"Mysuru":["Delhi Public School","Kendriya Vidyalaya","Marimallappa's High School","St. Philomena's School"],"Mangaluru":["Canara High School","Delhi Public School","Kendriya Vidyalaya","Rosario English Medium School","St. Aloysius High School"],"Hubballi":["Delhi Public School","Kendriya Vidyalaya","Poornaprajna Education Centre","St. Mary's High School"],"Belagavi":["Delhi Public School","Kendriya Vidyalaya","St. Paul's High School"],"Other":[]};
+d["Kerala"]={"Thiruvananthapuram":["Bhavan's Vidya Mandir","Choice School","Delhi Public School","Holy Angels ISC","Kendriya Vidyalaya","Loyola School","Model School Pattom","St. Joseph's HSS"],"Kochi":["Choice School","Chinmaya Vidyalaya","Delhi Public School","Good Shepherd International School","Kendriya Vidyalaya","Rajagiri Public School","Ryan International School","St. Albert's High School"],"Kozhikode":["Delhi Public School","Kendriya Vidyalaya","St. Joseph's Boys' Higher Secondary School","The Oxford School"],"Thrissur":["Bhavan's Vidya Mandir","Delhi Public School","Kendriya Vidyalaya"],"Palakkad":["Delhi Public School","Kendriya Vidyalaya","Little Flower HSS"],"Other":[]};
+d["Madhya Pradesh"]={"Bhopal":["Campion School","Carmel Convent School","Delhi Public School","Kendriya Vidyalaya","St. Joseph's Co-Ed School","St. Montfort Senior Secondary School","The Sanskaar Valley School"],"Indore":["Choithram School","Delhi Public School","Kendriya Vidyalaya","Podar International School","St. Raphael's Higher Secondary School"],"Gwalior":["Delhi Public School","Kendriya Vidyalaya","Scindia School","St. George's College"],"Jabalpur":["Christ Church Boys' Higher Secondary School","Delhi Public School","Kendriya Vidyalaya"],"Other":[]};
+d["Maharashtra"]={"Mumbai":["Cathedral and John Connon School","Dhirubhai Ambani International School","Don Bosco High School","Greenlawns High School","Jamnabai Narsee School","Kendriya Vidyalaya","Lilavatibai Podar High School","Podar International School","Ryan International School","St. Anne's High School","St. Mary's SSC","Vasant Vihar High School"],"Pune":["Bishops Co-Ed School","Christ Church School","Delhi Public School","Lexicon International School","Mercedes-Benz International School","Orchid School","Podar International School","Ryan International School","St. Vincent's High School","Vibgyor High"],"Nagpur":["Bhavan's B.P. Vidya Mandir","Delhi Public School","Hislop School","Kendriya Vidyalaya","St. Francis De Sales High School"],"Nashik":["Delhi Public School","Kendriya Vidyalaya","Podar International School","Ryan International School"],"Aurangabad":["Delhi Public School","Kendriya Vidyalaya","St. Francis D'Assisi School"],"Thane":["Billabong High International","Kendriya Vidyalaya","Podar International School","Ryan International School"],"Other":[]};
+d["Manipur"]={"Imphal":["Delhi Public School","Don Bosco School","Kendriya Vidyalaya","St. Joseph School","Vivekananda Higher Secondary School"],"Other":[]};
+d["Meghalaya"]={"Shillong":["Don Bosco School","Kendriya Vidyalaya","Loreto Convent School","Pine Mount School","St. Edmund's School","St. Mary's Higher Secondary School"],"Other":[]};
+d["Mizoram"]={"Aizawl":["Kendriya Vidyalaya","Mizoram Higher Secondary School","St. Paul's Higher Secondary School"],"Other":[]};
+d["Nagaland"]={"Kohima":["Kendriya Vidyalaya","Nagaland Sainik School","St. Joseph's School"],"Other":[]};
+d["Odisha"]={"Bhubaneswar":["DAV Public School","Delhi Public School","Kendriya Vidyalaya","SAI International School","Stewart School","Sri Aurobindo Education Centre"],"Cuttack":["Delhi Public School","Kendriya Vidyalaya","Ravenshaw Collegiate School","Stewart School Cuttack"],"Rourkela":["Ispat English Medium School","Kendriya Vidyalaya","Sacred Heart School"],"Other":[]};
+d["Punjab"]={"Chandigarh (Punjab)":["Bhavan Vidyalaya","Carmel Convent School","Delhi Public School","Kendriya Vidyalaya","Sacred Heart School","Shivalik Public School","St. John's High School"],"Amritsar":["Delhi Public School","Guru Nanak Public School","Kendriya Vidyalaya","Sacred Heart School","Spring Dale Senior School"],"Ludhiana":["Delhi Public School","Kendriya Vidyalaya","Malwa Central School","Sacred Heart School"],"Jalandhar":["Arya Samaj School","Delhi Public School","Kendriya Vidyalaya","Lawrence School","St. Francis School"],"Patiala":["Delhi Public School","Kendriya Vidyalaya","Yadavindra Public School"],"Bathinda":["Delhi Public School","Kendriya Vidyalaya","Ryan International School"],"Other":[]};
+d["Rajasthan"]={"Jaipur":["Delhi Public School","G.D. Goenka Public School","Kendriya Vidyalaya","Maharaja Sawai Man Singh Vidyalaya","Podar International School","Ryan International School","St. Edmund's School","St. Xavier's School","Tagore International School","The Doon International School"],"Jodhpur":["Delhi Public School","Kendriya Vidyalaya","Neerja Modi School","Ryan International School","St. Anne's School"],"Udaipur":["Delhi Public School","Kendriya Vidyalaya","Maharana Mewar Public School","St. Gregory's School"],"Ajmer":["Delhi Public School","Kendriya Vidyalaya","Mayo College","St. Anselm's School"],"Kota":["Delhi Public School","Kendriya Vidyalaya","Sophia Senior Secondary School"],"Other":[]};
+d["Sikkim"]={"Gangtok":["Kendriya Vidyalaya","Sikkim Government Sr. Sec. School","St. Xavier's School","Tashi Namgyal Academy"],"Other":[]};
+d["Tamil Nadu"]={"Chennai":["Balalok Matriculation Higher Secondary School","Bhavan's Rajaji Vidyashram","Chettinad Vidyashram","Chinmaya Vidyalaya","DAV Boys Senior Secondary School","Delhi Public School","Don Bosco Matriculation Higher Secondary School","Kendriya Vidyalaya","PSBB Millennium School","PSBB Senior Secondary School","Padma Seshadri Bala Bhavan","PS Senior Secondary School","Sri Sankara Senior Secondary School","St. Bede's Anglo Indian Higher Secondary School","St. Michael's Academy"],"Coimbatore":["Chinmaya Vidyalaya","Delhi Public School","G.D. Goenka School","Kendriya Vidyalaya","Sri Ramakrishna Mission Vidyalaya"],"Madurai":["Delhi Public School","Kendriya Vidyalaya","St. Mary's School","St. Xavier's Higher Secondary School"],"Tiruchirappalli":["Delhi Public School","Kendriya Vidyalaya","St. Joseph's Higher Secondary School"],"Salem":["Delhi Public School","Kendriya Vidyalaya"],"Tirunelveli":["Delhi Public School","Kendriya Vidyalaya","St. Johns HSS"],"Other":[]};
+d["Telangana"]={"Hyderabad":["Bhavan's Vivekananda Vidyalaya","Candor International School","Chirec International School","Delhi Public School","Glendale Academy","Greenland International School","Kendriya Vidyalaya","Narayana E-Techno School","Oakridge International School","Rockwell International School","Sancta Maria International School","Silver Oaks International School","Sri Chaitanya School","St. John's Grammar School","Vidya Niketan School"],"Warangal":["Delhi Public School","Kendriya Vidyalaya","Narayana School","Sri Chaitanya School"],"Karimnagar":["Delhi Public School","Kendriya Vidyalaya","Narayana School"],"Nizamabad":["Delhi Public School","Kendriya Vidyalaya"],"Other":[]};
+d["Tripura"]={"Agartala":["Kendriya Vidyalaya","Maharaja Bir Bikram College","St. Paul's School","Vivekananda Vidyapith"],"Other":[]};
+d["Uttar Pradesh"]={"Lucknow":["City Montessori School (CMS) Aliganj","City Montessori School (CMS) Gomtinagar","Delhi Public School","Jaipuria School Lucknow","Kendriya Vidyalaya","La Martiniere College","Loreto Convent Intermediate College","Ryan International School","Seth Anandram Jaipuria School","St. Francis College","St. Joseph's Inter College","St. Mary's Convent Inter College"],"Noida":["Amity International School","Delhi Public School Noida","G.D. Goenka Public School","Genesis Global School","Kendriya Vidyalaya","Lotus Valley International School","Ryan International School","Shiv Nadar School","Step By Step School","The Millennium School"],"Kanpur":["Delhi Public School","Kendriya Vidyalaya","Sacred Heart Inter College","Seth Anandram Jaipuria School","St. Joseph's College"],"Agra":["Delhi Public School","Kendriya Vidyalaya","St. Conrad's Inter College","St. Peter's College"],"Varanasi":["Delhi Public School","Kendriya Vidyalaya","St. John's School","Sunbeam English School","Vishwa Bharati Public School"],"Ghaziabad":["Delhi Public School","DPS Indirapuram","Kendriya Vidyalaya","Ryan International School"],"Prayagraj":["Ewing Christian College","Kendriya Vidyalaya","St. Joseph's College","St. Mary's Convent"],"Meerut":["Delhi Public School","Kendriya Vidyalaya","Meerut Public School"],"Other":[]};
+d["Uttarakhand"]={"Dehradun":["Brightlands School","Colonel Brown Cambridge School","Convent of Jesus and Mary","Delhi Public School","G.D. Goenka World School","Kendriya Vidyalaya","The Doon School","The Welham Boys' School","The Welham Girls' School","Woodstock School"],"Haridwar":["Delhi Public School","Kendriya Vidyalaya","Rishikul Vidyapeeth"],"Nainital":["Birla Vidya Mandir","St. Mary's School","Sherwood College"],"Mussoorie":["Wynberg Allen School","Vincent Hill School"],"Other":[]};
+d["West Bengal"]={"Kolkata":["Assembly of God Church School","Birla High School","Calcutta International School","Don Bosco School (Park Circus)","Frank Anthony Public School","Future Foundation School","Heritage School","La Martiniere for Boys","La Martiniere for Girls","Loreto House","Loreto Day School","Modern High School for Girls","Pratt Memorial School","South Point High School","Springfield School","St. James' School","Sushila Birla Girls' School","The Heritage School"],"Howrah":["Delhi Public School","Kendriya Vidyalaya","South Point School"],"Siliguri":["Delhi Public School","Don Bosco School","Kendriya Vidyalaya","Mount Hermon School","North Point","St. Joseph's School"],"Asansol":["Delhi Public School","Kendriya Vidyalaya","St. Patrick's Higher Secondary School"],"Durgapur":["Delhi Public School","Kendriya Vidyalaya","St. Xavier's English Medium School"],"Other":[]};
+d["Andaman and Nicobar Islands"]={"Port Blair":["Kendriya Vidyalaya","Jawahar Navodaya Vidyalaya","Bay Islands Higher Secondary School"],"Other":[]};
+d["Chandigarh"]={"Chandigarh":["Bhavan Vidyalaya","Carmel Convent School","Delhi Public School","Kendriya Vidyalaya","Sacred Heart School","Shivalik Public School","St. John's High School","St. Stephen's School"],"Other":[]};
+d["Dadra and Nagar Haveli and Daman and Diu"]={"Daman":["Kendriya Vidyalaya","St. Joseph's School"],"Silvassa":["Kendriya Vidyalaya","Shishu Vihar School"],"Other":[]};
+d["Delhi"]={"New Delhi":["Amity International School","Bal Bharati Public School","Birla Vidya Niketan","Bluebells School International","Delhi Public School RK Puram","Delhi Public School Vasant Kunj","Don Bosco School","Father Agnel School","G.D. Goenka Public School","Hansraj Model School","Kendriya Vidyalaya","Kulachi Hansraj Model School","Lotus Valley International School","Modern School Barakhamba Road","Modern School Vasant Vihar","Mount Abu Public School","Navyug School","N.C. Jindal Public School","Podar International School","Queen Mary's School","Ryan International School","Sanskriti School","Sardar Patel Vidyalaya","Shiv Nadar School","Spring Dales School","St. Columba's School","St. Mary's School","St. Thomas' School","The Apeejay School","The Mother's International School","The Shriram School","Vasant Valley School","Venkateshwar International School"],"Other":[]};
+d["Jammu and Kashmir"]={"Srinagar":["Delhi Public School","Kendriya Vidyalaya","St. Joseph's Higher Secondary School","Tyndale Biscoe School"],"Jammu":["Delhi Public School","G.D. Goenka School","Kendriya Vidyalaya","Ryan International School","St. Joseph's Higher Secondary School"],"Other":[]};
+d["Ladakh"]={"Leh":["Kendriya Vidyalaya","Jawahar Navodaya Vidyalaya"],"Other":[]};
+d["Lakshadweep"]={"Kavaratti":["Kendriya Vidyalaya","Jawahar Navodaya Vidyalaya"],"Other":[]};
+d["Puducherry"]={"Puducherry":["Kendriya Vidyalaya","Petit Séminaire Higher Secondary School","Sri Aurobindo International Centre of Education","Sri Narayani Higher Secondary School"],"Other":[]};
+return d;
+})();
+
+function _regSetOptions(select, options, placeholder) {
+  select.innerHTML = '';
+  var blank = document.createElement('option');
+  blank.value = ''; blank.textContent = placeholder;
+  select.appendChild(blank);
+  options.forEach(function(text) {
+    var o = document.createElement('option');
+    o.value = text; o.textContent = text;
+    select.appendChild(o);
+  });
+}
+
+function _regHideOther() {
+  var w = document.getElementById('r-sch-other-wrap');
+  var i = document.getElementById('r-sch-other');
+  if (w) w.style.display = 'none';
+  if (i) i.value = '';
+}
+
+function initStateDropdown() {
+  var stateEl = document.getElementById('r-state');
+  if (!stateEl) return;
+  var states = Object.keys(_INDIA_DATA).sort();
+  _regSetOptions(stateEl, states, 'Select State');
+  var cityEl = document.getElementById('r-city');
+  if (cityEl) { cityEl.disabled = true; _regSetOptions(cityEl, [], 'Select State first'); }
+  var schEl = document.getElementById('r-sch');
+  if (schEl) { schEl.disabled = true; _regSetOptions(schEl, [], 'Select City first'); }
+  _regHideOther();
+}
+
+function populateCities() {
+  var stateEl = document.getElementById('r-state');
+  var cityEl  = document.getElementById('r-city');
+  if (!stateEl || !cityEl) return;
+  var state = stateEl.value;
+  var schEl = document.getElementById('r-sch');
+  if (schEl) { schEl.disabled = true; _regSetOptions(schEl, [], 'Select City first'); }
+  _regHideOther();
+  if (!state || !_INDIA_DATA[state]) {
+    cityEl.disabled = true;
+    _regSetOptions(cityEl, [], 'Select State first');
+    return;
+  }
+  var cities = Object.keys(_INDIA_DATA[state]).sort();
+  _regSetOptions(cityEl, cities, 'Select City');
+  cityEl.disabled = false;
+}
+
+function populateSchools() {
+  var stateEl = document.getElementById('r-state');
+  var cityEl  = document.getElementById('r-city');
+  var schEl   = document.getElementById('r-sch');
+  if (!stateEl || !cityEl || !schEl) return;
+  var state = stateEl.value;
+  var city  = cityEl.value;
+  _regHideOther();
+  if (!state || !city || !_INDIA_DATA[state]) {
+    schEl.disabled = true;
+    _regSetOptions(schEl, [], 'Select City first');
+    return;
+  }
+  var schools = (_INDIA_DATA[state][city] || []).slice().sort();
+  var opts = schools.concat(['Other (type below)']);
+  _regSetOptions(schEl, opts, 'Select School');
+  schEl.disabled = false;
+}
+
+function handleSchoolChange() {
+  var schEl = document.getElementById('r-sch');
+  var otherWrap = document.getElementById('r-sch-other-wrap');
+  var otherInp  = document.getElementById('r-sch-other');
+  if (!schEl) return;
+  if (schEl.value === 'Other (type below)') {
+    if (otherWrap) otherWrap.style.display = 'block';
+    if (otherInp)  otherInp.focus();
+  } else {
+    _regHideOther();
+  }
+}
+
+function getSchoolValue() {
+  var schEl   = document.getElementById('r-sch');
+  var otherEl = document.getElementById('r-sch-other');
+  if (!schEl) return '';
+  if (schEl.value === 'Other (type below)') {
+    return otherEl ? otherEl.value.trim() : '';
+  }
+  return schEl.value.trim();
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  initStateDropdown();
+});
+</script>
+
+<!-- ═══════════════════════════
+     LANDING
+═══════════════════════════ -->
+<div id="page-landing" class="page active">
+
+  <!-- Hero Banner -->
+  <div class="landing-hero">
+    <div class="landing-hero-inner">
+      <div class="hero-eyebrow">
+        <span class="hero-eyebrow-dot"></span>
+        Multi-dimensional Assessments for Personalized Success
+      </div>
+      <h1>NuMind <em>MAPS</em></h1>
+      <p>A comprehensive psychometric assessment that maps your career interests, SEL readiness, personality and aptitude — giving you a personalised insight report.</p>
+      <div class="hero-badges">
+        <span class="hero-badge">⏱ ~65 minutes</span>
+        <span class="hero-badge">📊 4 Modules</span>
+        <span class="hero-badge">🎯 Personalised Report</span>
+        <span class="hero-badge">🔒 Confidential</span>
+      </div>
+      <div class="hero-ctas">
+        <button class="btn btn-lg" style="background:#fff;color:var(--brand3);font-family:'Poppins',sans-serif;font-weight:700;box-shadow:0 4px 20px rgba(0,0,0,.2)" onclick="goPage('register')">Begin Your Assessment 🚀</button>
+        <button class="btn btn-lg btn-outline" style="border-color:rgba(255,255,255,.4);color:#fff;font-family:'Poppins',sans-serif" onclick="document.getElementById('msec').scrollIntoView({behavior:'smooth'})">See What's Inside</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stats Strip -->
+  <div class="stats-strip">
+    <div class="stats-strip-inner">
+      <div class="stat-item">
+        <div class="stat-num">4</div>
+        <div class="stat-lbl">Assessment Modules</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">190+</div>
+        <div class="stat-lbl">Psychometric Questions</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">9</div>
+        <div class="stat-lbl">Personality Dimensions</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-num">10</div>
+        <div class="stat-lbl">Career Domains Mapped</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+
+    <!-- How It Works -->
+    <div class="journey-section">
+      <div class="section-eyebrow">How It Works</div>
+      <div class="section-title">Your Assessment Journey</div>
+      <div class="section-sub">Six simple steps from sign-up to your full personalised insights report.</div>
+
+      <div class="journey-row">
+        <div class="journey-step">
+          <div class="j-num">1</div>
+          <div class="j-icon" style="background:#e8faf5">📋</div>
+          <div class="j-title">Sign Up</div>
+          <div class="j-desc">Name, class & school. Done in 60 sec.</div>
+        </div>
+        <div class="journey-step">
+          <div class="j-num">2</div>
+          <div class="j-icon" style="background:#eef2ff">🧠</div>
+          <div class="j-title">Personality</div>
+          <div class="j-desc">63 statements · 9 dimensions.</div>
+        </div>
+        <div class="journey-step">
+          <div class="j-num">3</div>
+          <div class="j-icon" style="background:var(--branddl)">💬</div>
+          <div class="j-title">Aptitude</div>
+          <div class="j-desc">8 timed sub-tests · verbal & numerical</div>
+        </div>
+        <div class="journey-step">
+          <div class="j-num">4</div>
+          <div class="j-icon" style="background:#f5f3ff">🌟</div>
+          <div class="j-title">Interests</div>
+          <div class="j-desc">20 questions — 10 career areas.</div>
+        </div>
+        <div class="journey-step">
+          <div class="j-num">5</div>
+          <div class="j-icon" style="background:#ede9fe">🔬</div>
+          <div class="j-title">SEL Readiness</div>
+          <div class="j-desc">60 YES/NO school life statements.</div>
+        </div>
+        <div class="journey-step">
+          <div class="j-num">6</div>
+          <div class="j-icon" style="background:#fef3c7">✨</div>
+          <div class="j-title">Your Report</div>
+          <div class="j-desc">Full personalised career insight report.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Module Cards -->
+    <div class="modules-section" id="msec">
+      <div class="section-eyebrow">The Assessments</div>
+      <div class="section-title">Four Modules. One Complete Picture.</div>
+      <div class="section-sub">Each module is research-backed and designed specifically for students in Classes 9–12.</div>
+
+      <div class="mod-cards" style="margin-top:2rem">
+        <div class="mod-card m3">
+          <div class="mod-card-icon" style="background:#f5f3ff">🌟</div>
+          <div class="pill-badge" style="background:#f5f3ff;color:#7c3aed;margin-bottom:10px">Module 1 · NMAP</div>
+          <h3>Your Personality Profile</h3>
+          <p>Discover your personality across 9 dimensions — from leadership and creativity to resilience and ethical awareness.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
+            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">9 Dimensions</span>
+            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Leadership Traits</span>
+            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Stanine Scoring</span>
+          </div>
+          <div class="mod-stats">
+            <div class="mod-stat"><strong>63</strong>Statements</div>
+            <div class="mod-stat"><strong>9</strong>Dimensions</div>
+            <div class="mod-stat"><strong>~20 min</strong></div>
+          </div>
+        </div>
+
+        <div class="mod-card m4">
+          <div class="mod-card-icon" style="background:#ede9fe">🔬</div>
+          <div class="pill-badge" style="background:#ede9fe;color:#7c3aed;margin-bottom:10px">Module 2 · DAAB</div>
+          <h3>Aptitude Battery</h3>
+          <p>8 timed sub-tests covering Verbal Ability, Perceptual Ability, Numerical Ability, Legal Studies Aptitude, Spatial Ability, Mechanical Ability, Abstract Reasoning and Health & Medical ability. Auto-advances when time is up.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
+            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Verbal Ability</span>
+            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Numerical Aptitude</span>
+            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Timed Sub-tests</span>
+          </div>
+          <div class="mod-stats">
+            <div class="mod-stat"><strong>190</strong>Questions</div>
+            <div class="mod-stat"><strong>8</strong>Sub-tests</div>
+            <div class="mod-stat"><strong>~29 min</strong></div>
+          </div>
+        </div>
+
+        <div class="mod-card m1">
+          <div class="mod-card-icon" style="background:var(--m1l)">🧠</div>
+          <div class="pill-badge pb-m1" style="margin-bottom:10px">Module 3 · CPI</div>
+          <h3>Discover Your Interests</h3>
+          <p>Find out which of 10 career worlds — from Science & Technology to Arts, Law, Business and Sports — naturally excites you most.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
+            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Career Mapping</span>
+            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">10 Domains</span>
+            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Rank-Based Insights</span>
+          </div>
+          <div class="mod-stats">
+            <div class="mod-stat"><strong>20</strong>Questions</div>
+            <div class="mod-stat"><strong>10</strong>Career domains</div>
+            <div class="mod-stat"><strong>~8 min</strong></div>
+          </div>
+        </div>
+
+        <div class="mod-card m2">
+          <div class="mod-card-icon" style="background:var(--branddl)">💚</div>
+          <div class="pill-badge" style="background:var(--branddl);color:var(--brand2);margin-bottom:10px">Module 4 · NSEAAS</div>
+          <h3>SEL Readiness Check</h3>
+          <p>Measure Social &amp; Emotional Learning readiness across three dimensions — emotional regulation, social connection, and academic engagement.</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
+            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Emotional Awareness</span>
+            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Social Bonds</span>
+            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">School Engagement</span>
+          </div>
+          <div class="mod-stats">
+            <div class="mod-stat"><strong>60</strong>Statements</div>
+            <div class="mod-stat"><strong>6 rounds</strong>of 10</div>
+            <div class="mod-stat"><strong>~12 min</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Approach Section -->
+  <div class="approach-section">
+    <div class="wrap">
+      <div class="section-eyebrow">Our Approach</div>
+      <div class="section-title">Backed by Psychology. Built for Students.</div>
+      <div class="section-sub">NuMind integrates AI-powered tools with psychology-backed frameworks to give you measurable, meaningful insights.</div>
+      <div class="approach-grid">
+        <div class="approach-card">
+          <div class="approach-icon">📊</div>
+          <div>
+            <div class="approach-title">Data-Backed Assessments</div>
+            <div class="approach-desc">Standardised psychometric instruments that provide measurable insights into your strengths and development areas.</div>
+          </div>
+        </div>
+        <div class="approach-card">
+          <div class="approach-icon">🎯</div>
+          <div>
+            <div class="approach-title">Personalised Insights</div>
+            <div class="approach-desc">Your results are unique to you — a full report that reads both modules together for deeper understanding.</div>
+          </div>
+        </div>
+        <div class="approach-card">
+          <div class="approach-icon">🔒</div>
+          <div>
+            <div class="approach-title">Safe & Confidential</div>
+            <div class="approach-desc">No right or wrong answers. Your responses stay in-session; only your registration details are saved securely.</div>
+          </div>
+        </div>
+        <div class="approach-card">
+          <div class="approach-icon">🧭</div>
+          <div>
+            <div class="approach-title">Career Guidance Ready</div>
+            <div class="approach-desc">Get concrete career path recommendations aligned to your interest profile and aptitude scores.</div>
+          </div>
+        </div>
+        <div class="approach-card">
+          <div class="approach-icon">⚡</div>
+          <div>
+            <div class="approach-title">Quick & Engaging</div>
+            <div class="approach-desc">Designed for students — the questions are clear, the interface is smooth, and it's done in under 45 minutes.</div>
+          </div>
+        </div>
+        <div class="approach-card">
+          <div class="approach-icon">📈</div>
+          <div>
+            <div class="approach-title">Holistic Profile</div>
+            <div class="approach-desc">Four separate modules combine into a single 360° view of who you are and where you can thrive.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- ── Counsellor Connect Section ── -->
+    <div id="counsellor-section" style="margin:3rem 0">
+      <div style="text-align:center;margin-bottom:2rem">
+        <div class="section-eyebrow">Human Support</div>
+        <div class="section-title">Connect with a Counsellor 🤝</div>
+        <div class="section-sub">Have questions about your results, career choices, or need personalised guidance? Our trained counsellors are here to help.</div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:start" class="cq-grid">
+
+        <!-- Left: info cards -->
+        <div style="display:flex;flex-direction:column;gap:1rem">
+          <div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1px solid #bbf7d0;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="font-size:28px;flex-shrink:0">💬</div>
+            <div>
+              <div style="font-weight:700;color:#166534;font-size:15px;margin-bottom:4px">1-on-1 Counselling Session</div>
+              <div style="color:#15803d;font-size:13px;line-height:1.6">Personalised video or in-person sessions with trained career counsellors who understand your NuMind MAPS report.</div>
+            </div>
+          </div>
+          <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="font-size:28px;flex-shrink:0">🎯</div>
+            <div>
+              <div style="font-weight:700;color:#1e40af;font-size:15px;margin-bottom:4px">Report Walk-through</div>
+              <div style="color:#1d4ed8;font-size:13px;line-height:1.6">Not sure what your scores mean? A counsellor will walk through your entire report with you and your parents.</div>
+            </div>
+          </div>
+          <div style="background:linear-gradient(135deg,#fdf4ff,#f3e8ff);border:1px solid #e9d5ff;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="font-size:28px;flex-shrink:0">🤖</div>
+            <div>
+              <div style="font-weight:700;color:#6b21a8;font-size:15px;margin-bottom:4px">AI Counsellor Available 24/7</div>
+              <div style="color:#7c3aed;font-size:13px;line-height:1.6">After completing your assessment, unlock your personal AI Counsellor — powered by your actual report data.</div>
+              <button onclick="goToCounsellor()" style="margin-top:8px;padding:6px 14px;border-radius:8px;background:#7c3aed;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:600">Open AI Counsellor →</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right: query form -->
+        <div class="card" style="padding:1.75rem">
+          <div style="font-family:'Poppins',sans-serif;font-weight:700;font-size:17px;color:var(--ink);margin-bottom:1.25rem">📋 Request a Session</div>
+          <div id="cq-form">
+            <div class="field" style="margin-bottom:14px">
+              <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Your Name *</label>
+              <input id="cq-name" placeholder="e.g. Priya Sharma" style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none;transition:border .2s" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='#e5e7eb'">
+              <div id="cq-err-name" class="ferr" style="display:none;font-size:12px;color:#dc2626;margin-top:4px"></div>
+            </div>
+            <div class="field" style="margin-bottom:14px">
+              <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Email Address *</label>
+              <input id="cq-email" type="email" placeholder="yourname@example.com" style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none;transition:border .2s" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='#e5e7eb'">
+              <div id="cq-err-email" class="ferr" style="display:none;font-size:12px;color:#dc2626;margin-top:4px"></div>
+            </div>
+            <div class="field" style="margin-bottom:14px">
+              <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Your Query / Message *</label>
+              <textarea id="cq-message" rows="3" placeholder="e.g. I'd like help understanding my career interest scores and what stream to choose..." style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none;transition:border .2s;resize:vertical" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='#e5e7eb'"></textarea>
+              <div id="cq-err-message" class="ferr" style="display:none;font-size:12px;color:#dc2626;margin-top:4px"></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+              <div>
+                <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Preferred Date</label>
+                <input id="cq-date" type="date" style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none">
+              </div>
+              <div>
+                <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Preferred Time</label>
+                <select id="cq-time" style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none;background:#fff">
+                  <option value="">Any time</option>
+                  <option>Morning (9am–12pm)</option>
+                  <option>Afternoon (12pm–3pm)</option>
+                  <option>Evening (4pm–7pm)</option>
+                </select>
+              </div>
+            </div>
+            <button id="cq-submit-btn" onclick="submitCounsellorQuery()" style="width:100%;padding:12px;border-radius:12px;background:linear-gradient(135deg,#0e4f5c,#1a7f8e);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:15px;font-weight:700;letter-spacing:.02em;transition:opacity .2s">
+              Send My Query 📩
+            </button>
+          </div>
+          <div id="cq-success" style="display:none;text-align:center;padding:2rem 1rem">
+            <div style="font-size:48px;margin-bottom:1rem">✅</div>
+            <div style="font-family:'Nunito',sans-serif;font-weight:800;font-size:18px;color:#166534;margin-bottom:.5rem">Query Received!</div>
+            <div style="color:#15803d;font-size:14px;line-height:1.7">A NuMind counsellor will reach out to you within 24–48 hours. Check your inbox (and spam folder)!</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="cta-strip" style="margin-top:3rem">
+      <h3>Ready to Discover Your Future? 🌟</h3>
+      <p>No right or wrong answers — just be honest and have fun with it! Takes about 45 minutes.</p>
+      <button class="btn-cta" onclick="goPage('register')">Begin Your Assessment 🚀</button>
+    </div>
+
+    <!-- Staff Portal Links -->
+    <div style="text-align:center;padding:1rem 0 0.5rem;border-top:1px solid rgba(255,255,255,.08);margin:0 1rem">
+      <div style="font-size:11px;color:rgba(255,255,255,.35);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600">Staff Portals</div>
+      <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">
+        <a href="/dashboard-counsellor.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">🎓 Counsellor Portal</a>
+        <a href="/dashboard-management.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">🏫 Management Portal</a>
+        <a href="/dashboard-admin.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">⚡ Admin Console</a>
+      </div>
+    </div>
+
+    <!-- Powered by NuMind footer note -->
+    <div style="text-align:center;padding:1.5rem 0 2.5rem;display:flex;align-items:center;justify-content:center;gap:10px">
+      <span style="font-size:12px;color:var(--ink4)">Powered by</span>
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 36" height="20" style="opacity:.7" aria-label="NuMind"><rect x="0" y="4" width="28" height="28" rx="7" fill="#0e4f5c"/><text x="5.5" y="23" font-family="Arial Black,sans-serif" font-size="17" font-weight="900" fill="#fff">N</text><circle cx="22" cy="10" r="3.5" fill="#64e4f0" opacity=".9"/><text x="33" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#0e4f5c">Nu</text><text x="54" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#1a7f8e">Mind</text></svg
+           onerror="this.outerHTML='<span style=\'font-size:12px;font-weight:700;color:var(--brand)\'>NuMind</span>'">
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     REGISTER
+═══════════════════════════ -->
+<div id="page-register" class="page">
+  <div class="wrapsm">
+    <div class="reg-hero">
+      <span class="emoji">👋</span>
+      <h2>First, tell us about yourself!</h2>
+      <p>Just a few quick details to personalise your results report.</p>
+    </div>
+    <div class="card cp">
+      <div class="frow">
+        <div class="field"><label>First Name *</label><input id="r-fn" placeholder="e.g. Priya"><div class="ferr" id="e-fn">Please enter your first name</div></div>
+        <div class="field"><label>Last Name *</label><input id="r-ln" placeholder="e.g. Sharma"><div class="ferr" id="e-ln">Please enter your last name</div></div>
+      </div>
+      <div class="frow">
+        <div class="field">
+          <label>Class *</label>
+          <select id="r-cls">
+            <option value="">Select your class</option>
+            <option>Class 9</option><option>Class 10</option>
+            <option>Class 11</option><option>Class 12</option>
+          </select>
+          <div class="ferr" id="e-cls">Please select your class</div>
+        </div>
+        <div class="field"><label>Section</label><input id="r-sec" placeholder="e.g. A"></div>
+      </div>
+      <div class="frow">
+        <div class="field">
+          <label>State *</label>
+          <select id="r-state" onchange="populateCities()">
+            <option value="">Select State</option>
+          </select>
+          <div class="ferr" id="e-state">Please select your state</div>
+        </div>
+        <div class="field">
+          <label>City *</label>
+          <select id="r-city" disabled onchange="populateSchools()">
+            <option value="">Select State first</option>
+          </select>
+          <div class="ferr" id="e-city">Please select your city</div>
+        </div>
+      </div>
+      <div class="frow">
+        <div class="field"><label>Age</label><input id="r-age" type="number" placeholder="15" min="12" max="20"></div>
+        <div class="field">
+          <label>Gender *</label>
+          <select id="r-gen">
+            <option value="">Select</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
+            <option value="Other">Prefer not to say</option>
+          </select>
+          <div class="ferr" id="e-gen">Required — used for scoring</div>
+        </div>
+      <div class="field"><label>School Name *</label><select id="r-sch" disabled onchange="handleSchoolChange()">
+            <option value="">Select City first</option>
+          </select>
+          <div id="r-sch-other-wrap" style="display:none;margin-top:8px">
+            <input id="r-sch-other" placeholder="Type your school name" autocomplete="off">
+          </div>
+          <div class="ferr" id="e-sch">Please enter your school name</div>
+        </div>
+      </div>
+      <div class="field"><label>Email Address * <span style="font-size:11px;font-weight:400;color:var(--ink3)">(needed to access your AI Counsellor after the assessment)</span></label><input id="r-email" type="email" placeholder="yourname@example.com" required><div class="ferr" id="e-email">Please enter a valid email address</div></div>
+
+      <div class="consent-box" onclick="if(event.target.id!=='r-con'){var cb=document.getElementById('r-con');cb.checked=!cb.checked;}">
+        <input type="checkbox" id="r-con" onclick="event.stopPropagation()">
+        <span>I'll answer honestly — I understand this is a guidance tool, not an exam. My registration details will be saved securely; my question responses stay in-session only.</span>
+      </div>
+      <div class="ferr" id="e-con" style="margin-bottom:12px">Please tick to continue.</div>
+
+      <div class="db-status" id="db-status" style="display:none">
+        <div class="db-dot" id="db-dot"></div>
+        <span id="db-msg">Saving…</span>
+      </div>
+
+      <button class="btn btn-primary btn-full" style="margin-top:8px" onclick="doRegister()">
+        Continue to Module 1 — Personality →
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     CPI QUIZ
+═══════════════════════════ -->
+<div id="page-cpi" class="page">
+  <div class="quiz-shell">
+    <aside class="sidebar">
+      <div class="timer-box">
+        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-val" id="cpi-timer">00:00</div>
+      </div>
+      <div class="sidebar-sec">
+        <div class="prog-bar-wrap">
+          <div class="prog-bar-meta">
+            <span class="eyebrow">Progress</span>
+            <span class="prog-bar-pct" id="cpi-ptxt">0%</span>
+          </div>
+          <div class="prog-track"><div class="prog-fill" id="cpi-pbar" style="width:0%"></div></div>
+        </div>
+      </div>
+      <div class="sidebar-sec">
+        <span class="eyebrow">Questions</span>
+        <div class="qmap" id="cpi-qmap"></div>
+      </div>
+      <div style="font-size:12px;color:var(--ink3);line-height:1.65;margin-top:4px">
+        Pick <strong style="color:var(--ink2)">up to 3 answers</strong> that feel most like you per question. Go with your gut! 😊
+      </div>
+    </aside>
+
+    <div class="qarea" id="cpi-qarea">
+      <!-- rendered by JS -->
+    </div>
+
+    <!-- Mobile bottom nav (hidden on desktop) -->
+    <div class="mobile-nav" id="cpi-mobile-nav"></div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     CPI → NSEAAS TRANSITION
+═══════════════════════════ -->
+<div id="page-transition" class="page">
+  <div class="t-screen">
+    <div class="t-emoji">🎉</div>
+    <h2>You've completed this section!</h2>
+    <p>Amazing work! You've finished the personality assessment. Now let's measure your abilities across key aptitude areas.</p>
+    <div class="t-info-box">
+      <div class="eyebrow">Next up — Module 2 · DAAB</div>
+      <p>8 timed sub-tests covering <strong>Verbal, Perceptual, Numerical, Legal, Abstract, Mechanical, Spatial &amp; Health</strong> abilities. Each sub-test advances automatically when time is up.</p>
+    </div>
+    <button class="btn btn-lg" style="background:var(--m4);color:#fff;box-shadow:0 4px 14px rgba(124,58,237,.3)" onclick="startDAAB()">Begin Aptitude Battery →</button>
+    <div class="affirm">You're doing amazing! Keep going 👇</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     NSEAAS PAGINATED
+═══════════════════════════ -->
+<div id="page-nseaas" class="page">
+  <div class="sea-shell">
+    <aside class="sea-sidebar">
+      <div class="timer-box">
+        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-val" id="sea-timer">00:00</div>
+      </div>
+      <div class="sidebar-sec">
+        <div class="prog-bar-wrap">
+          <div class="prog-bar-meta">
+            <span class="eyebrow">Overall progress</span>
+            <span class="prog-bar-pct" id="sea-ptxt">0%</span>
+          </div>
+          <div class="prog-track">
+            <div class="prog-fill" id="sea-pbar" style="width:0%;background:var(--m2)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-sec">
+        <span class="eyebrow">Rounds</span>
+        <div class="page-nav" id="sea-pagenav"></div>
+      </div>
+      <div style="font-size:12px;color:var(--ink3);line-height:1.65;margin-top:4px">
+        Just answer YES or NO — there are no right or wrong answers! ✌️
+      </div>
+    </aside>
+
+    <div style="display:flex;flex-direction:column;min-height:calc(100vh - 56px)">
+      <div class="sea-main" style="flex:1" id="sea-main"></div>
+      <div class="sea-pnav" id="sea-pnav"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     NSEAAS → NMAP TRANSITION
+═══════════════════════════ -->
+<div id="page-transition2" class="page">
+  <div class="t-screen">
+    <div class="t-emoji">🌟</div>
+    <h2>Two more sections to go!</h2>
+    <p>Great work — you've done two modules! Now let's discover your interests and find out which career areas light you up.</p>
+    <div class="t-info-box">
+      <div class="eyebrow">Next up — Module 3 · CPI</div>
+      <p>20 questions covering 10 interest areas. Pick the options that feel most like <em>you</em> — there are no right or wrong answers!</p>
+    </div>
+    <button class="btn btn-m1 btn-lg" onclick="startCPI()">Begin Interest Discovery →</button>
+    <div class="affirm">Almost at your personalised insight report! 🎯</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     NMAP QUIZ (Module 3)
+═══════════════════════════ -->
+<div id="page-nmap" class="page">
+  <div class="nmap-shell">
+    <aside class="nmap-sidebar">
+      <div class="timer-box">
+        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-val" id="nmap-timer">00:00</div>
+      </div>
+      <div class="sidebar-sec">
+        <div class="prog-bar-wrap">
+          <div class="prog-bar-meta">
+            <span class="eyebrow">Overall progress</span>
+            <span class="prog-bar-pct" id="nmap-ptxt">0%</span>
+          </div>
+          <div class="prog-track">
+            <div class="prog-fill" id="nmap-pbar" style="width:0%;background:var(--m3)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-sec">
+        <span class="eyebrow">Dimensions</span>
+        <div class="nmap-dim-nav" id="nmap-dimnav"></div>
+      </div>
+      <div style="font-size:12px;color:var(--ink3);line-height:1.65;margin-top:4px">
+        Answer <strong>Always</strong>, <strong>Sometimes</strong>, or <strong>Never</strong> — go with your first feeling! 🌟
+      </div>
+    </aside>
+
+    <div style="display:flex;flex-direction:column;min-height:calc(100vh - 56px)">
+      <div class="nmap-qarea" style="flex:1" id="nmap-qarea"></div>
+      <div class="nmap-pnav" id="nmap-pnav"></div>
+    </div>
+  </div>
+</div>
+
+
+
+<!-- ═══════════════════════════
+     NMAP → DAAB TRANSITION
+═══════════════════════════ -->
+<div id="page-transition3" class="page">
+  <div class="t-screen">
+    <div class="t-emoji">🎯</div>
+    <h2>Almost there!</h2>
+    <p>You've completed 3 modules! Now let's check in on how you're doing at school — the final piece of your full picture.</p>
+    <div class="t-info-box">
+      <div class="eyebrow">Next up — Module 4 · NSEAAS</div>
+      <p>60 short YES / NO statements about your school life, shown 10 at a time. Honest answers give the best results!</p>
+    </div>
+    <button class="btn btn-m2 btn-lg" onclick="startNSEAAS()">Begin NSEAAS Assessment →</button>
+    <div class="affirm">Final stretch — your full report awaits! 🌟</div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     DAAB QUIZ (Module 4)
+═══════════════════════════ -->
+<div id="page-daab" class="page">
+  <!-- Mobile progress strip (hidden on desktop) -->
+  <div id="daab-mobile-subnav" style="display:flex;align-items:flex-start;justify-content:space-between;padding:10px 16px 8px;background:var(--surface);border-bottom:1px solid var(--border);gap:4px;"></div>
+  <div class="daab-shell">
+    <aside class="daab-sidebar">
+      <div class="timer-box">
+        <div class="timer-lbl">Time remaining</div>
+        <div class="timer-val daab-timer-val" id="daab-timer-display">—:——</div>
+      </div>
+      <div class="sidebar-sec">
+        <div class="prog-bar-wrap">
+          <div class="prog-bar-meta">
+            <span class="eyebrow">Progress</span>
+            <span class="prog-bar-pct" id="daab-overall-pct">0%</span>
+          </div>
+          <div class="prog-track">
+            <div class="prog-fill" id="daab-overall-bar" style="width:0%;background:var(--m4)"></div>
+          </div>
+        </div>
+      </div>
+      <div class="sidebar-sec">
+        <span class="daab-sidebar-title">Sub-tests</span>
+        <div class="daab-sub-nav" id="daab-subnav"></div>
+      </div>
+      <div class="daab-sidebar-hint">
+        Each sub-test is <strong>timed</strong> — it advances automatically when time runs out. Do your best! ⚡
+      </div>
+    </aside>
+    <div class="daab-main">
+      <div id="daab-subtest-area"></div>
+    </div>
+  </div>
+</div>
+
+<div id="page-ready" class="page">
+  <div class="ready-screen">
+    <div class="r-emoji">✨</div>
+    <h2>Your Results Are Ready!</h2>
+    <p>You've completed all four modules. We've put together your personalised insight report — let's see what you're made of!</p>
+    <div class="ready-actions">
+      <button class="btn btn-primary btn-lg" onclick="buildResults(); goPage('results')">View My Insights 🎯</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════
+     RESULTS
+═══════════════════════════ -->
+<div id="page-results" class="page" style="--page-accent:var(--lavender)">
+  <div class="res-hero">
+    <div class="res-hero-in">
+      <div>
+        <div class="res-hero-eyebrow">✨ Your personalised insight report</div>
+        <h2>Here's what we discovered about you</h2>
+        <p id="res-date">—</p>
+      </div>
+      <div class="res-student-card">
+        <div class="res-student-name" id="res-name">—</div>
+        <div class="res-student-meta" id="res-meta">—</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden scoring containers — needed by buildResults() logic but not shown -->
+  <div style="display:none">
+    <div id="r-cpi-bars"></div>
+    <div id="r-sea-domains"></div>
+    <div id="r-sea-bars"></div>
+    <div id="r-careers"></div>
+    <div id="r-nmap-grid"></div>
+    <div id="r-nmap-narrative"></div>
+    <div id="r-daab-grid"></div>
+    <div id="r-interp"></div>
+  </div>
+
+  <div class="wraplg">
+    <div class="res-grid">
+
+      <!-- ═══════════ INTERACTIVE CHARTS DASHBOARD ═══════════ -->
+      <div class="card cp span2" id="charts-dashboard-card">
+        <div class="res-card-header" style="margin-bottom:1.25rem">
+          <div class="res-mod-icon" style="background:linear-gradient(135deg,#0e4f5c,#1a7f8e);color:#fff;font-size:18px">📊</div>
+          <div>
+            <div class="res-mod-title">Interactive Score Visualisations</div>
+            <div class="res-mod-sub">Charts auto-generated from your assessment data — tap tabs to explore</div>
+          </div>
+        </div>
+
+        <!-- Zone Key Banner -->
+        <div style="background:linear-gradient(90deg,#fef2f2,#fefce8,#f0fdf4);border:1px solid #e5e7eb;border-radius:10px;padding:9px 14px;margin-bottom:10px;display:flex;align-items:center;gap:18px;font-size:12px;flex-wrap:wrap">
+          <span style="font-weight:700;color:#374151;font-size:12px">📊 Score Guide (all stanine charts):</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#ef4444;display:inline-block"></span><strong style="color:#dc2626">1–3</strong>&nbsp;Needs Attention</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#f59e0b;display:inline-block"></span><strong style="color:#d97706">4–6</strong>&nbsp;Developing</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#10b981;display:inline-block"></span><strong style="color:#059669">7–9</strong>&nbsp;Strength</span>
+          <span style="color:#9ca3af">·</span>
+          <span style="color:#6b7280">SEL: <strong>lower bar = better</strong> &nbsp;|&nbsp; Interest: <strong>higher = stronger</strong></span>
+        </div>
+        <!-- Tabs -->
+        <div class="charts-tabs">
+          <button class="chart-tab active" onclick="switchChartTab('cpi')">🧠 Career Interests</button>
+          <button class="chart-tab" onclick="switchChartTab('sel')">💚 SEL Readiness</button>
+          <button class="chart-tab" onclick="switchChartTab('nmap')">🌟 Personality</button>
+          <button class="chart-tab" onclick="switchChartTab('daab')">🔬 Aptitude</button>
+          <button class="chart-tab" onclick="switchChartTab('overview')">✦ Full Overview</button>
+        </div>
+
+        <!-- ── CPI Tab ── -->
+        <div class="chart-panel active" id="chart-panel-cpi">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <div class="chart-box-title">Career Interest Ranking</div>
+              <div class="chart-box-sub">Horizontal bar — score out of 20 · Color reflects strength of interest area</div>
+              <div class="chart-canvas-wrap" style="height:340px">
+                <canvas id="chart-cpi-hbar"></canvas>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="chart-box-title">Interest Distribution</div>
+              <div class="chart-box-sub">Donut — share of total selections per career area</div>
+              <div class="chart-canvas-wrap" style="height:300px">
+                <canvas id="chart-cpi-donut"></canvas>
+              </div>
+              <div class="chart-legend" id="chart-cpi-legend"></div>
+            </div>
+          </div>
+          <div class="chart-summary-row" id="chart-cpi-stats"></div>
+        </div>
+
+        <!-- ── SEL Tab ── -->
+        <div class="chart-panel" id="chart-panel-sel">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <div class="chart-box-title">SEL Domain Scores</div>
+              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Good &nbsp;🟡 8-14 Moderate &nbsp;🔴 14-20 Needs Attention</div>
+              <div class="chart-canvas-wrap" style="height:260px">
+                <canvas id="chart-sel-bar"></canvas>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="chart-box-title">SEL Readiness Gauges</div>
+              <div class="chart-box-sub">Bar colour = category · 🟢 Cat A-B Good &nbsp; 🟡 Cat C Moderate &nbsp; 🔴 Cat D-E Needs Support</div>
+              <div class="sel-gauge-row" id="chart-sel-gauges" style="margin-top:.5rem"></div>
+            </div>
+          </div>
+          <div class="chart-box" style="margin-top:1.25rem">
+            <div class="chart-box-title">SEL Profile Radar</div>
+            <div class="chart-box-sub">Inverted scores — higher on chart = better adjustment</div>
+            <div class="chart-canvas-wrap" style="height:260px;max-width:380px;margin:0 auto">
+              <canvas id="chart-sel-radar"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── NMAP Tab ── -->
+        <div class="chart-panel" id="chart-panel-nmap">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <div class="chart-box-title">Personality Radar</div>
+              <div class="chart-box-sub">9 dimensions — stanine 1–9 · outer = stronger</div>
+              <div class="chart-canvas-wrap" style="height:320px;max-width:400px;margin:0 auto">
+                <canvas id="chart-nmap-radar"></canvas>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="chart-box-title">Dimension Stanine Scores</div>
+              <div class="chart-box-sub">Vertical bar — colour = strength band</div>
+              <div class="chart-canvas-wrap" style="height:300px">
+                <canvas id="chart-nmap-bar"></canvas>
+              </div>
+            </div>
+          </div>
+          <div class="chart-box" style="margin-top:1.25rem">
+            <div class="chart-box-title">Personality Strength Bands</div>
+            <div class="chart-box-sub">Bubble size = stanine score · position shows raw score %</div>
+            <div class="chart-canvas-wrap" style="height:200px">
+              <canvas id="chart-nmap-bubble"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── DAAB Tab ── -->
+        <div class="chart-panel" id="chart-panel-daab">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <div class="chart-box-title">Aptitude Stanine Scores</div>
+              <div class="chart-box-sub">Stanine 1–9 scale · dashed line = average band (5)</div>
+              <div class="chart-canvas-wrap" style="height:300px">
+                <canvas id="chart-daab-bar"></canvas>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="chart-box-title">Aptitude Radar</div>
+              <div class="chart-box-sub">Multi-dimensional view of your aptitude profile</div>
+              <div class="chart-canvas-wrap" style="height:300px;max-width:380px;margin:0 auto">
+                <canvas id="chart-daab-radar"></canvas>
+              </div>
+            </div>
+          </div>
+          <div class="chart-box" style="margin-top:1.25rem">
+            <div class="chart-box-title">Raw Score vs Maximum</div>
+            <div class="chart-box-sub">Stacked bar — achieved score vs remaining (per sub-test)</div>
+            <div class="chart-canvas-wrap" style="height:220px">
+              <canvas id="chart-daab-stacked"></canvas>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Overview Tab ── -->
+        <div class="chart-panel" id="chart-panel-overview">
+          <div class="chart-grid-2">
+            <div class="chart-box">
+              <div class="chart-box-title">All-Module Stanine Overview</div>
+              <div class="chart-box-sub">Normalised stanine (1–9) across all scored dimensions</div>
+              <div class="chart-canvas-wrap" style="height:340px">
+                <canvas id="chart-overview-bar"></canvas>
+              </div>
+            </div>
+            <div class="chart-box">
+              <div class="chart-box-title">Holistic Profile Radar</div>
+              <div class="chart-box-sub">NMAP personality + DAAB aptitude combined view</div>
+              <div class="chart-canvas-wrap" style="height:320px;max-width:400px;margin:0 auto">
+                <canvas id="chart-overview-radar"></canvas>
+              </div>
+            </div>
+          </div>
+          <div class="chart-summary-row" id="chart-overview-stats"></div>
+        </div>
+
+      </div><!-- end charts-dashboard-card -->
+
+      <!-- AI-Generated Final Report -->
+      <div class="card cp span2" id="ai-report-card">
+        <div class="res-card-header">
+          <div class="res-mod-icon rmi-dk" style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-size:18px">✦</div>
+          <div style="flex:1">
+            <div class="res-mod-title">Your AI-Generated Insight Report</div>
+            <div class="res-mod-sub">Powered by AI · synthesising all 4 modules together</div>
+          </div>
+          <button id="ai-report-btn" onclick="generateAIReport()"
+            style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:12px;
+            background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border:none;cursor:pointer;
+            font-family:'Poppins',sans-serif;font-size:14px;font-weight:600;white-space:nowrap;
+            box-shadow:0 4px 14px rgba(79,70,229,.3);transition:all .2s">
+            ✦ Generate Report
+          </button>
+          <button id="ai-cancel-btn" onclick="cancelReport()"
+            style="display:none;align-items:center;gap:8px;padding:10px 18px;border-radius:12px;
+            background:#fff;color:#6b7280;border:1.5px solid #e5e7eb;cursor:pointer;
+            font-family:'Poppins',sans-serif;font-size:14px;font-weight:600;white-space:nowrap;
+            transition:all .2s">
+            ✕ Cancel
+          </button>
+        </div>
+
+        <!-- Idle state -->
+        <div id="ai-report-idle" style="text-align:center;padding:2.5rem 1rem">
+          <div style="font-size:52px;margin-bottom:1rem">🤖</div>
+          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Ready to generate your personalised report</div>
+          <div style="color:var(--ink3);font-size:14px;max-width:480px;margin:0 auto;line-height:1.7">
+            Click <strong>Generate Report</strong> above and our AI will analyse all four modules — your career interests, SEL readiness, personality and aptitude — and write a detailed, personalised report just for you.
+          </div>
+        </div>
+
+        <!-- Loading state -->
+        <div id="ai-report-loading" style="display:none;text-align:center;padding:3rem 1rem">
+          <div style="display:inline-block;width:48px;height:48px;border:4px solid var(--brandl);border-top-color:var(--brand);border-radius:50%;animation:ai-spin 0.9s linear infinite;margin-bottom:1.25rem"></div>
+          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Analysing your results…</div>
+          <div style="color:var(--ink3);font-size:14px" id="ai-loading-msg">Reading all four modules and crafting your personalised report…</div>
+        </div>
+
+        <!-- Error state -->
+        <div id="ai-report-error" style="display:none;background:var(--soft-redl);border:1.5px solid rgba(220,38,38,.2);border-radius:14px;padding:1.5rem;text-align:center">
+          <div style="font-size:32px;margin-bottom:.75rem">⚠️</div>
+          <div style="font-weight:700;color:var(--soft-red);margin-bottom:.5rem">Could not generate report</div>
+          <div id="ai-error-msg" style="color:var(--ink3);font-size:13px;margin-bottom:1rem"></div>
+          <button onclick="generateAIReport()" style="padding:10px 24px;border-radius:10px;background:var(--brand);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:14px">Try Again</button>
+        </div>
+
+        <!-- Report output -->
+        <div id="ai-report-output" style="display:none"></div>
+      </div>
+
+    </div><!-- end res-grid -->
+
+    <!-- PDF Download Action -->
+    <div class="res-actions" style="justify-content:center;padding:2rem 0 3rem">
+      <button class="btn-pdf" id="pdf-download-btn" onclick="downloadPDF()">
+        <span class="pdf-icon">⬇</span>
+        <span class="pdf-spinner"></span>
+        Download Full Report as PDF
+      </button>
+      <button onclick="goToCounsellor()" style="margin-left:1rem;padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 14px rgba(109,40,217,.3)">
+        🤖 Talk to AI Counsellor
+      </button>
+    </div>
+
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     AI COUNSELLOR — NuMind MAPS  ·  v4  ·  11/10 Edition
+     ─ Dark sidebar · Parchment canvas · Lora + DM Sans + Fira Code
+     ─ Animated AI orb · Waveform typing · Empty-state illustration
+     ─ Staggered welcome reveal · Context topbar chip · Mobile chips
+     ─ Self-contained markdown · Reactions · Scroll pin · Particles
+══════════════════════════════════════════════════════════════ -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400;1,600&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+
+<div id="page-counsellor" class="page">
+<div class="nc-shell">
+
+  <div class="nc-overlay" id="nc-overlay" onclick="_acCloseSidebar()"></div>
+
+  <!-- ══════════ SIDEBAR ══════════ -->
+  <aside class="nc-sidebar" id="acp-sidebar">
+    <div class="nc-sb-glow"></div>
+
+    <div class="nc-sb-top">
+      <div class="nc-sb-brand">
+        <div class="nc-brand-mark">
+          <!-- Animated orb mark -->
+          <svg class="nc-brand-star" width="16" height="16" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white" opacity="0.92"/>
+          </svg>
+        </div>
+        <div>
+          <div class="nc-brand-name">AI Counsellor</div>
+          <div class="nc-brand-sub">NuMind MAPS</div>
+        </div>
+      </div>
+      <button class="nc-new-btn" onclick="_acNewChat()" title="New conversation">
+        <svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><line x1="7" y1="1" x2="7" y2="13"/><line x1="1" y1="7" x2="13" y2="7"/></svg>
+      </button>
+    </div>
+
+    <div class="nc-sb-divider"></div>
+    <div class="nc-sb-label" id="acp-sess-label" style="display:none">History</div>
+    <div id="acp-sess-list" class="nc-sess-list"></div>
+
+    <div class="nc-sb-foot">
+      <div class="nc-user-row" id="acp-user-card" style="display:none">
+        <div class="nc-user-av" id="acp-sb-av">?</div>
+        <div class="nc-user-info">
+          <div class="nc-user-name" id="acp-sb-name">—</div>
+          <div class="nc-user-badge"><span class="nc-badge-pulse"></span>Report synced</div>
+        </div>
+      </div>
+      <div class="nc-sb-actions">
+        <button class="nc-action-btn nc-action-danger" id="acp-sb-clear" style="display:none" onclick="acClearHistory()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6M9 6V4h6v2"/></svg>
+          Clear
+        </button>
+        <button class="nc-action-btn" onclick="goBackFromCounsellor()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          <span id="acp-sb-back-label">Back</span>
+        </button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ══════════ MAIN ══════════ -->
+  <div class="nc-main">
+
+    <!-- Topbar -->
+    <header class="nc-topbar">
+      <button class="nc-menu-btn" id="acp-toggle" onclick="_acOpenSidebar()" aria-label="Menu">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="nc-topbar-center">
+        <div class="nc-live-dot">
+          <svg width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="#4ade80"/><circle cx="4" cy="4" r="3.5" fill="#4ade80" opacity="0"><animate attributeName="r" values="3.5;8;3.5" dur="2.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2.6s" repeatCount="indefinite"/></circle></svg>
+        </div>
+        <span class="nc-topbar-title">NuMind AI Counsellor</span>
+        <span class="nc-tb-sep">·</span>
+        <span class="nc-topbar-sub" id="acp-topbar-sub">Available 24 / 7</span>
+      </div>
+      <div class="nc-topbar-right">
+        <!-- Context chip: shows student's top trait once unlocked -->
+        <div class="nc-ctx-chip" id="nc-ctx-chip" style="display:none"></div>
+        <div class="nc-report-pill" id="acp-report-chip" style="display:none">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          Report
+        </div>
+        <div id="acp-mobile-id" class="nc-mobile-id" style="display:none"></div>
+        <button class="nc-back-btn" id="acp-back-btn" onclick="goBackFromCounsellor()">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
+          Back
+        </button>
+      </div>
+    </header>
+
+    <!-- ══ LOCK SCREEN ══ -->
+    <div id="acp-lock" class="nc-lock">
+      <canvas id="nc-particles" class="nc-particles-cv"></canvas>
+      <div id="acp-lock-loading" class="nc-lock-loader" style="display:none">
+        <div class="nc-loader-orb"></div>
+        <span>Loading your report…</span>
+      </div>
+      <div id="acp-lock-card" class="nc-lock-card">
+        <div class="nc-lock-glow"></div>
+        <div class="nc-lock-hero">
+          <div class="nc-lock-orb">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/></svg>
+            <div class="nc-orb-ring"></div>
+          </div>
+          <h1 class="nc-lock-title">Your personal<br><em>AI Counsellor</em></h1>
+          <p class="nc-lock-sub">Enter the email you registered with. I have your complete NuMind MAPS results and I'm ready to guide you.</p>
+        </div>
+        <div class="nc-lock-caps">
+          <div class="nc-cap"><span class="nc-cap-dot" style="background:#2dd4bf"></span>Explains every score in plain language</div>
+          <div class="nc-cap"><span class="nc-cap-dot" style="background:#a78bfa"></span>Recommends careers matched to your profile</div>
+          <div class="nc-cap"><span class="nc-cap-dot" style="background:#fbbf24"></span>Advises on streams, colleges &amp; exams</div>
+          <div class="nc-cap"><span class="nc-cap-dot" style="background:#fb7185"></span>Answers wellbeing &amp; growth questions honestly</div>
+        </div>
+        <div class="nc-lock-form">
+          <label class="nc-lock-label">Your registration email</label>
+          <div class="nc-lock-iw">
+            <svg class="nc-lock-ii" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            <input id="acp-email-input" type="email" autocomplete="email" placeholder="yourname@example.com" class="nc-lock-input" onkeydown="if(event.key==='Enter')acUnlock()">
+          </div>
+          <div id="acp-email-err" class="nc-lock-err"></div>
+          <button id="acp-unlock-btn" class="nc-lock-btn" onclick="acUnlock()">
+            Continue
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+          </button>
+          <p class="nc-lock-footer">No results yet? <a href="javascript:void(0)" onclick="goPage('register')">Complete the assessment first →</a></p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══ CHAT SCREEN ══ -->
+    <div id="acp-chat" class="nc-chat" style="display:none">
+
+      <!-- Welcome -->
+      <div class="nc-welcome" id="acp-welcome">
+        <div class="nc-welcome-bg"></div>
+        <!-- Empty-state watermark illustration -->
+        <div class="nc-empty-mark" aria-hidden="true">
+          <svg width="220" height="220" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="110" cy="110" r="90" stroke="#7c3aed" stroke-width="1" stroke-dasharray="4 6" opacity="0.12"/>
+            <circle cx="110" cy="110" r="62" stroke="#7c3aed" stroke-width="1" opacity="0.07"/>
+            <path d="M110 38L121.8 74.2L160 75.6L130.4 97.6L141.2 134L110 112.8L78.8 134L89.6 97.6L60 75.6L98.2 74.2L110 38Z" fill="#7c3aed" opacity="0.08"/>
+            <circle cx="110" cy="110" r="18" fill="#7c3aed" opacity="0.06"/>
+            <!-- orbit dots -->
+            <circle cx="110" cy="48" r="4" fill="#a78bfa" opacity="0.18"/>
+            <circle cx="162" cy="110" r="3" fill="#a78bfa" opacity="0.13"/>
+            <circle cx="110" cy="172" r="4" fill="#a78bfa" opacity="0.18"/>
+            <circle cx="58" cy="110" r="3" fill="#a78bfa" opacity="0.13"/>
+          </svg>
+        </div>
+
+        <div class="nc-welcome-inner">
+          <!-- staggered reveal: each child has nc-reveal class -->
+          <div class="nc-welcome-av nc-reveal" style="--d:0ms">
+            <div class="nc-ai-orb-sm">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/></svg>
+            </div>
+          </div>
+          <div class="nc-welcome-hi nc-reveal" style="--d:60ms">Hi, <span id="acp-user-name" class="nc-hi-name">there</span> —</div>
+          <p class="nc-welcome-desc nc-reveal" style="--d:120ms">I've studied your full NuMind MAPS report. Ask me anything about your scores, career paths, which stream to pick, scholarships, or what to focus on next.</p>
+          <div id="acp-report-strip" class="nc-report-strip nc-reveal" style="display:none;--d:160ms"></div>
+          <div class="nc-starters nc-reveal" style="--d:200ms">
+            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="What do my top aptitude scores say about my strengths?">
+              <div class="nc-starter-head"><span class="nc-si nc-si-blue">🔬</span><span class="nc-starter-label">My aptitude strengths</span></div>
+              <div class="nc-starter-hint">What your scores reveal about you</div>
+            </button>
+            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="Which career paths fit my personality and interests best?">
+              <div class="nc-starter-head"><span class="nc-si nc-si-violet">🎯</span><span class="nc-starter-label">Best careers for me</span></div>
+              <div class="nc-starter-hint">Matched to your full profile</div>
+            </button>
+            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="Which stream — Science, Commerce, or Arts — should I choose and why?">
+              <div class="nc-starter-head"><span class="nc-si nc-si-amber">🎓</span><span class="nc-starter-label">Which stream to pick?</span></div>
+              <div class="nc-starter-hint">Science, Commerce, or Arts</div>
+            </button>
+            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="What does my wellbeing and SEL score tell me, and how can I improve?">
+              <div class="nc-starter-head"><span class="nc-si nc-si-green">🧠</span><span class="nc-starter-label">Wellbeing &amp; SEL score</span></div>
+              <div class="nc-starter-hint">What it means and how to grow</div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Messages -->
+      <div id="acp-messages" class="nc-messages" style="display:none"></div>
+
+      <!-- Scroll pin -->
+      <button class="nc-scroll-pin" id="nc-scroll-pin" onclick="_ncScrollBottom()" style="display:none">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><polyline points="6 9 12 15 18 9"/></svg>
+        New messages
+      </button>
+
+      <!-- Composer -->
+      <div class="nc-composer">
+        <!-- Follow-up chips — visible on mobile too (horizontal scroll) -->
+        <div id="nc-chip-row" class="nc-chip-row" style="display:none"></div>
+        <div class="nc-input-box" id="acp-input-wrap">
+          <textarea id="acp-input" rows="1"
+            placeholder="Ask anything about your results, career, college…"
+            onkeydown="_acInputKeydown(event)"
+            oninput="_acResizeTextarea(this);_ncCount(this)"></textarea>
+          <div class="nc-input-foot">
+            <span class="nc-cc" id="nc-cc"></span>
+            <span class="nc-hint">↵ send · ⇧↵ newline</span>
+            <button class="nc-send" id="nc-send-btn" onclick="acSend()">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="nc-disclaimer">Responses grounded in your NuMind MAPS data · Mental health: iCall <strong>9152987821</strong></p>
+      </div>
+
+    </div><!-- /nc-chat -->
+  </div><!-- /nc-main -->
+</div><!-- /nc-shell -->
+</div><!-- /page-counsellor -->
+
+<style>
+/* ══════════════════════════════════════════════════════════
+   NuMind AI Counsellor — v4  ·  11/10 Edition
+   Lora · DM Sans · Fira Code
+══════════════════════════════════════════════════════════ */
+:root {
+  --sb:     #111018;
+  --sb2:    rgba(255,255,255,0.055);
+  --sbb:    rgba(255,255,255,0.07);
+  --sbt:    rgba(255,255,255,0.78);
+  --sbm:    rgba(255,255,255,0.32);
+
+  --bg:     #f7f5f0;
+  --surf:   #ffffff;
+  --bdr:    #e5e0d8;
+  --bdr2:   #ccc8bf;
+  --ink:    #19160f;
+  --ink2:   #3c3830;
+  --ink3:   #78716c;
+  --ink4:   #a9a39b;
+
+  --v:      #5b21b6;
+  --v2:     #7c3aed;
+  --vbg:    #f4f1ff;
+  --vbd:    #ddd6fe;
+  --green:  #059669;
+  --gbg:    #ecfdf5;
+  --gbd:    #a7f3d0;
+
+  --user-bubble: #1a0b3b;
+  --ai-bubble:   #ffffff;
+
+  --fd: 'Lora', Georgia, serif;
+  --fb: 'DM Sans', system-ui, sans-serif;
+  --fm: 'Fira Code', monospace;
+
+  --ease-spring: cubic-bezier(.34,1.48,.64,1);
+  --ease-out: cubic-bezier(.4,0,.2,1);
+}
+
+/* ── Shell ── */
+#page-counsellor.page { padding:0 !important; }
+.nc-shell {
+  display:flex; height:calc(100vh - 56px); overflow:hidden;
+  font-family:var(--fb); background:var(--bg);
+}
+
+/* ══ SIDEBAR ══ */
+.nc-sidebar {
+  width:244px; flex-shrink:0; background:var(--sb);
+  display:flex; flex-direction:column; overflow:hidden;
+  position:relative;
+  transition:transform .25s var(--ease-out);
+}
+.nc-sb-glow {
+  position:absolute; top:-30px; left:-20px;
+  width:200px; height:180px;
+  background:radial-gradient(ellipse, rgba(91,33,182,0.22) 0%, transparent 65%);
+  pointer-events:none;
+}
+.nc-sb-top {
+  padding:16px 14px 13px; display:flex;
+  align-items:center; justify-content:space-between;
+  position:relative; z-index:1;
+}
+.nc-sb-brand { display:flex; align-items:center; gap:9px; }
+.nc-brand-mark {
+  width:32px; height:32px; border-radius:9px;
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  box-shadow:0 4px 12px rgba(91,33,182,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+.nc-brand-star { animation:nc-star-spin 12s linear infinite; }
+@keyframes nc-star-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
+.nc-brand-name {
+  font-family:var(--fd); font-size:13.5px; font-weight:600;
+  color:rgba(255,255,255,0.9); letter-spacing:-0.1px; line-height:1.2;
+}
+.nc-brand-sub { font-size:10px; color:var(--sbm); margin-top:1px; }
+.nc-new-btn {
+  width:28px; height:28px; border-radius:7px;
+  background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1);
+  color:rgba(255,255,255,0.55); cursor:pointer;
+  display:flex; align-items:center; justify-content:center;
+  transition:background .15s, color .15s, transform .1s;
+}
+.nc-new-btn:hover { background:rgba(139,92,246,0.2); color:#a78bfa; transform:scale(1.08); }
+.nc-new-btn:active { transform:scale(0.93); }
+
+.nc-sb-divider { height:1px; background:var(--sbb); margin:0 14px; }
+.nc-sb-label {
+  font-size:9px; font-weight:700; letter-spacing:0.9px; text-transform:uppercase;
+  color:var(--sbm); padding:13px 16px 5px;
+}
+.nc-sess-list { flex:1; overflow-y:auto; padding:3px 7px; scrollbar-width:none; }
+.nc-sess-list::-webkit-scrollbar { display:none; }
+.acp-sess-item {
+  display:flex; align-items:center; gap:8px; padding:8px 9px;
+  border-radius:9px; cursor:pointer; border:1px solid transparent;
+  transition:background .12s, border-color .12s; margin-bottom:2px;
+}
+.acp-sess-item:hover { background:rgba(255,255,255,0.05); }
+.acp-sess-item.active { background:rgba(139,92,246,0.14); border-color:rgba(139,92,246,0.22); }
+.acp-sess-item-icon {
+  width:25px; height:25px; border-radius:6px; flex-shrink:0;
+  background:rgba(255,255,255,0.05);
+  display:flex; align-items:center; justify-content:center; color:var(--sbm); font-size:12px;
+}
+.acp-sess-item.active .acp-sess-item-icon { background:rgba(139,92,246,0.18); color:#c4b5fd; }
+.acp-sess-item-title {
+  font-size:12px; font-weight:500; color:var(--sbt);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+.acp-sess-item.active .acp-sess-item-title { color:#c4b5fd; }
+.acp-sess-item-meta { font-size:10px; color:var(--sbm); margin-top:1px; }
+
+.nc-sb-foot { padding:11px 11px 15px; border-top:1px solid var(--sbb); display:flex; flex-direction:column; gap:9px; }
+.nc-user-row {
+  display:flex; align-items:center; gap:9px; padding:8px 9px;
+  border-radius:9px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07);
+}
+.nc-user-av {
+  width:30px; height:30px; border-radius:50%;
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  display:flex; align-items:center; justify-content:center;
+  font-family:var(--fd); font-size:13px; font-weight:600; color:#fff; flex-shrink:0;
+}
+.nc-user-name { font-size:12px; font-weight:600; color:rgba(255,255,255,0.88); }
+.nc-user-badge {
+  display:flex; align-items:center; gap:5px;
+  font-size:10px; color:#4ade80; margin-top:1px;
+}
+.nc-badge-pulse {
+  width:5px; height:5px; border-radius:50%; background:#4ade80; flex-shrink:0;
+  animation:nc-badge 2.2s ease-in-out infinite;
+}
+@keyframes nc-badge { 0%,100%{box-shadow:0 0 0 0 rgba(74,222,128,0.4)} 50%{box-shadow:0 0 0 5px rgba(74,222,128,0)} }
+.nc-sb-actions { display:flex; gap:6px; }
+.nc-action-btn {
+  flex:1; padding:7px 8px; border-radius:7px;
+  background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07);
+  color:var(--sbm); font-family:var(--fb); font-size:11px; font-weight:500;
+  cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px;
+  transition:background .12s, color .12s, border-color .12s;
+}
+.nc-action-btn:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); border-color:rgba(255,255,255,0.12); }
+.nc-action-danger:hover { background:rgba(239,68,68,0.1); color:#fca5a5; border-color:rgba(239,68,68,0.18); }
+
+/* ══ TOPBAR ══ */
+.nc-main { flex:1; display:flex; flex-direction:column; min-width:0; }
+.nc-topbar {
+  height:52px; background:rgba(247,245,240,0.96);
+  backdrop-filter:blur(12px); border-bottom:1px solid var(--bdr);
+  padding:0 17px; display:flex; align-items:center; gap:11px; flex-shrink:0;
+}
+.nc-menu-btn {
+  width:29px; height:29px; border-radius:7px; background:transparent;
+  border:1px solid var(--bdr); display:none; align-items:center; justify-content:center;
+  cursor:pointer; color:var(--ink3); flex-shrink:0; transition:background .12s;
+}
+.nc-menu-btn:hover { background:var(--vbg); color:var(--v2); }
+.nc-live-dot { display:flex; align-items:center; flex-shrink:0; }
+.nc-topbar-center { flex:1; display:flex; align-items:center; gap:8px; min-width:0; }
+.nc-topbar-title {
+  font-family:var(--fd); font-size:15px; font-weight:600;
+  color:var(--ink); letter-spacing:-0.15px; white-space:nowrap;
+}
+.nc-tb-sep { color:var(--ink4); font-size:12px; flex-shrink:0; }
+.nc-topbar-sub { font-size:12px; color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nc-topbar-right { display:flex; align-items:center; gap:7px; flex-shrink:0; }
+
+/* Context chip — NuMind-specific — shows student's top trait */
+.nc-ctx-chip {
+  display:flex; align-items:center; gap:5px;
+  padding:4px 10px; border-radius:20px;
+  background:linear-gradient(135deg,rgba(91,33,182,0.08),rgba(139,92,246,0.06));
+  border:1px solid var(--vbd); color:var(--v);
+  font-size:11px; font-weight:600; white-space:nowrap;
+  max-width:160px; overflow:hidden; text-overflow:ellipsis;
+  animation:nc-ctxin .35s var(--ease-spring);
+}
+@keyframes nc-ctxin { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:none} }
+.nc-ctx-chip::before { content:'✦'; font-size:9px; flex-shrink:0; opacity:0.7; }
+
+.nc-report-pill {
+  display:flex; align-items:center; gap:5px;
+  font-size:11px; font-weight:600; padding:4px 9px;
+  border-radius:20px; background:var(--gbg); border:1px solid var(--gbd); color:var(--green);
+}
+.nc-mobile-id {
+  font-size:11px; font-weight:600; color:var(--v2);
+  background:var(--vbg); border:1px solid var(--vbd);
+  padding:4px 9px; border-radius:20px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px;
+}
+.nc-back-btn {
+  display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:20px;
+  background:var(--vbg); border:1px solid var(--vbd); color:var(--v);
+  font-family:var(--fb); font-size:12px; font-weight:600; cursor:pointer;
+  transition:background .12s, border-color .12s; white-space:nowrap;
+}
+.nc-back-btn:hover { background:#ede9fe; border-color:#c4b5fd; }
+
+/* ══ LOCK SCREEN ══ */
+.nc-lock {
+  flex:1; display:flex; align-items:center; justify-content:center;
+  padding:2rem; position:relative; overflow:hidden; background:var(--sb);
+}
+.nc-particles-cv { position:absolute; inset:0; pointer-events:none; opacity:0.5; }
+.nc-lock-loader {
+  position:relative; z-index:2;
+  display:flex; flex-direction:column; align-items:center; gap:18px; text-align:center;
+}
+.nc-loader-orb {
+  width:42px; height:42px; border-radius:50%;
+  border:2.5px solid rgba(139,92,246,0.2);
+  border-top-color:#8b5cf6;
+  animation:nc-spin .75s linear infinite;
+}
+@keyframes nc-spin { to{transform:rotate(360deg)} }
+.nc-lock-loader span { font-size:13.5px; font-weight:500; color:rgba(255,255,255,0.5); }
+
+.nc-lock-card {
+  position:relative; z-index:2; width:100%; max-width:430px;
+  background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.085);
+  border-radius:22px; overflow:hidden;
+  backdrop-filter:blur(28px);
+  box-shadow:0 30px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+  animation:nc-cardin .5s var(--ease-spring);
+}
+@keyframes nc-cardin { from{opacity:0;transform:translateY(24px) scale(0.96)} to{opacity:1;transform:none} }
+.nc-lock-glow {
+  position:absolute; top:-50px; left:50%; transform:translateX(-50%);
+  width:240px; height:140px;
+  background:radial-gradient(ellipse,rgba(91,33,182,0.28) 0%,transparent 70%);
+  pointer-events:none;
+}
+.nc-lock-hero {
+  padding:2.2rem 2rem 1.5rem; text-align:center;
+  border-bottom:1px solid rgba(255,255,255,0.065);
+}
+.nc-lock-orb {
+  width:64px; height:64px; border-radius:18px;
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  display:flex; align-items:center; justify-content:center;
+  margin:0 auto 1.25rem; position:relative;
+  box-shadow:0 12px 36px rgba(91,33,182,0.5);
+}
+.nc-orb-ring {
+  position:absolute; inset:-6px; border-radius:24px;
+  border:1.5px solid rgba(139,92,246,0.28);
+  animation:nc-orbring 3s ease-in-out infinite;
+}
+@keyframes nc-orbring { 0%,100%{transform:scale(1);opacity:0.28} 50%{transform:scale(1.07);opacity:0.55} }
+.nc-lock-title {
+  font-family:var(--fd); font-size:25px; font-weight:700;
+  color:rgba(255,255,255,0.92); letter-spacing:-0.35px; line-height:1.27; margin:0 0 .65rem;
+}
+.nc-lock-title em {
+  font-style:italic;
+  background:linear-gradient(90deg,#a78bfa,#f0abfc);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+}
+.nc-lock-sub { font-size:13px; color:rgba(255,255,255,0.42); line-height:1.65; margin:0; }
+.nc-lock-caps {
+  padding:15px 22px; display:flex; flex-direction:column; gap:10px;
+  border-bottom:1px solid rgba(255,255,255,0.065);
+}
+.nc-cap { display:flex; align-items:center; gap:10px; font-size:13px; color:rgba(255,255,255,0.58); line-height:1.4; }
+.nc-cap-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+.nc-lock-form { padding:17px 22px 21px; }
+.nc-lock-label { display:block; font-size:11px; font-weight:600; color:rgba(255,255,255,0.38); margin-bottom:8px; letter-spacing:0.2px; }
+.nc-lock-iw { position:relative; margin-bottom:8px; }
+.nc-lock-ii { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:rgba(255,255,255,0.26); pointer-events:none; }
+.nc-lock-input {
+  width:100%; padding:12px 13px 12px 37px; box-sizing:border-box;
+  border:1.5px solid rgba(255,255,255,0.1); border-radius:10px;
+  background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.88);
+  font-family:var(--fb); font-size:14px; outline:none;
+  transition:border-color .18s, box-shadow .18s;
+}
+.nc-lock-input::placeholder { color:rgba(255,255,255,0.22); }
+.nc-lock-input:focus { border-color:rgba(139,92,246,0.5); box-shadow:0 0 0 3px rgba(91,33,182,0.18); }
+.nc-lock-err { display:none; color:#fca5a5; font-size:12px; margin-bottom:8px; padding:0 2px; }
+.nc-lock-btn {
+  width:100%; padding:12px 16px; border-radius:10px;
+  background:linear-gradient(135deg,#5b21b6,#7c3aed); border:none; color:#fff;
+  font-family:var(--fb); font-size:14px; font-weight:600;
+  cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px;
+  transition:opacity .17s, transform .12s, box-shadow .17s;
+  box-shadow:0 8px 22px rgba(91,33,182,0.4);
+}
+.nc-lock-btn:hover { opacity:.9; transform:translateY(-1px); box-shadow:0 12px 28px rgba(91,33,182,0.45); }
+.nc-lock-btn:active { transform:none; }
+.nc-lock-btn:disabled { opacity:.38; cursor:not-allowed; transform:none; }
+.nc-lock-footer { text-align:center; font-size:11.5px; color:rgba(255,255,255,0.28); margin:11px 0 0; line-height:1.6; }
+.nc-lock-footer a { color:#a78bfa; font-weight:600; text-decoration:none; }
+.nc-lock-footer a:hover { text-decoration:underline; }
+
+/* ══ CHAT ══ */
+.nc-chat { flex:1; display:flex; flex-direction:column; min-height:0; position:relative; }
+
+/* Welcome */
+.nc-welcome {
+  flex:1; overflow-y:auto; display:flex; align-items:flex-start;
+  justify-content:center; padding:2.2rem 1.5rem; position:relative;
+}
+.nc-welcome-bg {
+  position:absolute; inset:0; pointer-events:none;
+  background:
+    radial-gradient(ellipse 55% 45% at 12% 18%, rgba(91,33,182,0.055) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 55% at 88% 82%, rgba(124,58,237,0.04) 0%, transparent 60%);
+}
+/* Empty-state watermark */
+.nc-empty-mark {
+  position:absolute; bottom:80px; right:50%;
+  transform:translateX(50%);
+  pointer-events:none; user-select:none;
+  animation:nc-float 6s ease-in-out infinite;
+}
+@keyframes nc-float { 0%,100%{transform:translateX(50%) translateY(0)} 50%{transform:translateX(50%) translateY(-10px)} }
+
+.nc-welcome-inner {
+  width:100%; max-width:540px; display:flex; flex-direction:column;
+  position:relative; z-index:1;
+}
+/* Staggered reveal */
+.nc-reveal { opacity:0; animation:nc-reveal-anim .45s var(--ease-spring) forwards; animation-delay:var(--d,0ms); }
+@keyframes nc-reveal-anim { from{opacity:0;transform:translateY(14px)} to{opacity:1;transform:none} }
+
+.nc-welcome-av { margin-bottom:1.1rem; }
+.nc-ai-orb-sm {
+  width:48px; height:48px; border-radius:14px;
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 8px 24px rgba(91,33,182,0.22);
+  /* breathing pulse */
+  animation:nc-orb-breathe 3.5s ease-in-out infinite;
+}
+@keyframes nc-orb-breathe {
+  0%,100%{box-shadow:0 8px 24px rgba(91,33,182,0.22)}
+  50%{box-shadow:0 10px 32px rgba(91,33,182,0.38), 0 0 0 6px rgba(91,33,182,0.07)}
+}
+.nc-welcome-hi {
+  font-family:var(--fd); font-size:27px; font-weight:700;
+  color:var(--ink); letter-spacing:-0.4px; margin-bottom:.45rem; line-height:1.2;
+}
+.nc-hi-name {
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
+}
+.nc-welcome-desc { font-size:14.5px; color:var(--ink3); line-height:1.7; margin-bottom:1.3rem; }
+.nc-report-strip { display:flex; gap:7px; flex-wrap:wrap; margin-bottom:1.3rem; }
+.nc-report-strip span {
+  background:var(--vbg); border:1px solid var(--vbd); color:var(--v);
+  border-radius:20px; padding:4px 11px; font-size:12px; font-weight:600;
+}
+.nc-starters { display:grid; grid-template-columns:1fr 1fr; gap:9px; width:100%; }
+.nc-starter {
+  padding:12px 13px; border-radius:14px; background:var(--surf);
+  border:1.5px solid var(--bdr); cursor:pointer; text-align:left;
+  transition:border-color .14s, background .14s, transform .12s, box-shadow .12s;
+  box-shadow:0 1px 3px rgba(0,0,0,0.04);
+}
+.nc-starter:hover {
+  border-color:var(--vbd); background:var(--vbg);
+  transform:translateY(-2px); box-shadow:0 6px 18px rgba(91,33,182,0.09);
+}
+.nc-starter:active { transform:none; }
+.nc-starter-head { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
+.nc-si {
+  width:27px; height:27px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:14px; flex-shrink:0;
+}
+.nc-si-blue   { background:#eff6ff; }
+.nc-si-violet { background:var(--vbg); }
+.nc-si-amber  { background:#fffbeb; }
+.nc-si-green  { background:var(--gbg); }
+.nc-starter-label { font-size:12.5px; font-weight:700; color:var(--ink); line-height:1.3; }
+.nc-starter-hint  { font-size:11px; color:var(--ink4); line-height:1.4; padding-left:35px; }
+
+/* ── Messages ── */
+.nc-messages {
+  flex:1; overflow-y:auto; padding:22px 20px 10px;
+  display:flex; flex-direction:column; gap:16px;
+  scrollbar-width:thin; scrollbar-color:var(--bdr) transparent;
+}
+.nc-messages::-webkit-scrollbar { width:4px; }
+.nc-messages::-webkit-scrollbar-thumb { background:var(--bdr); border-radius:4px; }
+
+/* Date separator */
+.nc-date-sep { display:flex; align-items:center; gap:10px; margin:4px 0; }
+.nc-date-line { flex:1; height:1px; background:var(--bdr); }
+.nc-date-txt  { font-size:10px; font-weight:600; color:var(--ink4); white-space:nowrap; letter-spacing:0.2px; }
+
+/* Message rows */
+.ac-msg {
+  display:flex; align-items:flex-start; gap:9px;
+  animation:nc-msgin .22s var(--ease-spring);
+}
+@keyframes nc-msgin { from{opacity:0;transform:translateY(7px) scale(0.98)} to{opacity:1;transform:none} }
+.ac-msg-user { flex-direction:row-reverse; }
+
+/* AI orb avatar — animated */
+.acp-msg-av {
+  width:28px; height:28px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:12px; font-weight:700; margin-top:2px;
+}
+.ac-msg-assistant .acp-msg-av {
+  background:linear-gradient(135deg,#5b21b6,#8b5cf6); color:#fff;
+  box-shadow:0 2px 8px rgba(91,33,182,0.22);
+  font-size:13px;
+  /* breathing animation on the avatar orb */
+  animation:nc-av-breathe 4s ease-in-out infinite;
+}
+@keyframes nc-av-breathe {
+  0%,100%{box-shadow:0 2px 8px rgba(91,33,182,0.22)}
+  50%{box-shadow:0 3px 14px rgba(91,33,182,0.38),0 0 0 3px rgba(91,33,182,0.08)}
+}
+.ac-msg-user .acp-msg-av { background:var(--bdr); color:var(--ink3); }
+
+/* Bubbles */
+.ac-bubble {
+  max-width:min(620px,82%); padding:11px 15px; border-radius:15px;
+  font-size:14.5px; line-height:1.75; word-break:break-word;
+}
+.ac-msg-user .ac-bubble {
+  background:var(--user-bubble); color:rgba(255,255,255,0.91);
+  border-bottom-right-radius:4px; white-space:pre-wrap;
+  box-shadow:0 2px 10px rgba(26,11,59,0.18);
+}
+.ac-msg-assistant .ac-bubble {
+  background:var(--ai-bubble); color:var(--ink);
+  border:1px solid var(--bdr); border-bottom-left-radius:4px;
+  box-shadow:0 1px 5px rgba(0,0,0,0.05);
+}
+/* Markdown */
+.ac-msg-assistant .ac-bubble h1,.ac-msg-assistant .ac-bubble h2,.ac-msg-assistant .ac-bubble h3 {
+  font-family:var(--fd); font-weight:600; margin:.85em 0 .35em; color:var(--ink); line-height:1.3;
+}
+.ac-msg-assistant .ac-bubble h1{font-size:18px}.ac-msg-assistant .ac-bubble h2{font-size:15.5px}.ac-msg-assistant .ac-bubble h3{font-size:14px}
+.ac-msg-assistant .ac-bubble p{margin:0 0 .6em}
+.ac-msg-assistant .ac-bubble p:last-child{margin-bottom:0}
+.ac-msg-assistant .ac-bubble ul,.ac-msg-assistant .ac-bubble ol{margin:.4em 0 .6em;padding-left:1.25em}
+.ac-msg-assistant .ac-bubble li{margin:.25em 0}
+.ac-msg-assistant .ac-bubble li::marker{color:var(--v2)}
+.ac-msg-assistant .ac-bubble strong{font-weight:700;color:var(--ink)}
+.ac-msg-assistant .ac-bubble em{font-style:italic;color:var(--ink2)}
+.ac-msg-assistant .ac-bubble code{font-family:var(--fm);font-size:12.5px;background:#f2ede4;border:1px solid var(--bdr);border-radius:4px;padding:1px 5px;color:#5b21b6}
+.ac-msg-assistant .ac-bubble pre{background:#19160f;border-radius:8px;padding:12px 14px;overflow-x:auto;margin:.5em 0}
+.ac-msg-assistant .ac-bubble pre code{background:none;border:none;padding:0;color:#e5e5e5;font-size:12.5px}
+.ac-msg-assistant .ac-bubble blockquote{border-left:3px solid var(--vbd);margin:.5em 0;padding:4px 12px;background:var(--vbg);color:var(--ink3);font-style:italic;border-radius:0 7px 7px 0}
+.ac-msg-assistant .ac-bubble a{color:var(--v2);text-decoration:underline;text-underline-offset:2px}
+.ac-msg-assistant .ac-bubble hr{border:none;border-top:1px solid var(--bdr);margin:.75em 0}
+.ac-msg-assistant .ac-bubble table{border-collapse:collapse;font-size:13px;width:100%;margin:.5em 0}
+.ac-msg-assistant .ac-bubble th,.ac-msg-assistant .ac-bubble td{border:1px solid var(--bdr);padding:6px 10px;text-align:left}
+.ac-msg-assistant .ac-bubble th{background:#f2ede4;font-weight:600}
+
+/* Reactions */
+.nc-rx { display:flex; align-items:center; gap:3px; margin-top:5px; opacity:0; transition:opacity .15s; }
+.ac-msg:hover .nc-rx { opacity:1; }
+.nc-rx-btn {
+  width:26px; height:26px; border-radius:7px; background:var(--surf);
+  border:1px solid var(--bdr); cursor:pointer;
+  display:flex; align-items:center; justify-content:center; font-size:13px;
+  transition:background .12s, border-color .12s, transform .1s;
+}
+.nc-rx-btn:hover { background:var(--vbg); border-color:var(--vbd); transform:scale(1.1); }
+.nc-rx-btn.nc-on { background:var(--vbg); border-color:#c4b5fd; }
+
+/* Waveform typing indicator — replacing generic dots */
+.ac-typing {
+  display:flex; align-items:center; gap:3px;
+  padding:13px 16px !important; height:auto !important;
+}
+.ac-typing span {
+  display:inline-block; width:3px; border-radius:2px;
+  background:var(--v2); opacity:0.7;
+  animation:nc-wave 1.2s ease-in-out infinite;
+}
+.ac-typing span:nth-child(1){height:8px;animation-delay:0s}
+.ac-typing span:nth-child(2){height:14px;animation-delay:.1s}
+.ac-typing span:nth-child(3){height:20px;animation-delay:.2s}
+.ac-typing span:nth-child(4){height:14px;animation-delay:.3s}
+.ac-typing span:nth-child(5){height:8px;animation-delay:.4s}
+@keyframes nc-wave {
+  0%,100%{transform:scaleY(0.5);opacity:0.4}
+  50%{transform:scaleY(1.2);opacity:1}
+}
+
+/* Streaming cursor */
+.ac-streaming::after {
+  content:''; display:inline-block; width:7px; height:14px; border-radius:2px;
+  background:var(--v2); margin-left:3px; vertical-align:text-bottom;
+  animation:nc-blink .7s step-end infinite;
+}
+@keyframes nc-blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* Scroll pin */
+.nc-scroll-pin {
+  position:absolute; bottom:88px; right:20px; z-index:5;
+  display:flex; align-items:center; gap:5px;
+  padding:5px 11px 5px 8px; border-radius:20px;
+  background:var(--surf); border:1px solid var(--bdr); color:var(--ink3);
+  font-family:var(--fb); font-size:11.5px; font-weight:600; cursor:pointer;
+  box-shadow:0 4px 14px rgba(0,0,0,0.09); animation:nc-msgin .2s ease;
+  transition:all .13s;
+}
+.nc-scroll-pin:hover { border-color:var(--vbd); color:var(--v2); background:var(--vbg); }
+
+/* ══ COMPOSER ══ */
+.nc-composer {
+  padding:9px 15px 13px; background:var(--bg);
+  border-top:1px solid var(--bdr); flex-shrink:0;
+}
+/* Chip row — horizontal scroll on mobile */
+.nc-chip-row {
+  display:flex; gap:7px; padding:0 1px 9px;
+  overflow-x:auto; scrollbar-width:none;
+  -webkit-overflow-scrolling:touch;
+}
+.nc-chip-row::-webkit-scrollbar { display:none; }
+.nc-chip {
+  padding:5px 12px; border-radius:20px; flex-shrink:0;
+  background:var(--surf); border:1.5px solid var(--vbd); color:var(--v);
+  font-family:var(--fb); font-size:12px; font-weight:600; cursor:pointer;
+  white-space:nowrap; transition:all .14s;
+}
+.nc-chip:hover { background:var(--vbg); border-color:#c4b5fd; transform:translateY(-1px); }
+.nc-input-box {
+  background:var(--surf); border:1.5px solid var(--bdr2);
+  border-radius:15px; padding:11px 12px 9px;
+  transition:border-color .17s, box-shadow .17s;
+  box-shadow:0 1px 4px rgba(0,0,0,0.04);
+}
+.nc-input-box:focus-within {
+  border-color:#8b5cf6;
+  box-shadow:0 0 0 3px rgba(91,33,182,0.09), 0 2px 8px rgba(0,0,0,0.05);
+}
+#acp-input {
+  width:100%; background:transparent; border:none; outline:none;
+  color:var(--ink); font-family:var(--fb); font-size:14.5px;
+  line-height:1.65; resize:none; max-height:150px; overflow-y:auto; scrollbar-width:thin;
+}
+#acp-input::placeholder { color:var(--ink4); }
+.nc-input-foot { display:flex; align-items:center; gap:8px; margin-top:8px; }
+.nc-cc {
+  font-family:var(--fm); font-size:10px; color:var(--ink4);
+  min-width:36px; transition:color .15s;
+}
+.nc-cc.nc-warn   { color:#d97706; }
+.nc-cc.nc-danger { color:#dc2626; }
+.nc-hint { flex:1; text-align:right; font-size:10.5px; color:var(--ink4); white-space:nowrap; overflow:hidden; }
+.nc-send {
+  width:32px; height:32px; border-radius:9px;
+  background:linear-gradient(135deg,#5b21b6,#7c3aed);
+  border:none; cursor:pointer; color:#fff;
+  display:flex; align-items:center; justify-content:center; flex-shrink:0;
+  transition:opacity .13s, transform .1s, box-shadow .13s;
+  box-shadow:0 3px 10px rgba(91,33,182,0.28);
+}
+.nc-send:hover { opacity:.88; transform:scale(1.06); box-shadow:0 5px 14px rgba(91,33,182,0.36); }
+.nc-send:active { transform:scale(.94); }
+.nc-send:disabled { opacity:.3; cursor:not-allowed; transform:none; }
+.nc-disclaimer { text-align:center; font-size:10.5px; color:var(--ink4); margin:7px 0 0; line-height:1.5; }
+
+/* Mobile overlay */
+.nc-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,0.42); z-index:19; backdrop-filter:blur(2px); }
+.nc-overlay.open { display:block; }
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .nc-shell { height:calc(100dvh - 56px); }
+  .nc-sidebar {
+    position:fixed; top:0; left:0; height:100%; z-index:20;
+    transform:translateX(-100%); transition:transform .22s ease;
+  }
+  .nc-sidebar.open { transform:translateX(0); box-shadow:16px 0 50px rgba(0,0,0,0.32); }
+  .nc-menu-btn { display:flex !important; }
+  .nc-topbar-sub,.nc-tb-sep,.nc-report-pill { display:none !important; }
+  .nc-mobile-id { display:flex !important; }
+  .nc-starters { grid-template-columns:1fr; }
+  .nc-welcome { padding:1.5rem 1rem; }
+  .nc-welcome-hi { font-size:23px; }
+  .nc-ctx-chip { max-width:110px; }
+  /* chips stay visible on mobile — they scroll horizontally */
+  .nc-chip-row { padding-bottom:8px; }
+  .nc-empty-mark { display:none; }
+}
+@media(max-width:480px){
+  .nc-lock-hero { padding:1.8rem 1.5rem 1.2rem; }
+  .nc-lock-caps { display:none; }
+  .nc-lock-form { padding:14px 18px 20px; }
+  .nc-hint { display:none; }
+  .nc-back-btn span { display:none; }
+}
+</style>
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   AI COUNSELLOR v4 — full UI logic
+   Particles · Staggered reveal · Waveform typing
+   Context chip · Mobile chips · Reactions · Copy · Markdown
+══════════════════════════════════════════════════════════ */
+(function(){
+'use strict';
+
+/* ── Particles ── */
+function _ncParticles(){
+  var cv=document.getElementById('nc-particles'); if(!cv) return;
+  var ctx=cv.getContext('2d'), W, H, pts=[];
+  function resize(){ W=cv.width=cv.offsetWidth; H=cv.height=cv.offsetHeight; }
+  resize(); window.addEventListener('resize',resize);
+  for(var i=0;i<55;i++) pts.push({x:Math.random()*1400,y:Math.random()*900,vx:(Math.random()-.5)*.2,vy:(Math.random()-.5)*.2,r:Math.random()*1.4+.3,a:Math.random()*.5+.12});
+  var raf;
+  function draw(){
+    ctx.clearRect(0,0,W,H);
+    pts.forEach(function(p){ p.x+=p.vx; p.y+=p.vy; if(p.x<0)p.x=W; if(p.x>W)p.x=0; if(p.y<0)p.y=H; if(p.y>H)p.y=0; ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fillStyle='rgba(139,92,246,'+p.a+')'; ctx.fill(); });
+    for(var i=0;i<pts.length;i++) for(var j=i+1;j<pts.length;j++){ var dx=pts[i].x-pts[j].x,dy=pts[i].y-pts[j].y,d=Math.sqrt(dx*dx+dy*dy); if(d<82){ ctx.beginPath(); ctx.moveTo(pts[i].x,pts[i].y); ctx.lineTo(pts[j].x,pts[j].y); ctx.strokeStyle='rgba(139,92,246,'+(0.065*(1-d/82))+')'; ctx.lineWidth=.5; ctx.stroke(); } }
+    raf=requestAnimationFrame(draw);
+  }
+  draw();
+  var ob=new MutationObserver(function(){ var lk=document.getElementById('acp-lock'); if(lk&&lk.style.display==='none') cancelAnimationFrame(raf); });
+  var lk=document.getElementById('acp-lock'); if(lk) ob.observe(lk,{attributes:true,attributeFilter:['style']});
+}
+
+/* ── Staggered welcome reveal ── */
+function _ncReveal(){
+  document.querySelectorAll('.nc-reveal').forEach(function(el){
+    el.style.animationPlayState='running';
+  });
+}
+
+/* ── Waveform typing — 5 bars ── */
+window._acAddTyping=function(containerId){
+  var el=document.getElementById(containerId); if(!el) return null;
+  var id='ac-typing-'+Date.now();
+  var wrap=document.createElement('div'); wrap.className='ac-msg ac-msg-assistant'; wrap.id=id;
+  wrap.innerHTML='<div class="acp-msg-av">✦</div><div class="ac-bubble ac-typing"><span></span><span></span><span></span><span></span><span></span></div>';
+  el.appendChild(wrap); el.scrollTop=el.scrollHeight; return id;
+};
+
+/* ── Context chip ── */
+function _ncSetCtxChip(text){
+  var chip=document.getElementById('nc-ctx-chip'); if(!chip) return;
+  chip.textContent=text; chip.style.display='flex';
+}
+
+/* ── Follow-up chips ── */
+var _bank={
+  career:['Which colleges offer this?','What entrance exams apply?','What does it pay?','Skills to build now?'],
+  stream:['What subjects are compulsory?','Can I switch later?','Better for entrepreneurs?','Will it limit options?'],
+  aptitude:['How do I improve weak areas?','What careers use this?','How does it compare to average?'],
+  scholarship:['How do I apply?','What documents do I need?','What is the income limit?'],
+  wellbeing:['How do I handle exam stress?','Best study technique for me?','Daily routine tips?'],
+  default:['Tell me more','Give me examples','What should I do next?','How does this link to my scores?']
+};
+function _ncGetChips(t){
+  t=t.toLowerCase();
+  if(t.includes('career')||t.includes('job')||t.includes('profession')) return _bank.career;
+  if(t.includes('stream')||t.includes('science')||t.includes('commerce')||t.includes('arts')) return _bank.stream;
+  if(t.includes('aptitude')||t.includes('stanine')||t.includes('score')) return _bank.aptitude;
+  if(t.includes('scholarship')||t.includes('funding')) return _bank.scholarship;
+  if(t.includes('stress')||t.includes('wellbeing')||t.includes('mental')) return _bank.wellbeing;
+  return _bank.default;
+}
+function _ncShowChips(content){
+  var row=document.getElementById('nc-chip-row'); if(!row) return;
+  row.innerHTML='';
+  var pool=_ncGetChips(content), picks=pool.slice().sort(function(){return Math.random()-.5;}).slice(0,3);
+  picks.forEach(function(q){
+    var b=document.createElement('button'); b.className='nc-chip'; b.textContent=q;
+    b.addEventListener('click',function(){ _ncHideChips(); var inp=document.getElementById('acp-input'); if(inp){inp.value=q; _acResizeTextarea(inp);} if(typeof window.acSend==='function') window.acSend(); });
+    row.appendChild(b);
+  });
+  row.style.display='flex';
+}
+function _ncHideChips(){ var row=document.getElementById('nc-chip-row'); if(row){row.innerHTML=''; row.style.display='none';} }
+
+/* ── Scroll pin ── */
+window._ncScrollBottom=function(){ var el=document.getElementById('acp-messages'); if(el) el.scrollTo({top:el.scrollHeight,behavior:'smooth'}); var pin=document.getElementById('nc-scroll-pin'); if(pin) pin.style.display='none'; };
+function _ncWireScroll(){
+  var msgs=document.getElementById('acp-messages'), pin=document.getElementById('nc-scroll-pin');
+  if(!msgs||!pin) return;
+  msgs.addEventListener('scroll',function(){ pin.style.display=(msgs.scrollHeight-msgs.scrollTop-msgs.clientHeight>160)?'flex':'none'; });
+}
+
+/* ── Char counter ── */
+window._ncCount=function(el){
+  var cc=document.getElementById('nc-cc'); if(!cc) return;
+  var n=el.value.length,max=4000;
+  cc.textContent=n?(n+'/'+max):'';
+  cc.className='nc-cc'+(n>3800?' nc-danger':n>3500?' nc-warn':'');
+};
+
+/* ── Markdown renderer ── */
+function _ncMd(text){
+  function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+  function il(s){
+    return s
+      .replace(/\*\*\*(.+?)\*\*\*/g,'<strong><em>$1</em></strong>')
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,'<em>$1</em>')
+      .replace(/`([^`]+)`/g,'<code>$1</code>')
+      .replace(/~~(.+?)~~/g,'<del>$1</del>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  }
+  var lines=text.split('\n'),out=[],i=0;
+  while(i<lines.length){
+    var ln=lines[i];
+    var hm=ln.match(/^(#{1,3}) (.+)/);
+    if(hm){out.push('<h'+hm[1].length+'>'+il(esc(hm[2]))+'</h'+hm[1].length+'>');i++;continue;}
+    if(/^---+$/.test(ln.trim())){out.push('<hr>');i++;continue;}
+    if(/^```/.test(ln)){var lang=ln.slice(3).trim(),code=[];i++;while(i<lines.length&&!/^```/.test(lines[i])){code.push(esc(lines[i]));i++;}i++;out.push('<pre><code'+(lang?' class="lang-'+lang+'"':'')+'>'+code.join('\n')+'</code></pre>');continue;}
+    if(/^> /.test(ln)){var bq=[];while(i<lines.length&&/^> /.test(lines[i])){bq.push(il(esc(lines[i].slice(2))));i++;}out.push('<blockquote>'+bq.join('<br>')+'</blockquote>');continue;}
+    if(/\|/.test(ln)&&i+1<lines.length&&/^\|?[-|: ]+\|?$/.test(lines[i+1])){
+      var th=ln.split('|').filter(function(c,x,a){return x>0&&x<a.length-1||c.trim();}).map(function(c){return'<th>'+il(esc(c.trim()))+'</th>';});
+      i+=2;var rows=[];
+      while(i<lines.length&&/\|/.test(lines[i])){var td=lines[i].split('|').filter(function(c,x,a){return x>0&&x<a.length-1||c.trim();}).map(function(c){return'<td>'+il(esc(c.trim()))+'</td>';});rows.push('<tr>'+td.join('')+'</tr>');i++;}
+      out.push('<table><thead><tr>'+th.join('')+'</tr></thead><tbody>'+rows.join('')+'</tbody></table>');continue;
+    }
+    if(/^[\-\*\•] /.test(ln.trim())){var ul=[];while(i<lines.length&&/^[\-\*\•] /.test(lines[i].trim())){ul.push('<li>'+il(esc(lines[i].trim().replace(/^[\-\*\•] /,'')))+' </li>');i++;}out.push('<ul>'+ul.join('')+'</ul>');continue;}
+    if(/^\d+\. /.test(ln.trim())){var ol=[];while(i<lines.length&&/^\d+\. /.test(lines[i].trim())){ol.push('<li>'+il(esc(lines[i].trim().replace(/^\d+\. /,'')))+' </li>');i++;}out.push('<ol>'+ol.join('')+'</ol>');continue;}
+    if(!ln.trim()){i++;continue;}
+    var para=[];
+    while(i<lines.length&&lines[i].trim()&&!/^(#{1,3} |---+|```|> |\d+\. |[\-\*\•] )/.test(lines[i])&&!/\|/.test(lines[i])){para.push(il(esc(lines[i])));i++;}
+    if(para.length) out.push('<p>'+para.join('<br>')+'</p>');
+  }
+  return out.join('');
+}
+window._acRenderMarkdown=function(text){
+  var d=document.createDocumentFragment(), w=document.createElement('div');
+  w.innerHTML=_ncMd(String(text||'')); d.appendChild(w); return d;
+};
+
+/* ── Append message ── */
+function _appendMsg(role,content,reactions){
+  var el=document.getElementById('acp-messages'); if(!el) return null;
+  var wrap=document.createElement('div'); wrap.className='ac-msg ac-msg-'+role;
+  var av=document.createElement('div'); av.className='acp-msg-av';
+  av.textContent=role==='assistant'?'✦':((window._AC&&window._AC.name)?window._AC.name.charAt(0).toUpperCase():'U');
+  var bubble=document.createElement('div'); bubble.className='ac-bubble';
+  if(role==='assistant') bubble.appendChild(window._acRenderMarkdown(content));
+  else bubble.textContent=content;
+  wrap.appendChild(av); wrap.appendChild(bubble);
+  if(role==='assistant'&&reactions!==false){
+    var rx=document.createElement('div'); rx.className='nc-rx';
+    [['👍','Like'],['💡','Insightful'],['🔖','Save'],['📋','Copy']].forEach(function(p){
+      var b=document.createElement('button'); b.className='nc-rx-btn'; b.title=p[1]; b.textContent=p[0];
+      b.addEventListener('click',function(){
+        if(p[1]==='Copy'){navigator.clipboard&&navigator.clipboard.writeText(content); b.textContent='✓'; setTimeout(function(){b.textContent='📋';},1600);}
+        else b.classList.toggle('nc-on');
+      });
+      rx.appendChild(b);
+    });
+    wrap.appendChild(rx);
+  }
+  el.appendChild(wrap); el.scrollTop=el.scrollHeight;
+  return{element:wrap,bubble:bubble,
+    setContent:function(t){bubble.innerHTML='';bubble.appendChild(window._acRenderMarkdown(t));el.scrollTop=el.scrollHeight;},
+    setStreamingContent:function(t){bubble.innerHTML='';bubble.appendChild(window._acRenderMarkdown(t));bubble.classList.add('ac-streaming');el.scrollTop=el.scrollHeight;},
+    addClass:function(c){bubble.classList.add(c);},
+    remove:function(){wrap.remove();},
+    classList:{remove:function(c){bubble.classList.remove(c);}}
+  };
+}
+window._acAppendMessage=function(role,content){ return _appendMsg(role,content,true); };
+
+/* ── Sessions ── */
+var _sessions=[],_activeSess=null;
+
+/* Load conversations from server and populate sidebar */
+async function _loadConversationsFromServer(email){
+  try{
+    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    var res=await fetch('/api/counsellor-conversations?email='+encodeURIComponent(email),{headers:h});
+    if(!res.ok) return;
+    var data=await res.json();
+    var convs=data.conversations||[];
+    _sessions=[];
+    convs.forEach(function(c){
+      _sessions.push({
+        id:       c.conversation_id,
+        title:    c.title||'Conversation',
+        messages: [],           // loaded lazily on click
+        ts:       new Date(c.last_at||0).getTime()||Date.now(),
+        loaded:   false,
+        serverConv: true,
+        messageCount: c.message_count||0,
+      });
+    });
+    _renderSessList();
+  }catch(e){ console.warn('[AC] loadConversations failed:',e.message); }
+}
+
+/* Load messages for a specific conversation from server */
+async function _loadConvMessages(email, convId){
+  try{
+    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    var res=await fetch('/api/counsellor-history?email='+encodeURIComponent(email)+'&conversationId='+encodeURIComponent(convId),{headers:h});
+    if(!res.ok) return [];
+    var data=await res.json();
+    return (data.messages||[]).map(function(m){return{role:m.role,content:m.content};});
+  }catch(e){ return []; }
+}
+
+function _initSession(name, messages, existingConvId){
+  /* If an existing conversation already loaded — don't duplicate it */
+  if(existingConvId){
+    var existing=_sessions.find(function(s){return s.id===existingConvId;});
+    if(existing){ _activeSess=existing; existing.messages=messages||[]; _renderSessList(); return; }
+  }
+  var first=(messages||[]).find(function(m){return m.role==='user';});
+  var title=first?first.content.substring(0,42)+(first.content.length>42?'…':''):'New conversation';
+  var convId=existingConvId||((function(){var a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');})());
+  var s={id:convId,title:title,messages:messages||[],ts:Date.now(),loaded:true,serverConv:false};
+  _sessions.unshift(s); _activeSess=s; _renderSessList();
+}
+
+window._acNewChat=function(){
+  /* Generate a fresh conversation ID so server can group these messages */
+  var convId=(function(){var a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');})();
+  var s={id:convId,title:'New conversation',messages:[],ts:Date.now(),loaded:true,serverConv:false};
+  _sessions.unshift(s); _activeSess=s;
+  if(window._AC){ window._AC.messages=[]; window._AC.conversationId=convId; }
+  _renderSessList(); _resetUI(); _ncHideChips(); _acCloseSidebar();
+  /* Fire greeting for new conversation */
+  _fireGreeting(convId);
+};
+
+/* Fire AI greeting for a new conversation */
+async function _fireGreeting(convId){
+  var AC=window._AC; if(!AC||!AC.email||!AC.unlocked) return;
+  var msgs=document.getElementById('acp-messages');
+  var welc=document.getElementById('acp-welcome');
+  try{
+    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    var res=await fetch('/api/counsellor-greeting',{
+      method:'POST',headers:h,
+      body:JSON.stringify({email:AC.email,conversationId:convId})
+    });
+    if(!res.ok) return;
+    /* Show chat area, hide welcome */
+    if(welc) welc.style.display='none';
+    if(msgs){ msgs.style.display='flex'; }
+    var reader=res.body.getReader(), dec=new TextDecoder(), fullText='';
+    var msgEl=window._acAppendMessage('assistant','','acp-messages');
+    if(msgEl&&msgEl.setStreamingContent) msgEl.setStreamingContent('');
+    while(true){
+      var chunk=await reader.read(); if(chunk.done) break;
+      fullText+=dec.decode(chunk.value,{stream:true});
+      if(msgEl&&msgEl.setStreamingContent) msgEl.setStreamingContent(fullText);
+    }
+    if(msgEl&&msgEl.classList) msgEl.classList.remove('ac-streaming');
+    if(fullText.trim()){
+      AC.messages.push({role:'assistant',content:fullText});
+      if(_activeSess&&_activeSess.id===convId) _activeSess.messages=AC.messages.slice();
+    }
+  }catch(e){ console.warn('[AC] greeting failed:',e.message); }
+}
+function _resetUI(){
+  var msgs=document.getElementById('acp-messages'),welc=document.getElementById('acp-welcome');
+  if(msgs){msgs.innerHTML='';msgs.style.display='none';}
+  if(welc){welc.style.display='';_ncReveal();}
+  var pin=document.getElementById('nc-scroll-pin'); if(pin) pin.style.display='none';
+}
+function _renderSessList(){
+  var list=document.getElementById('acp-sess-list'),label=document.getElementById('acp-sess-label');
+  if(!list) return; list.innerHTML='';
+  if(!_sessions.length){if(label)label.style.display='none';return;}
+  if(label) label.style.display='';
+  _sessions.forEach(function(s){
+    var el=document.createElement('div'); el.className='acp-sess-item'+(s===_activeSess?' active':'');
+    el.innerHTML='<div class="acp-sess-item-icon"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div><div style="flex:1;min-width:0"><div class="acp-sess-item-title">'+_esc(s.title)+'</div><div class="acp-sess-item-meta">'+_relTime(s.ts)+'</div></div>';
+    (function(sess){
+      el.addEventListener('click',async function(){
+        _activeSess=sess; _renderSessList(); _acCloseSidebar();
+        /* Load messages lazily from server if not already loaded */
+        if(sess.serverConv&&!sess.loaded){
+          var AC=window._AC; if(!AC||!AC.email) return;
+          var loaded=await _loadConvMessages(AC.email,sess.id);
+          sess.messages=loaded; sess.loaded=true;
+          if(AC) AC.conversationId=sess.id;
+        }
+        if(window._AC){ window._AC.messages=sess.messages.slice(); window._AC.conversationId=sess.id; }
+        _loadSession(sess);
+      });
+    })(s);
+    list.appendChild(el);
+  });
+}
+function _loadSession(s){
+  var msgs=document.getElementById('acp-messages'),welc=document.getElementById('acp-welcome');
+  _ncHideChips(); if(!msgs) return; msgs.innerHTML='';
+  if(!s.messages||!s.messages.length){msgs.style.display='none';if(welc){welc.style.display='';_ncReveal();}return;}
+  if(welc) welc.style.display='none'; msgs.style.display='flex';
+  s.messages.forEach(function(m){_appendMsg(m.role,m.content,false);});
+  setTimeout(function(){msgs.scrollTop=msgs.scrollHeight;},10);
+}
+function _esc(s){return String(s||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
+function _relTime(ts){var d=Date.now()-ts;if(d<60000)return'Just now';if(d<3600000)return Math.floor(d/60000)+'m ago';if(d<86400000)return Math.floor(d/3600000)+'h ago';return new Date(ts).toLocaleDateString();}
+
+/* ── Sidebar ── */
+window._acOpenSidebar=function(){var sb=document.getElementById('acp-sidebar'),ov=document.getElementById('nc-overlay');if(sb)sb.classList.add('open');if(ov)ov.classList.add('open');};
+window._acCloseSidebar=function(){var sb=document.getElementById('acp-sidebar'),ov=document.getElementById('nc-overlay');if(sb)sb.classList.remove('open');if(ov)ov.classList.remove('open');};
+
+/* ── Quick start ── */
+window._acQuickStart=function(btn){
+  var q=btn.getAttribute('data-q'); if(!q) return;
+  var inp=document.getElementById('acp-input');
+  if(inp){inp.value=q;if(typeof _acResizeTextarea==='function')_acResizeTextarea(inp);}
+  var welc=document.getElementById('acp-welcome'),msgs=document.getElementById('acp-messages');
+  if(welc)welc.style.display='none'; if(msgs)msgs.style.display='flex';
+  if(typeof acSend==='function') acSend();
+};
+
+/* ── localStorage ── */
+var KEY='nmind_ac_s4';
+function _save(e,n){try{localStorage.setItem(KEY,JSON.stringify({email:e,name:n}));}catch(_){}}
+function _load(){try{return JSON.parse(localStorage.getItem(KEY)||'null');}catch(_){return null;}}
+function _clear(){try{localStorage.removeItem(KEY);}catch(_){}}
+
+/* ── Apply unlocked UI ── */
+function _applyUnlocked(name,messages){
+  /* topbar */
+  var sub=document.getElementById('acp-topbar-sub'),chip=document.getElementById('acp-report-chip'),mid=document.getElementById('acp-mobile-id'),uname=document.getElementById('acp-user-name');
+  if(sub) sub.textContent='Chatting as '+name;
+  if(chip) chip.style.display='flex';
+  if(mid){mid.textContent=name;mid.style.display='flex';}
+  if(uname) uname.textContent=name;
+
+  /* back btn */
+  var bb=document.getElementById('acp-back-btn'),sbl=document.getElementById('acp-sb-back-label');
+  var S=window.S,hr=S&&S.cpi&&S.cpi.scores!==null&&S.nmap&&S.nmap.scores!==null;
+  var arrSvg='<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>';
+  if(bb) bb.innerHTML=arrSvg+(hr?' View Report':' Home');
+  if(sbl) sbl.textContent=hr?'Back to report':'Back to home';
+
+  /* context chip — NuMind-specific top trait */
+  (function(){
+    var AC=window._AC,_S=window.S;
+    function e2(s){return String(s||'').replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+    var trait=null;
+    if(_S&&_S.nmap&&_S.nmap.scores){try{var en=Object.entries(_S.nmap.scores).sort(function(a,b){return b[1]-a[1];});if(en.length)trait=en[0][0];}catch(_){}}
+    if(!trait&&AC&&AC.reportSummary&&AC.reportSummary.top_personality_traits&&AC.reportSummary.top_personality_traits.length) trait=AC.reportSummary.top_personality_traits[0].name;
+    if(trait) _ncSetCtxChip(e2(trait));
+  })();
+
+  /* report strip */
+  (function(){
+    var strip=document.getElementById('acp-report-strip'); if(!strip) return;
+    var chips=[],AC=window._AC,_S=window.S;
+    function es(s){return String(s||'').replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+    if(_S&&_S.cpi&&_S.cpi.scores){try{var ec=Object.entries(_S.cpi.scores).sort(function(a,b){return b[1]-a[1];});if(ec.length)chips.push('Top interest: '+es(ec[0][0]));}catch(_){}}
+    if(_S&&_S.nmap&&_S.nmap.scores){try{var en2=Object.entries(_S.nmap.scores).sort(function(a,b){return b[1]-a[1];});if(en2.length)chips.push('Strongest: '+es(en2[0][0]));}catch(_){}}
+    if(!chips.length&&AC&&AC.reportSummary){try{var rs=AC.reportSummary;if(rs.top3_interests&&rs.top3_interests.length)chips.push('Top interest: '+es(rs.top3_interests[0].label));if(rs.top_personality_traits&&rs.top_personality_traits.length)chips.push('Strongest: '+es(rs.top_personality_traits[0].name));if(rs.fit_tier)chips.push(es(rs.fit_tier));}catch(_){}}
+    if(chips.length){strip.innerHTML=chips.map(function(c){return'<span>'+c+'</span>';}).join('');strip.style.display='flex';}
+  })();
+
+  /* sidebar */
+  var card=document.getElementById('acp-user-card'),av=document.getElementById('acp-sb-av'),nm=document.getElementById('acp-sb-name'),clr=document.getElementById('acp-sb-clear');
+  if(card)card.style.display='';if(av)av.textContent=name.charAt(0).toUpperCase();if(nm)nm.textContent=name;if(clr)clr.style.display='';
+
+  /* show chat */
+  _initSession(name,messages||[]);
+  _loadSession(_activeSess);
+  var chat=document.getElementById('acp-chat'),lock=document.getElementById('acp-lock');
+  if(lock)lock.style.display='none';
+  if(chat)chat.style.cssText='display:flex!important;flex:1;flex-direction:column;min-height:0';
+}
+window._acSetPageView=function(view){
+  var lock=document.getElementById('acp-lock'),chat=document.getElementById('acp-chat');
+  if(lock)lock.style.display=view==='lock'?'':'none';
+  if(chat){if(view==='chat'){chat.style.cssText='display:flex!important;flex:1;flex-direction:column;min-height:0';}else{chat.style.display='none';}}
+};
+
+/* ── Post-unlock UI transition ─────────────────────────────────────
+   _runUnlockUI() is the single function that hides the lock screen and
+   shows the chat after ANY successful unlock — email same-device, PIN,
+   OTP verify, and first-time PIN set all funnel through _acApplySession()
+   in ai-counsellor.js, which sets _AC.unlocked=true then dispatches
+   'ac:unlocked'. The listener below catches every path uniformly.
+
+   CRITICAL: this listener is defined OUTSIDE _acWhenReady intentionally.
+   _acWhenReady polls for window._AC (set by the ES module ai-counsellor.js)
+   and has a 5-second hard timeout. On Render cold starts or slow connections
+   the module can take longer, the poll expires, _acWhenReady's callback
+   never runs, and the listener never gets registered. User enters their PIN,
+   server returns unlocked:true, event fires — nobody listening, lock screen
+   hangs on "Checking…" forever. Registering here (inline script, runs
+   synchronously at parse time) guarantees the listener is always present. */
+async function _runUnlockUI(){
+  var AC=window._AC; if(!AC||!AC.unlocked) return;
+  _save(AC.email,AC.name||'Student');
+  /* Build sessions from server conversations */
+  var convs=(AC._serverConvs)||[];
+  _sessions=[];
+  (convs||[]).forEach(function(c){
+    _sessions.push({id:c.conversation_id,title:c.title||'Conversation',messages:[],ts:new Date(c.last_at||0).getTime()||Date.now(),loaded:false,serverConv:true,messageCount:c.message_count||0});
+  });
+  var msgs=AC.messages||[];
+  /* Create active session */
+  var convId=(function(){var a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');})();
+  if(msgs.length>0){
+    /* Returning user with history — show most recent conversation */
+    var latestConv=convs&&convs[0];
+    if(latestConv){
+      /* Load latest conversation messages */
+      var latestMsgs=await _loadConvMessages(AC.email,latestConv.conversation_id);
+      var s=_sessions[0]; s.messages=latestMsgs; s.loaded=true;
+      _activeSess=s; AC.messages=latestMsgs; AC.conversationId=latestConv.conversation_id;
+      _applyUnlocked(AC.name||'Student',latestMsgs);
+    } else {
+      /* Has history but no conversation_id grouping (legacy) — show flat */
+      var s={id:convId,title:(msgs.find(function(m){return m.role==='user';})||{}).content||'Conversation',messages:msgs,ts:Date.now(),loaded:true};
+      _sessions.unshift(s); _activeSess=s; AC.conversationId=convId;
+      _applyUnlocked(AC.name||'Student',msgs);
+    }
+    _renderSessList();
+  } else {
+    /* First-time user — new conversation with AI greeting */
+    AC.conversationId=convId;
+    var s={id:convId,title:'New conversation',messages:[],ts:Date.now(),loaded:true,serverConv:false};
+    _sessions.unshift(s); _activeSess=s;
+    _applyUnlocked(AC.name||'Student',[]);
+    _renderSessList();
+    _fireGreeting(convId);
+  }
+}
+var _unlockUiHandled=false;
+document.addEventListener('ac:unlocked',async function(){
+  if(_unlockUiHandled) return;
+  _unlockUiHandled=true;
+  try{ await _runUnlockUI(); }finally{ _unlockUiHandled=false; }
+});
+
+/* ── _acWhenReady ── */
+function _acWhenReady(cb){
+  var dead=Date.now()+5000;
+  (function poll(){if(typeof window.acUnlock==='function'&&window._AC){cb();return;}if(Date.now()>dead){console.warn('[AC] module not loaded');return;}setTimeout(poll,20);})();
+}
+_acWhenReady(function(){
+
+  /* patch unlock */
+  var ou=window.acUnlock;
+  window.acUnlock=async function(){
+    await ou();
+    var AC=window._AC; if(!AC||!AC.unlocked) return;
+    await _runUnlockUI();
+  };
+
+  /* patch send */
+  var os=window.acSend;
+  window.acSend=async function(){
+    var welc=document.getElementById('acp-welcome'),msgs=document.getElementById('acp-messages');
+    if(welc)welc.style.display='none'; if(msgs)msgs.style.display='flex';
+    _ncHideChips();
+    var pin=document.getElementById('nc-scroll-pin'); if(pin)pin.style.display='none';
+    /* ensure conversationId is set on _AC before send */
+    var AC=window._AC;
+    if(AC&&!AC.conversationId&&_activeSess) AC.conversationId=_activeSess.id;
+    await os();
+    var AC=window._AC;
+    if(_activeSess&&_activeSess.title==='New conversation'&&AC&&AC.messages.length){
+      var first=AC.messages.find(function(m){return m.role==='user';});
+      if(first){_activeSess.title=first.content.substring(0,38)+(first.content.length>38?'…':'');_activeSess.messages=AC.messages.slice();_renderSessList();}
+    }
+    var last=AC&&AC.messages[AC.messages.length-1];
+    if(last&&last.role==='assistant') _ncShowChips(last.content);
+  };
+
+  /* patch clear */
+  var oc=window.acClearHistory;
+  window.acClearHistory=async function(){await oc();if(window._AC&&!window._AC.messages.length)_clear();_ncHideChips();};
+
+  /* auto-restore */
+  var stored=_load();
+  if(stored&&stored.email){
+    (async function(){
+      try{
+        var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+        var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+        var res=await fetch('/api/counsellor-unlock',{method:'POST',headers:h,body:JSON.stringify({email:stored.email})});
+        if(!res.ok){_clear();return;}
+        var data=await res.json(); if(!data.unlocked){_clear();return;}
+        var AC=window._AC; if(!AC) return;
+        AC.email=stored.email; AC.name=data.name||stored.name||'Student';
+        AC.unlocked=true; AC.messages=(data.history||[]).map(function(h){return{role:h.role,content:h.content};});
+        AC.reportSummary=data.reportSummary||null;
+        AC._serverConvs=data.conversations||[];
+        /* Build sessions from server */
+        _sessions=[];
+        (data.conversations||[]).forEach(function(c){
+          _sessions.push({id:c.conversation_id,title:c.title||'Conversation',messages:[],ts:new Date(c.last_at||0).getTime()||Date.now(),loaded:false,serverConv:true,messageCount:c.message_count||0});
+        });
+        var msgs=AC.messages||[];
+        var latestConv=(data.conversations||[])[0];
+        if(latestConv){
+          var s=_sessions[0]; s.messages=msgs; s.loaded=true;
+          _activeSess=s; AC.conversationId=latestConv.conversation_id;
+          _applyUnlocked(AC.name,msgs);
+          _renderSessList();
+        } else if(msgs.length>0){
+          var convId=(function(){var a=new Uint8Array(16);crypto.getRandomValues(a);return Array.from(a,b=>b.toString(16).padStart(2,'0')).join('');})();
+          var s={id:convId,title:(msgs.find(function(m){return m.role==='user';})||{}).content||'Conversation',messages:msgs,ts:Date.now(),loaded:true};
+          _sessions.unshift(s); _activeSess=s; AC.conversationId=convId;
+          _applyUnlocked(AC.name,msgs); _renderSessList();
+        } else {
+          _applyUnlocked(AC.name,[]);
+        }
+        /* resume toast */
+        (function(){
+          if(document.getElementById('ac-resume-chip')) return;
+          var cp=document.getElementById('page-counsellor'); if(cp&&cp.classList.contains('active')) return;
+          var chip=document.createElement('div'); chip.id='ac-resume-chip';
+          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:#111018;color:rgba(255,255,255,0.88);border:1px solid rgba(139,92,246,0.3);border-radius:12px;padding:11px 14px 11px 15px;font-family:DM Sans,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(0,0,0,0.38);cursor:pointer';
+          var inner=document.createElement('div'); inner.style.cssText='display:flex;align-items:center;gap:8px;flex:1';
+          inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#a78bfa"/></svg> Resume AI Counsellor';
+          inner.addEventListener('click',function(){chip.remove();if(typeof window.goPage==='function')window.goPage('counsellor');});
+          var close=document.createElement('button'); close.innerHTML='&times;';
+          close.style.cssText='background:rgba(255,255,255,.07);border:none;color:rgba(255,255,255,.45);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;padding:0;transition:background .12s';
+          close.addEventListener('click',function(e){e.stopPropagation();chip.remove();});
+          chip.appendChild(inner);chip.appendChild(close);document.body.appendChild(chip);
+          setTimeout(function(){if(chip.parentNode)chip.remove();},9000);
+        })();
+      }catch(e){console.warn('[AC] auto-restore:',e.message);}
+    })();
+  }
+});
+
+/* ── DOM ready ── */
+document.addEventListener('DOMContentLoaded',function(){
+  _ncParticles();
+  _ncWireScroll();
+  /* trigger staggered reveal if welcome is visible */
+  var welc=document.getElementById('acp-welcome');
+  if(welc&&welc.style.display!=='none') _ncReveal();
+});
+
+})();
+</script>
+
+<script type="module" src="./js/main.js"></script>
+<script type="module" src="./js/ai-counsellor.js"></script>
+</body>
+</html>
