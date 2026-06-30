@@ -2,16 +2,49 @@
    state.js
    Application state, server save helpers, and persistence helpers.
 
-   Persistent storage moved from Supabase to a local SQLite DB on the
-   server (see js/db.js + js/server.js). The DB object below is a thin
-   wrapper that POSTs to the server's /api/save-registration endpoint;
-   the server handles the actual DB write.
+   SECURITY ARCHITECTURE — why localStorage is used here:
+   ─────────────────────────────────────────────────────────────────
+   localStorage stores three things in this app:
+
+   1. Assessment progress (nm_state_*, nm_last_session):
+      Saves the student's in-progress answers so they can resume
+      if the page is closed. This is NOT auth — it is convenience.
+      The student's canonical identity is their session_id in the DB,
+      returned by the server on registration. All writes require
+      APP_TOKEN and a valid session_id that exists in the students table.
+
+   2. Session snapshot (numind_session_v1):
+      Name, email, class — pre-fills the registration form on resume.
+      Not sensitive. If cleared, student re-registers (idempotent).
+
+   3. Counsellor token (nmind_ac_ctok in ai-counsellor.js):
+      Persists the session token across page refreshes so the student
+      doesn't have to re-enter their PIN every time.
+      SECURITY: the token is ALWAYS verified against the counsellor_sessions
+      DB table on every server request. localStorage is convenience only.
+      The token expires in 8 hours regardless of what is in localStorage.
+      An attacker with the token still cannot access anything beyond
+      what the legitimate student can access — and only for 8 hours.
+
+   The security boundary is the SERVER, not the browser.
+   The server validates every write against the DB before persisting it.
 ════════════════════════════════════════════════════════════════════ */
 
 // Always "configured" now — the server owns the DB. Kept as a function
 // rather than a constant `true` so callers depending on this name keep
 // working with no behavioural surprises.
 function _isConfigured() { return true; }
+
+// Structured client-side logger — silent in production, active in dev
+// Set localStorage.setItem('numind_debug','1') to enable in browser console
+const _log = (function() {
+  var debug = false;
+  try { debug = !!localStorage.getItem('numind_debug'); } catch(_) {}
+  var noop = function() {};
+  return debug
+    ? { log: _log.log.bind(console,'[NuMind]'), warn: _log.warn.bind(console,'[NuMind]'), error: _log.error.bind(console,'[NuMind]') }
+    : { log: noop, warn: noop, error: noop };
+})();
 
 // Read auth tokens from <meta> tags injected server-side.
 // APP_TOKEN is never exposed as window._APP_TOKEN — it's read from
@@ -40,14 +73,14 @@ const DB = {
       });
       if (!res.ok) {
         const msg = await res.text();
-        console.error('[DB] saveRegistration HTTP ' + res.status + ':', msg);
+        _log.error('[DB] saveRegistration HTTP ' + res.status + ':', msg);
         return { data: null, error: { message: msg } };
       }
       const data = await res.json();
-      console.log('[DB] Registration saved:', sessionId);
+      _log.log('[DB] Registration saved. sessionId:', data.sessionId || sessionId);
       return { data, error: null };
     } catch (err) {
-      console.error('[DB] saveRegistration fetch failed:', err.message);
+      _log.error('[DB] saveRegistration fetch failed:', err.message);
       return { data: null, error: { message: err.message } };
     }
   },
@@ -56,17 +89,17 @@ const DB = {
   // immediately so data is never lost even if report generation fails.
   // Fire-and-forget: a save failure must never block the assessment flow.
   saveSection(sessionId, moduleKey, answers, scores, duration) {
-    if (!sessionId) { console.warn('[DB] saveSection: no sessionId'); return; }
+    if (!sessionId) { _log.warn('[DB] saveSection: no sessionId'); return; }
     fetch('/api/save-section', {
       method:  'POST',
       headers: _getRequestHeaders(),
       body: JSON.stringify({ sessionId, moduleKey, answers, scores, duration }),
     })
       .then(r => {
-        if (!r.ok) r.text().then(t => console.warn('[DB] saveSection HTTP ' + r.status + ':', t));
-        else console.log('[DB] Section saved:', moduleKey, sessionId);
+        if (!r.ok) r.text().then(t => _log.warn('[DB] saveSection HTTP ' + r.status + ':', t));
+        else _log.log('[DB] Section saved:', moduleKey, sessionId);
       })
-      .catch(e => console.warn('[DB] saveSection fetch failed:', e.message));
+      .catch(e => _log.warn('[DB] saveSection fetch failed:', e.message));
   },
 
   // Kept as a stub for callers that still invoke it. Completion is now
@@ -122,7 +155,7 @@ function _saveSession(activePage) {
     };
     localStorage.setItem(_SESSION_KEY, JSON.stringify(snap));
   } catch (e) {
-    console.warn('[Session] Could not save snapshot:', e.message);
+    _log.warn('[Session] Could not save snapshot:', e.message);
   }
 }
 
@@ -189,10 +222,10 @@ function _restoreSession() {
       });
       S.daab.currentSub = snap.daab.currentSub || 0;
     }
-    console.log('[Session] Restored from snapshot (page:', snap.activePage, ')');
+    _log.log('[Session] Restored from snapshot (page:', snap.activePage, ')');
     return snap.activePage || null;
   } catch (e) {
-    console.warn('[Session] Could not restore snapshot:', e.message);
+    _log.warn('[Session] Could not restore snapshot:', e.message);
     _clearSession();
     return null;
   }
@@ -208,7 +241,7 @@ function saveState() {
     localStorage.setItem('nm_state_' + S.sessionId, JSON.stringify(snapshot));
     localStorage.setItem('nm_last_session', S.sessionId);
   } catch (e) {
-    console.warn('[NM] saveState failed:', e);
+    _log.warn('[NM] saveState failed:', e);
   }
 }
 
@@ -224,7 +257,7 @@ function loadState() {
     S.timerInt = null; // always reset live timer handle
     return true;
   } catch (e) {
-    console.warn('[NM] loadState failed (corrupt data?):', e);
+    _log.warn('[NM] loadState failed (corrupt data?):', e);
     return false;
   }
 }
@@ -235,7 +268,7 @@ function clearState() {
     if (sid) localStorage.removeItem('nm_state_' + sid);
     localStorage.removeItem('nm_last_session');
   } catch (e) {
-    console.warn('[NM] clearState failed:', e);
+    _log.warn('[NM] clearState failed:', e);
   }
 }
 
@@ -276,10 +309,10 @@ function clearState() {
       }
     }
     toDelete.forEach(k => { try { localStorage.removeItem(k); } catch (_) {} });
-    if (toDelete.length) console.log(`[NM] Swept ${toDelete.length} stale nm_state_* key(s)`);
+    if (toDelete.length) _log.log(`[NM] Swept ${toDelete.length} stale nm_state_* key(s)`);
   } catch (e) {
     // localStorage might be unavailable (private mode, etc.) — silently skip.
-    console.warn('[NM] sweep failed:', e && e.message);
+    _log.warn('[NM] sweep failed:', e && e.message);
   }
 })();
 

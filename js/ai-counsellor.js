@@ -9,9 +9,41 @@
      sections even before report generation
 ════════════════════════════════════════════════════════════════════ */
 
-/* ── Auth token helper ──────────────────────────────────────────── */
-// Injected by server into HTML as window._APP_TOKEN before </head>
+/* ── Handle 401 from any counsellor endpoint ─────────────────────
+   When the server returns 401, the counsellor token has expired (8h TTL)
+   or the session was invalidated. Clear the stale token from memory and
+   localStorage, then reset to the unlock screen so the student can
+   re-authenticate silently — they never see a raw "Unauthorized" error.
+──────────────────────────────────────────────────────────────────── */
+function _acHandle401() {
+  // Clear stale token
+  _AC.counsellorToken = null;
+  _AC.unlocked        = false;
+  try { localStorage.removeItem('nmind_ac_ctok'); } catch(_) {}
+  // Show the lock screen again with a friendly message
+  const lockCard   = document.getElementById('acp-lock-card');
+  const lockLoader = document.getElementById('acp-lock-loading');
+  const chatArea   = document.getElementById('acp-chat-area');
+  const errEl      = document.getElementById('acp-email-err');
+  if (lockLoader) lockLoader.style.display = 'none';
+  if (lockCard)   lockCard.style.display   = '';
+  if (chatArea)   chatArea.style.display   = 'none';
+  if (errEl) {
+    errEl.textContent   = 'Your session has expired. Please enter your email to continue.';
+    errEl.style.display = 'block';
+  }
+  // Re-fill email if we know it
+  const emailEl = document.getElementById('acp-email-input');
+  if (emailEl && _AC.email) { emailEl.value = _AC.email; emailEl.disabled = false; }
+}
+// Read APP_TOKEN from <meta name="app-token"> injected by server.
+// Falls back to window._APP_TOKEN for backwards compatibility.
+// The meta tag approach keeps the token out of JS global scope.
 function _acToken() {
+  if (typeof document !== 'undefined') {
+    var meta = document.querySelector('meta[name="app-token"]');
+    if (meta) return meta.getAttribute('content') || '';
+  }
   return (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
 }
 
@@ -46,7 +78,7 @@ function _acEl(id) { return document.getElementById(id); }
 
 /* ── Email unlock ───────────────────────────────────────────────── */
 /* ── Auth state for multi-step lock flow ───────────────────────── */
-const _LOCK = { email: null, step: null, otpToken: null, purpose: 'register' };
+const _LOCK = { email: null, step: null, otpToken: null, purpose: 'register', _isReset: false };
 
 /* ── Step manager (DOM-based) ───────────────────────────────────── */
 function _makeLockInput(id, type, placeholder, inputmode, onEnter) {
@@ -73,6 +105,8 @@ function _makeLockErr(id) {
 
 function _lockStep(step, opts) {
   _LOCK.step = step;
+  if (opts && opts.purpose) _LOCK.purpose = opts.purpose;
+  if (opts && typeof opts.isReset !== 'undefined') _LOCK._isReset = !!opts.isReset;
   var card = _acEl('acp-lock-card');
   if (!card) return;
   ['acp-step-otp','acp-step-pin','acp-step-set-pin'].forEach(function(id){
@@ -81,11 +115,16 @@ function _lockStep(step, opts) {
   var container = card.querySelector('.nc-lock-form') || card;
   var wrap = document.createElement('div');
 
-  // Email attribution line with "Change" link
+  // Email attribution line
   if (opts && opts.email) {
     var p = document.createElement('p');
     p.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.4);margin:0 0 14px';
-    p.innerHTML = 'Signing in as <strong style="color:rgba(255,255,255,0.7)">' + opts.email + '</strong> \xb7 ';
+    var strong = document.createElement('strong');
+    strong.style.color = 'rgba(255,255,255,0.7)';
+    strong.textContent = opts.email;
+    p.textContent = 'Signing in as ';
+    p.appendChild(strong);
+    p.appendChild(document.createTextNode(' \xb7 '));
     var a = document.createElement('a'); a.href = 'javascript:void(0)';
     a.textContent = 'Change'; a.style.color = '#a78bfa';
     a.addEventListener('click', _lockReset);
@@ -93,25 +132,36 @@ function _lockStep(step, opts) {
     wrap.appendChild(p);
   }
 
-  if (step === 'otp-sent') {
+  if (step === 'otp') {
     wrap.id = 'acp-step-otp';
-    var desc = document.createElement('p');
-    desc.textContent = (opts && opts.purpose === 'reset')
-      ? 'A PIN reset code was sent to your email. Enter it below.'
-      : 'A 6-digit code was sent to your email. Enter it to create your PIN.';
-    desc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px;line-height:1.5';
-    wrap.appendChild(desc);
+    var odesc = document.createElement('p');
+    odesc.textContent = 'Enter the 6-digit code we emailed you.';
+    odesc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px';
+    wrap.appendChild(odesc);
     wrap.appendChild(_makeLockInput('acp-otp-input', 'text', '6-digit code', 'numeric', _acSubmitOtp));
     wrap.appendChild(_makeLockErr('acp-otp-err'));
     wrap.appendChild(_makeLockBtn('acp-otp-btn', 'Verify Code', 'linear-gradient(135deg,#6d28d9,#7c3aed)', _acSubmitOtp));
-    var p2 = document.createElement('p');
-    p2.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
-    p2.appendChild(document.createTextNode('Did not receive it? Check spam or '));
+    var rp = document.createElement('p');
+    rp.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0 0 8px';
+    rp.appendChild(document.createTextNode("Didn't get it? "));
     var resend = document.createElement('a'); resend.href = 'javascript:void(0)';
-    resend.textContent = 'resend'; resend.style.color = '#a78bfa';
-    resend.addEventListener('click', function() { _acResendOtp(); });
-    p2.appendChild(resend);
-    wrap.appendChild(p2);
+    resend.textContent = 'Resend'; resend.style.color = '#a78bfa';
+    resend.addEventListener('click', _acResendOtp);
+    rp.appendChild(resend);
+    wrap.appendChild(rp);
+    // SMTP-free escape: email delivery can fail silently (the sender is
+    // fire-and-forget). Never trap the student on this screen — let them
+    // verify with their registration details instead and still reach Aria.
+    var esc = document.createElement('p');
+    esc.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
+    esc.appendChild(document.createTextNode('Still no code? '));
+    var altLink = document.createElement('a'); altLink.href = 'javascript:void(0)';
+    altLink.textContent = 'Verify another way'; altLink.style.color = '#a78bfa';
+    altLink.addEventListener('click', function(){
+      if (typeof _acShowVerificationForm === 'function') _acShowVerificationForm(_LOCK.email);
+    });
+    esc.appendChild(altLink);
+    wrap.appendChild(esc);
     container.appendChild(wrap);
     setTimeout(function(){ var i = document.getElementById('acp-otp-input'); if (i) i.focus(); }, 100);
   }
@@ -129,7 +179,7 @@ function _lockStep(step, opts) {
     p2.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
     p2.appendChild(document.createTextNode('Forgot PIN? '));
     var forgot = document.createElement('a'); forgot.href = 'javascript:void(0)';
-    forgot.textContent = 'Reset via email'; forgot.style.color = '#a78bfa';
+    forgot.textContent = 'Reset'; forgot.style.color = '#a78bfa';
     forgot.addEventListener('click', _acForgotPin);
     p2.appendChild(forgot);
     wrap.appendChild(p2);
@@ -139,9 +189,8 @@ function _lockStep(step, opts) {
 
   if (step === 'set-pin') {
     wrap.id = 'acp-step-set-pin';
-    var isReset = opts && opts.isReset;
     var desc = document.createElement('p');
-    desc.textContent = isReset ? 'Set your new PIN (4-6 digits).' : 'Almost there! Create a 4-6 digit PIN. You will use it to log in from any device.';
+    desc.textContent = 'Create a 4-6 digit PIN. You will use it to log in from any device.';
     desc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px;line-height:1.5';
     wrap.appendChild(desc);
     wrap.appendChild(_makeLockInput('acp-newpin-input', 'password', 'Create PIN', 'numeric', function(){
@@ -149,7 +198,7 @@ function _lockStep(step, opts) {
     }));
     wrap.appendChild(_makeLockInput('acp-newpin-confirm', 'password', 'Confirm PIN', 'numeric', _acSetPin));
     wrap.appendChild(_makeLockErr('acp-setpin-err'));
-    wrap.appendChild(_makeLockBtn('acp-setpin-btn', isReset ? 'Save New PIN' : 'Set PIN and Enter', 'linear-gradient(135deg,#059669,#10b981)', _acSetPin));
+    wrap.appendChild(_makeLockBtn('acp-setpin-btn', 'Set PIN & Enter', 'linear-gradient(135deg,#059669,#10b981)', _acSetPin));
     container.appendChild(wrap);
     setTimeout(function(){ var i = document.getElementById('acp-newpin-input'); if (i) i.focus(); }, 100);
   }
@@ -165,7 +214,7 @@ function _lockReset() {
   if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Continue \u2192'; }
   var errEl = _acEl('acp-email-err');
   if (errEl) errEl.style.display = 'none';
-  _LOCK.email = null; _LOCK.step = null; _LOCK.otpToken = null; _LOCK.purpose = 'register';
+  _LOCK.email = null; _LOCK.step = null; _LOCK.otpToken = null; _LOCK.purpose = 'register'; _LOCK._isReset = false;
 }
 
 async function acUnlock() {
@@ -180,45 +229,29 @@ async function acUnlock() {
   }
   if (errEl) errEl.style.display = 'none';
   _LOCK.email = email;
-  _LOCK.purpose = 'register';
 
   var btn = _acEl('acp-unlock-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Checking\u2026'; }
 
-  // Same-device fast path: sessionId from localStorage
-  var sessionId = null;
   try {
-    var raw = localStorage.getItem('numind_session_v1');
-    if (raw) { var snap = JSON.parse(raw); sessionId = snap.sessionId || null; }
-  } catch (_) {}
-
-  try {
-    var _ctrl = new AbortController();
-    var _timeoutId = setTimeout(function(){ _ctrl.abort(); }, 15000);
     var resp = await fetch('/api/counsellor-unlock', {
       method: 'POST', headers: _acHeaders(),
-      body: JSON.stringify({ email: email, sessionId: sessionId }),
-      signal: _ctrl.signal,
+      body: JSON.stringify({ email: email }),
     });
-    clearTimeout(_timeoutId);
     var data = await resp.json();
 
-    if (data.unlocked) {
-      // Instant unlock (same device) — apply and dispatch
-      _acApplySession(data);
-      return;
-    }
+    if (data.unlocked) { _acApplySession(data); return; }
 
     if (btn) { btn.style.display = 'none'; }
     emailEl.disabled = true;
 
     if (data.step === 'otp-sent') {
-      _lockStep('otp-sent', { email: email, purpose: 'register' });
+      _LOCK.purpose = data.purpose || 'register';
+      _lockStep('otp', { email: email, purpose: _LOCK.purpose });
+    } else if (data.step === 'set-pin') {
+      _lockStep('set-pin', { email: email });
     } else if (data.step === 'enter-pin') {
       _lockStep('enter-pin', { email: email });
-    } else if (data.step === 'verify-name') {
-      // SMTP not configured — fall back to name+class identity verification
-      _acShowVerificationForm(email);
     } else {
       if (errEl) { errEl.textContent = data.error || 'Something went wrong.'; errEl.style.display = 'block'; }
       emailEl.disabled = false;
@@ -226,23 +259,21 @@ async function acUnlock() {
     }
   } catch (e) {
     if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Continue \u2192'; }
-    var _msg = (e && e.name === 'AbortError') ? 'Request timed out. Please try again.' : 'Connection error. Please try again.';
-    if (errEl) { errEl.textContent = _msg; errEl.style.display = 'block'; }
+    if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
   }
 }
 
 async function _acResendOtp() {
   // Re-send OTP for the current purpose (register or reset)
   if (!_LOCK.email) return;
+  var endpoint = (_LOCK.purpose === 'reset') ? '/api/counsellor-request-otp' : '/api/counsellor-unlock';
   try {
-    var endpoint = _LOCK.purpose === 'reset' ? '/api/counsellor-reset-otp' : '/api/counsellor-unlock';
-    var body     = _LOCK.purpose === 'reset'
-      ? JSON.stringify({ email: _LOCK.email })
-      : JSON.stringify({ email: _LOCK.email, resend: true });
-    await fetch(endpoint, { method: 'POST', headers: _acHeaders(), body: body });
+    await fetch(endpoint, {
+      method: 'POST', headers: _acHeaders(),
+      body: JSON.stringify({ email: _LOCK.email }),
+    });
     var errEl = document.getElementById('acp-otp-err');
-    if (errEl) { errEl.textContent = 'Code resent! Check your email.'; errEl.style.color = '#34d399'; errEl.style.display = 'block'; }
-    setTimeout(function(){ if (errEl) { errEl.style.display = 'none'; errEl.style.color = '#f87171'; } }, 3000);
+    if (errEl) { errEl.style.color = '#34d399'; errEl.textContent = 'A new code has been sent.'; errEl.style.display = 'block'; }
   } catch (_) {}
 }
 
@@ -321,33 +352,32 @@ async function _acSetPin() {
     if (errEl) { errEl.textContent = 'PINs do not match. Please try again.'; errEl.style.display = 'block'; }
     return;
   }
-  if (!_LOCK.otpToken) {
-    if (errEl) { errEl.textContent = 'Session expired. Please start again.'; errEl.style.display = 'block'; }
-    _lockReset(); return;
-  }
+  if (!_LOCK.email) { _lockReset(); return; }
   if (btn) { btn.disabled = true; btn.textContent = 'Saving\u2026'; }
   if (errEl) errEl.style.display = 'none';
   try {
-    var headers = Object.assign({}, _acHeaders(), { 'X-Counsellor-Otp-Token': _LOCK.otpToken });
-    var isReset = _LOCK.purpose === 'reset';
-    var resp = await fetch('/api/counsellor-set-pin', {
-      method: 'POST', headers: headers,
-      body: JSON.stringify({ email: _LOCK.email, pin: pin, changeOnly: isReset }),
+    // Use reset-pin (overwrites existing) when coming from "forgot PIN" flow
+    // Use set-pin (blocks if PIN exists) for first-time setup
+    var endpoint = (_LOCK.step === 'set-pin' && _LOCK._isReset) ? '/api/counsellor-reset-pin' : '/api/counsellor-set-pin';
+    var _h = _acHeaders();
+    // Attach the single-use OTP stage token proving email ownership.
+    if (_LOCK.otpToken) _h['X-Counsellor-Otp-Token'] = _LOCK.otpToken;
+    var resp = await fetch(endpoint, {
+      method: 'POST', headers: _h,
+      body: JSON.stringify({ email: _LOCK.email, pin: pin }),
     });
     var data = await resp.json();
-    _LOCK.otpToken = null;
     if (data.error) {
       if (errEl) { errEl.textContent = data.error; errEl.style.display = 'block'; }
-      if (btn) { btn.disabled = false; btn.textContent = isReset ? 'Save New PIN' : 'Set PIN and Enter'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Set PIN & Enter'; }
+      if (data.step === 'enter-pin') _lockStep('enter-pin', { email: _LOCK.email });
+      else if (data.step === 'otp-sent') _lockStep('otp', { email: _LOCK.email, purpose: _LOCK.purpose });
       return;
     }
     if (data.unlocked) {
       _acApplySession(data);
     } else {
-      // PIN reset complete — go back to PIN entry screen
       _lockStep('enter-pin', { email: _LOCK.email });
-      var p = document.getElementById('acp-pin-err');
-      if (p) { p.textContent = 'PIN updated! Enter your new PIN to continue.'; p.style.color = '#34d399'; p.style.display = 'block'; }
     }
   } catch (_) {
     if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
@@ -356,26 +386,23 @@ async function _acSetPin() {
 }
 
 async function _acForgotPin() {
-  // Send a reset OTP via unauthenticated endpoint
   if (!_LOCK.email) return;
-  var forgotLink = document.querySelector('#acp-step-pin a');
-  if (forgotLink) { forgotLink.textContent = 'Sending\u2026'; }
+  _LOCK._isReset = true;
+  _LOCK.purpose  = 'reset';
+  var errEl = document.getElementById('acp-pin-err');
   try {
-    var resp = await fetch('/api/counsellor-reset-otp', {
+    var resp = await fetch('/api/counsellor-request-otp', {
       method: 'POST', headers: _acHeaders(),
       body: JSON.stringify({ email: _LOCK.email }),
     });
     var data = await resp.json();
-    if (data.ok) {
-      _LOCK.purpose = 'reset';
-      _lockStep('otp-sent', { email: _LOCK.email, purpose: 'reset' });
-    } else {
-      // Show error inline
-      var errEl = document.getElementById('acp-pin-err');
-      if (errEl) { errEl.textContent = data.error || 'Could not send reset code.'; errEl.style.display = 'block'; }
+    if (data.step === 'otp-sent' || data.ok) {
+      _lockStep('otp', { email: _LOCK.email, purpose: 'reset', isReset: true });
+    } else if (errEl) {
+      errEl.textContent = data.error || 'Could not start reset. Try again.';
+      errEl.style.display = 'block';
     }
   } catch (_) {
-    var errEl = document.getElementById('acp-pin-err');
     if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
   }
 }
@@ -399,24 +426,15 @@ function _acApplySession(data) {
 
 /* ── Change PIN from within the chat ────────────────────────────── */
 async function acChangePinRequest() {
-  if (!_AC.unlocked) return;
-  try {
-    var resp = await fetch('/api/counsellor-request-otp', {
-      method: 'POST', headers: _acHeaders(),
-    });
-    var data = await resp.json();
-    if (!data.ok) { alert(data.error || 'Could not send code. Please try again.'); return; }
-    _LOCK.email = _AC.email;
-    _LOCK.purpose = 'reset';
-    _LOCK.otpToken = null;
-    var chat = document.getElementById('acp-chat');
-    var lock = document.getElementById('acp-lock');
-    if (chat) chat.style.display = 'none';
-    if (lock) lock.style.display = '';
-    var emailEl = _acEl('acp-email-input');
-    if (emailEl) { emailEl.value = _AC.email; emailEl.disabled = true; }
-    _lockStep('otp-sent', { email: _AC.email, purpose: 'reset' });
-  } catch (_) { alert('Connection error. Please try again.'); }
+  if (!_AC.unlocked || !_AC.email) return;
+  // Show set-pin form directly — no OTP needed.
+  // Server confirms report exists before saving the new PIN.
+  _LOCK.email = _AC.email; _LOCK._isReset = true;
+  var chat = document.getElementById('acp-chat');
+  var lock = document.getElementById('acp-lock');
+  if (chat) chat.style.display = 'none';
+  if (lock) lock.style.display = '';
+  _lockStep('set-pin', { email: _AC.email });
 }
 window.acChangePinRequest = acChangePinRequest;
 
@@ -458,6 +476,11 @@ async function acSend() {
     });
 
     _acRemoveTyping(typingId);
+
+    if (res.status === 401) {
+      _acHandle401();
+      return;
+    }
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({ error: 'Server error' }));

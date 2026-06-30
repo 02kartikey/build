@@ -209,8 +209,46 @@ async function doRegister() {
       S.sessionId = 'NMSUITE-'+Date.now()+'-'+Math.random().toString(36).substr(2,6).toUpperCase();
     }
     showDbStatus('saving','Saving your details…');
-    const { error } = await DB.saveRegistration(S.student, S.sessionId);
+    const { data, error } = await DB.saveRegistration(S.student, S.sessionId);
+
+    // ── Key: adopt the session_id the server returns ──────────────────
+    // If this email was pre-created by an admin, the server returns the
+    // admin-created session_id (not the one we just generated).
+    // We must switch to that id so all subsequent section saves and the
+    // final report are stored under the same row the admin created.
+    if (data && data.sessionId && data.sessionId !== S.sessionId) {
+      S.sessionId = data.sessionId;
+    }
+
     showDbStatus(error?'error':'saved', error?'Could not save — continuing anyway ✓':'✓ Details saved!');
+
+    // ── Test-already-taken gate ───────────────────────────────────────
+    // testTaken === true means a report already exists in the backend for
+    // this email (the only definition of "taken"). Don't silently let them
+    // redo it and waste a slot — ask first.
+    //
+    // IMPORTANT: the results page renders from LOCAL session state only and
+    // calls _clearSession() on entry. A returning user has no local scores
+    // (their data lives in the DB), so sending them to 'results' would show a
+    // blank/broken report. Their existing report is reachable through the AI
+    // counsellor, which loads from the DB. So the choice is: open the
+    // counsellor (view existing) OR retake (regenerate into the same row).
+    if (data && data.testTaken) {
+      const retake = window.confirm(
+        'Our records show you have already completed this assessment.\n\n' +
+        'Click OK to RETAKE the test (this will update your existing report), ' +
+        'or Cancel to go to your AI Counsellor to discuss your existing results.'
+      );
+      _saveSession('register');
+      if (retake) {
+        startNMAP(); // flows into the same session_id row, regenerates report
+      } else if (typeof goPage === 'function') {
+        goPage('counsellor'); // existing report lives here, loaded from DB
+      } else {
+        startNMAP();
+      }
+      return;
+    }
 
     _saveSession('register');
     startNMAP();
