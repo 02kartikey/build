@@ -47,13 +47,21 @@ function init(db, sendEmailFn, dbWriteFn) {
 ══════════════════════════════════════════════════════════════════ */
 function _readBody(req, maxBytes = 64 * 1024) {
   return new Promise((resolve, reject) => {
-    const chunks = []; let total = 0;
+    const chunks = []; let total = 0; let tooLarge = false;
     req.on('data', c => {
       total += c.length;
-      if (total > maxBytes) { req.destroy(); return reject(new Error('body_too_large')); }
+      if (total > maxBytes) {
+        // Drain remaining data without storing it — lets the connection stay
+        // open so the server can still send a proper 413 response.
+        // req.destroy() here causes ERR_CONNECTION_RESET client-side because
+        // the socket dies before the response headers are written.
+        if (!tooLarge) { tooLarge = true; reject(new Error('body_too_large')); }
+        return; // keep draining but don't push to chunks
+      }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooLarge) return; // already rejected
       try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
       catch { reject(new Error('invalid_json')); }
     });
@@ -158,9 +166,11 @@ async function handle(req, res) {
     _json(res, 404, { error: 'Not found' });
 
   } catch (err) {
-    console.error('[Dashboard API]', err.message, err.stack);
-    if (err.message === 'body_too_large') return _json(res, 413, { error: 'Payload too large' });
-    if (err.message === 'invalid_json')   return _json(res, 400, { error: 'Invalid JSON' });
+    // Known client errors — respond correctly, do NOT log as server error
+    if (err.message === 'body_too_large') return _json(res, 413, { error: 'Payload too large. Maximum upload size exceeded.' });
+    if (err.message === 'invalid_json')   return _json(res, 400, { error: 'Invalid JSON in request body' });
+    // Unexpected server errors only
+    process.stderr.write('[ERROR] [Dashboard API] ' + err.message + '\n' + (err.stack || '') + '\n');
     _json(res, 500, { error: 'Server error' });
   }
 }
@@ -195,7 +205,8 @@ async function _forgotPassword(req, res) {
   const { email } = body || {};
   if (!email) return _json(res, 400, { error: 'email required' });
   const u = _ddb.getUserByEmail(email);
-  if (!u) return _json(res, 200, { ok: true }); // anti-enumeration
+  // Always return 200 — anti-enumeration (don't reveal whether email exists)
+  if (!u) return _json(res, 200, { ok: true });
   const token = _ddb.createPasswordResetToken(u.id);
   if (_sendEmail) {
     try {
@@ -215,16 +226,20 @@ async function _forgotPassword(req, res) {
           '— NuMind MAPS System',
         ].join('\n'),
       });
-    } catch (e) { console.error('[Dashboard] forgot-password email error:', e.message); }
+    } catch (e) { process.stderr.write('[ERROR] [Dashboard] forgot-password email error: ' + e.message + '\n'); }
+    // When SMTP is configured, token travels via email only — never in the response.
+    return _json(res, 200, { ok: true });
   }
-  _json(res, 200, { ok: true, token }); // token returned so admin can relay if email not set
+  // SMTP not configured: return token in response so admin can relay it manually.
+  // This path should only occur in development / internal admin use.
+  return _json(res, 200, { ok: true, token });
 }
 
 async function _resetPassword(req, res) {
   const body = await _readBody(req, 4 * 1024);
   const { token, password } = body || {};
   if (!token || !password) return _json(res, 400, { error: 'token and password required' });
-  if (String(password).length < 6) return _json(res, 400, { error: 'Password must be at least 6 characters' });
+  if (String(password).length < 8) return _json(res, 400, { error: 'Password must be at least 8 characters' });
   const ok = _ddb.consumePasswordResetToken(token, password);
   if (!ok) return _json(res, 400, { error: 'Token invalid or expired' });
   _json(res, 200, { ok: true });
@@ -234,9 +249,11 @@ async function _changePassword(req, res) {
   const user = _requireRole(req, res);
   if (!user) return;
   const body = await _readBody(req, 4 * 1024);
-  const { current_password, new_password } = body || {};
+  // Accept both 'current_password' and 'old_password' for compatibility with all dashboard UIs
+  const current_password = (body || {}).current_password || (body || {}).old_password;
+  const new_password     = (body || {}).new_password;
   if (!current_password || !new_password) return _json(res, 400, { error: 'current_password and new_password required' });
-  if (String(new_password).length < 6) return _json(res, 400, { error: 'Password must be at least 6 characters' });
+  if (String(new_password).length < 8) return _json(res, 400, { error: 'Password must be at least 8 characters' });
   const check = _ddb.login(user.email, current_password);
   if (!check) return _json(res, 401, { error: 'Current password is incorrect' });
   _ddb.updateUser({ id: user.id, password: new_password });
@@ -253,7 +270,7 @@ function _aggregateScores(req, res) {
   try {
     const agg = _ddb.getAggregateScores(_userSchools(user));
     _json(res, 200, { aggregates: agg });
-  } catch (e) { console.error('[aggregate-scores]', e.message); _json(res, 500, { error: 'Server error' }); }
+  } catch (e) { process.stderr.write('[ERROR] [aggregate-scores] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
 function _wellbeingAlerts(req, res) {
@@ -262,7 +279,7 @@ function _wellbeingAlerts(req, res) {
   try {
     const alerts = _ddb.getWellbeingAlerts(_userSchools(user));
     _json(res, 200, { alerts });
-  } catch (e) { console.error('[wellbeing-alerts]', e.message); _json(res, 500, { error: 'Server error' }); }
+  } catch (e) { process.stderr.write('[ERROR] [wellbeing-alerts] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
 function _careerDistribution(req, res) {
@@ -271,7 +288,7 @@ function _careerDistribution(req, res) {
   try {
     const distribution = _ddb.getCareerDistribution(_userSchools(user));
     _json(res, 200, { distribution });
-  } catch (e) { console.error('[career-distribution]', e.message); _json(res, 500, { error: 'Server error' }); }
+  } catch (e) { process.stderr.write('[ERROR] [career-distribution] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
 function _moduleTiming(req, res) {
@@ -280,7 +297,7 @@ function _moduleTiming(req, res) {
   try {
     const timing = _ddb.getModuleTiming(_userSchools(user));
     _json(res, 200, { timing });
-  } catch (e) { console.error('[module-timing]', e.message); _json(res, 500, { error: 'Server error' }); }
+  } catch (e) { process.stderr.write('[ERROR] [module-timing] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -340,6 +357,7 @@ function _trend(req, res) {
   if (!user) return;
   const qs   = new URLSearchParams(req.url.split('?')[1] || '');
   const days = Math.min(parseInt(qs.get('days') || '14', 10), 90);
+  // getCompletionTrend is now cache-backed — instant on hit, live on miss
   const trend = _ddb.getCompletionTrend(_userSchools(user, qs.get('school') || ''), days);
   _json(res, 200, { trend });
 }
@@ -408,7 +426,7 @@ async function _sendReminder(req, res) {
         to:      st.email,
         subject: emailSubject,
         text: [
-          `Dear ${st.full_name || st.firstName || 'Student'},`,
+          `Dear ${st.full_name || st.first_name || st.firstName || 'Student'},`,
           '',
           message,
           '',
@@ -420,7 +438,7 @@ async function _sendReminder(req, res) {
       _ddb.logReminder({ studentEmail: st.email, sentBy: user.id, subject: emailSubject, message });
       sent++;
     } catch (e) {
-      console.error('[Dashboard] reminder error for', st.email, e.message);
+      process.stderr.write('[ERROR] [Dashboard] reminder error for ' + st.email + ': ' + e.message + '\n');
       failed++;
     }
   }
@@ -585,9 +603,12 @@ async function _createStudent(req, res) {
   const body = await _readBody(req, 16 * 1024);
   const { first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city } = body || {};
   if (!first_name || !school) return _json(res, 400, { error: 'first_name and school required' });
+  // Always upsert — if the email already exists, update that row in place.
+  // If it doesn't, create a new row. No errors, no flags, no 409.
+  // The student's session_id is returned so the frontend can reference it.
   const sid = _ddb.upsertStudent({ first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city });
   _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_student', target: sid,
-                  detail: `${first_name} ${last_name||''} @ ${school}` });
+                  detail: `${first_name} ${last_name || ''} @ ${school}` });
   _json(res, 201, { ok: true, session_id: sid });
 }
 
@@ -625,21 +646,25 @@ async function _importStudents(req, res) {
   const body = await _readBody(req, 2 * 1024 * 1024);
   const rows = (body && Array.isArray(body.rows)) ? body.rows : [];
   if (!rows.length) return _json(res, 400, { error: 'rows array required' });
+
+  // Route through _dbWrite so the entire import runs as a single DB write
+  // slot — non-blocking to the event loop, and atomic (all-or-nothing).
+  // Without this, 2000 synchronous upserts on the main thread block every
+  // concurrent request for hundreds of milliseconds.
   let imported = 0, skipped = 0;
-  for (const r of rows.slice(0, 2000)) {
-    if (!r.first_name && !r.full_name) { skipped++; continue; }
-    try {
-      const fn = r.first_name || (r.full_name || '').split(' ')[0];
-      const ln = r.last_name  || (r.full_name || '').split(' ').slice(1).join(' ');
-      _ddb.upsertStudent({
-        first_name: fn, last_name: ln,
-        email: r.email||'', class: r.class||r.Class||'', section: r.section||r.Section||'',
-        school: r.school||r.School||'', age: r.age||'', gender: r.gender||'',
-        school_state: r.school_state||'', school_city: r.school_city||'',
-      });
-      imported++;
-    } catch (_) { skipped++; }
+  try {
+    await _dbWrite(() => {
+      // Single SQLite transaction: all 2000 rows or nothing. Much faster than
+      // 2000 individual auto-transactions, and safe from partial-import corruption.
+      const doImport = _ddb.runImportTransaction(rows.slice(0, 2000));
+      imported = doImport.imported;
+      skipped  = doImport.skipped;
+    });
+  } catch (e) {
+    process.stderr.write('[ERROR] [import_students] ' + e.message + '\n');
+    return _json(res, 500, { error: 'Import failed: ' + e.message });
   }
+
   _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'import_students',
                   detail: `imported=${imported} skipped=${skipped}` });
   _json(res, 200, { ok: true, imported, skipped });

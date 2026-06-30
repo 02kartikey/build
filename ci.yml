@@ -1,0 +1,113 @@
+## .github/workflows/ci.yml
+## Place this file at: .github/workflows/ci.yml in your project root
+##
+## What this does:
+##   • Runs on every push to main and every pull request
+##   • Checks Node.js version compatibility
+##   • Validates syntax of every server-side JS file
+##   • Runs the full smoke test against a live server spun up in CI
+##   • Blocks merge/deploy if any test fails
+##
+## Setup:
+##   1. Create .github/workflows/ folder in your project root
+##   2. Save this file as ci.yml inside it
+##   3. Go to GitHub → your repo → Settings → Secrets → Actions
+##   4. Add these secrets:
+##        APP_TOKEN   → your APP_TOKEN value (same as .env)
+##        OPENAI_API_KEY → your OpenAI key (needed for server to start)
+
+name: NuMind MAPS CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    name: Syntax + Smoke Test
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      ## ── 1. Checkout ──────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      ## ── 2. Node.js setup ─────────────────────────────────────────
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      ## ── 3. Install dependencies ──────────────────────────────────
+      - name: Install dependencies
+        run: npm install && npm rebuild better-sqlite3
+
+      ## ── 4. Syntax check — catches typos before server starts ─────
+      - name: Syntax check (all server JS files)
+        run: node scripts/check-syntax.js
+
+      ## ── 5. Start server in background ────────────────────────────
+      - name: Start server
+        env:
+          APP_TOKEN:      ${{ secrets.APP_TOKEN }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          PORT:           3000
+          LOG_LEVEL:      error
+          NODE_ENV:       test
+        run: |
+          node server.js &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+          # Wait for server to be ready (up to 15 seconds)
+          for i in $(seq 1 15); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "✅ Server ready after ${i}s"
+              break
+            fi
+            echo "Waiting for server... (${i}s)"
+            sleep 1
+          done
+          # Final check — fail fast if server never came up
+          curl -sf http://localhost:3000/health || (echo "❌ Server failed to start" && exit 1)
+
+      ## ── 6. Seed the test database ────────────────────────────────
+      - name: Seed database
+        run: node test/seed-db.js --students 50
+
+      ## ── 7. Run smoke test ────────────────────────────────────────
+      - name: Run smoke test
+        env:
+          APP_TOKEN: ${{ secrets.APP_TOKEN }}
+          BASE_URL:  http://localhost:3000
+        run: node test/smoke-test.js
+
+      ## ── 8. Check dashboard data ──────────────────────────────────
+      - name: Check dashboard data integrity
+        env:
+          BASE_URL: http://localhost:3000
+        run: node test/check-dashboard.js
+
+      ## ── 9. Stop server ───────────────────────────────────────────
+      - name: Stop server
+        if: always()
+        run: kill $SERVER_PID 2>/dev/null || true
+
+  ## ── Notify on failure ──────────────────────────────────────────
+  notify:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs: test
+    if: failure()
+    steps:
+      - name: Print failure message
+        run: |
+          echo "❌ CI failed on branch ${{ github.ref }}"
+          echo "   Commit: ${{ github.sha }}"
+          echo "   Author: ${{ github.actor }}"
+          echo "   Fix the failing tests before deploying to Render."

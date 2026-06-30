@@ -73,6 +73,10 @@ const OPENAI_BASE      = (process.env.OPENAI_BASE_URL || 'https://api.openai.com
 const AI_MODEL         = process.env.OPENAI_MODEL             || 'gpt-4o';
 const CHAT_MODEL       = process.env.COUNSELLOR_MODEL         || 'gpt-4o-mini';
 const ALLOWED_ORIGIN   = process.env.ALLOWED_ORIGIN           || '*';
+// Warn loudly if CORS is open wildcard — must be set to actual domain in production.
+if (ALLOWED_ORIGIN === '*') {
+  process.stderr.write('[WARN]  [CORS] ALLOWED_ORIGIN is "*" — set it to your domain in .env before going live.\n');
+}
 const MAX_CONCURRENT_AI = parseInt(process.env.MAX_CONCURRENT_AI || '20', 10);
 const LOG_LEVEL        = (process.env.LOG_LEVEL || 'warn').toLowerCase();
 
@@ -98,11 +102,18 @@ process.on('unhandledRejection', reason => log.error('unhandledRejection:', reas
 const _db = dbModule._initDb();
 cdb.init(_db);
 
-/* ══ EMAIL — Raw TLS SMTP to Gmail port 465 ══════════════════════
-   SMTP_HOST, SMTP_USER, SMTP_PASS in .env
-   If SMTP_USER/PASS absent _emailFn = null → callers get 503.
+/* ══ EMAIL — Raw SMTP to Gmail with auto-detect port/security ════════
+   Port 465 → implicit TLS (tls.connect)  — local dev, VPS
+   Port 587 → STARTTLS (net + STARTTLS)   — Render (blocks 465)
+
+   Set in .env:
+     SMTP_HOST=smtp.gmail.com
+     SMTP_PORT=587          ← use 587 on Render; 465 for direct TLS
+     SMTP_USER=you@gmail.com
+     SMTP_PASS="your app password"   ← note: quote if it contains spaces
 ══════════════════════════════════════════════════════════════════ */
 const tls       = require('tls');
+const net       = require('net');
 const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
 const SMTP_PORT = parseInt(process.env.SMTP_PORT || '465', 10);
 const SMTP_USER = process.env.SMTP_USER || '';
@@ -126,6 +137,45 @@ function _sendEmail({ to, subject, text }) {
     `MIME-Version: 1.0${CRLF}Content-Type: text/plain; charset=utf-8${CRLF}` +
     `Content-Transfer-Encoding: base64${CRLF}${CRLF}` + enc(text) + CRLF;
 
+  // ── STARTTLS path (port 587 — required on Render, outbound 465 is blocked) ──
+  if (SMTP_PORT === 587) {
+    const socket = net.connect({ host: SMTP_HOST, port: 587 }, () => {
+      let stage = 0; let tlsSocket = null;
+      const send = s => (tlsSocket || socket).write(s + CRLF);
+
+      const handleData = chunk => {
+        const line = chunk.toString('utf8').trim();
+        if      (stage === 0 && line.startsWith('220'))     { send('EHLO numind.maps'); stage = 1; }
+        else if (stage === 1 && line.includes('250 '))      { send('STARTTLS'); stage = 2; }
+        else if (stage === 2 && line.startsWith('220'))     {
+          // Upgrade plain socket to TLS
+          tlsSocket = tls.connect({ socket, host: SMTP_HOST, servername: SMTP_HOST }, () => {
+            tlsSocket.on('data', handleData);
+            send('EHLO numind.maps'); stage = 3;
+          });
+          tlsSocket.setTimeout(15000, () => { log.warn('[SMTP] TLS timeout →', safeTo); tlsSocket.destroy(); });
+          tlsSocket.on('error', e => log.error('[SMTP] TLS socket error:', e.message));
+        }
+        else if (stage === 3 && line.includes('250 '))      { send('AUTH LOGIN'); stage = 4; }
+        else if (stage === 4 && line.startsWith('334'))     { send(enc(SMTP_USER)); stage = 5; }
+        else if (stage === 5 && line.startsWith('334'))     { send(enc(SMTP_PASS)); stage = 6; }
+        else if (stage === 6 && line.startsWith('235'))     { send(`MAIL FROM:<${SMTP_FROM}>`); stage = 7; }
+        else if (stage === 7 && line.startsWith('250'))     { send(`RCPT TO:<${safeTo}>`); stage = 8; }
+        else if (stage === 8 && line.startsWith('250'))     { send('DATA'); stage = 9; }
+        else if (stage === 9 && line.startsWith('354'))     { (tlsSocket||socket).write(msg + CRLF + '.' + CRLF); stage = 10; }
+        else if (stage === 10 && line.startsWith('250'))    { send('QUIT'); stage = 11; }
+        else if (stage === 11 && line.startsWith('221'))    { (tlsSocket||socket).destroy(); }
+        else if (line.startsWith('5') || line.startsWith('4')) { log.error('[SMTP]', line); (tlsSocket||socket).destroy(); }
+      };
+
+      socket.on('data', handleData);
+    });
+    socket.setTimeout(15000, () => { log.warn('[SMTP] connect timeout →', safeTo); socket.destroy(); });
+    socket.on('error', e => log.error('[SMTP] socket error:', e.message));
+    return;
+  }
+
+  // ── Implicit TLS path (port 465 — default, works on VPS/local) ──
   const socket = tls.connect({ host: SMTP_HOST, port: SMTP_PORT, servername: SMTP_HOST }, () => {
     const send = s => socket.write(s + CRLF);
     let stage = 0;
@@ -167,8 +217,12 @@ dashApi.init(_db, _emailFn, _dbWrite);
    At 84 writes/min peak: queue drains in <1ms per tick, event loop
    is never blocked for more than one write at a time.
 ══════════════════════════════════════════════════════════════════ */
-const WQ_BATCH_SIZE = 10;
-const WQ_MAX        = 500;
+// Writes per event-loop tick. Heavy writes (saveReport ≈ 40 statements in a
+// transaction) block the loop while running, so a smaller batch caps the
+// worst-case stall when several reports finish at once. Tunable on Render
+// without a code change; default 5 balances throughput vs latency spikes.
+const WQ_BATCH_SIZE = parseInt(process.env.WQ_BATCH_SIZE || '5', 10);
+const WQ_MAX        = parseInt(process.env.WQ_MAX || '500', 10);
 const _wq           = [];
 let   _wqScheduled  = false;
 
@@ -209,11 +263,23 @@ const _httpsAgent = new https.Agent({
   timeout:        35000,
 });
 
-/* ══════════════════════════════════════════════════════════════════
-   AI CONCURRENCY CAP
-   Prevents runaway OpenAI spend + socket exhaustion under bursts.
-══════════════════════════════════════════════════════════════════ */
-let _aiInFlight = 0;
+/* ── AI concurrency tracking — cluster-aware ────────────────────────
+   _aiInFlight    — in-flight /api/ai-report streams (gpt-4o, heavy)
+   _chatInFlight  — in-flight /api/counsellor-chat + greeting streams
+                    (gpt-4o-mini, lighter but far more frequent)
+
+   These are separate counters because the two endpoints have different
+   cost profiles and different caps. ai-report is capped at 20 globally
+   (expensive, long-running). counsellor-chat is capped at 40 per worker
+   (cheaper, shorter, but 500 students could all open Aria at once).
+
+   Without _chatInFlight, 500 simultaneous chat requests would open 500
+   parallel streams to OpenAI, saturate the HTTPS agent (maxSockets=50),
+   and trigger sustained 429s that even the backoff cannot recover from.
+─────────────────────────────────────────────────────────────────── */
+let _aiInFlight   = 0;
+const MAX_CONCURRENT_CHAT = parseInt(process.env.MAX_CONCURRENT_CHAT || '40', 10);
+let _chatInFlight = 0;
 
 /* ══════════════════════════════════════════════════════════════════
    STATIC FILE CACHE
@@ -279,19 +345,50 @@ function _getIP(req) {
 // Sweep in-memory IP/login limiters every 5 min
 setInterval(() => {
   const n = Date.now();
+  // _ipRL entries created by _rlCheck use field 'resetAt'
+  // _loginRL entries created inline use field 'reset'
   for (const [k, v] of _ipRL)    if (n > v.resetAt) _ipRL.delete(k);
   for (const [k, v] of _loginRL) if (n > v.reset)   _loginRL.delete(k);
 }, 5 * 60 * 1000).unref();
 
-// Prune DB rate-limits and expired counsellor tokens hourly
+// Prune DB rate-limits, expired counsellor tokens, and OTP stage tokens hourly
 setInterval(() => {
-  try { cdb.rlPrune(); cdb.pruneTokens(); cdb.pruneOtps(); } catch (_) {}
+  try { cdb.rlPrune(); cdb.pruneTokens(); cdb.pruneOtps(); cdb.pruneOtpStageTokens(); } catch (_) {}
 }, RL_WINDOW).unref();
+
+/* ── Analytics cache background refresher ───────────────────────────
+   Pre-computes all heavy dashboard aggregates (getAggregateScores,
+   getSchoolSummaries, getCareerDistribution, getModuleTiming, trend)
+   every 5 minutes via the write queue so it never contends with
+   student assessment saves. Dashboard API reads hit the cache instantly
+   via a single PK lookup instead of running live GROUP BY scans.
+
+   First run: 30 seconds after startup (give the DB time to settle).
+   Subsequent: every 5 minutes.
+─────────────────────────────────────────────────────────────────── */
+const ANALYTICS_REFRESH_MS = 5 * 60 * 1000;
+setTimeout(() => {
+  const _doRefresh = () => {
+    _dbWrite(() => {
+      try { require('./dashboard-db.js').refreshAnalyticsCache(); }
+      catch (e) { log.warn('[Analytics] cache refresh failed:', e.message); }
+    }).catch(() => {});
+  };
+  _doRefresh(); // immediate first run
+  setInterval(_doRefresh, ANALYTICS_REFRESH_MS).unref();
+}, 30 * 1000).unref();
 
 /* ══════════════════════════════════════════════════════════════════
    OPENAI REQUEST HELPER
+   Includes exponential backoff on 429 (rate-limit) responses.
+   OpenAI returns 429 during traffic spikes — without retries the
+   student sees a confusing error and has to manually try again.
+   Retry logic: up to 3 attempts, 1s → 2s → 4s delays.
+   Streaming endpoints (chat, greeting, ai-report) use this too;
+   for streams the retry fires before the response is handed to the
+   caller, so the stream starts cleanly on the retry attempt.
 ══════════════════════════════════════════════════════════════════ */
-function _openaiReq(endpoint, body) {
+function _openaiReqRaw(endpoint, body) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(OPENAI_BASE + endpoint);
     const buf    = Buffer.from(JSON.stringify(body));
@@ -314,6 +411,20 @@ function _openaiReq(endpoint, body) {
     req.write(buf);
     req.end();
   });
+}
+
+async function _openaiReq(endpoint, body, _attempt = 0) {
+  const upstream = await _openaiReqRaw(endpoint, body);
+  // Retry on 429 (rate-limited) with exponential backoff: 1s, 2s, 4s
+  if (upstream.statusCode === 429 && _attempt < 3) {
+    const delayMs = Math.pow(2, _attempt) * 1000;
+    log.warn(`[OpenAI] 429 on attempt ${_attempt + 1} — retrying in ${delayMs}ms`);
+    // Drain the response body so the socket is released back to the agent
+    await new Promise(r => { upstream.resume(); upstream.on('end', r); upstream.on('error', r); });
+    await new Promise(r => setTimeout(r, delayMs));
+    return _openaiReq(endpoint, body, _attempt + 1);
+  }
+  return upstream;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -341,8 +452,14 @@ const _CSP =
 
 function _injectToken(html) {
   if (!APP_TOKEN) return html;
+  // Inject as a <meta> tag, NOT as window._APP_TOKEN global.
+  // A window global is accessible to any script on the page — including
+  // injected scripts from a compromised dependency. A <meta> tag requires
+  // explicit DOM access (document.querySelector) and is not accessible to
+  // cross-origin iframes or injected scripts that don't have DOM access.
+  // state.js and ui-bridge.js already read from meta[name="app-token"] first.
   return html.replace('</head>',
-    `<script>window._APP_TOKEN=${JSON.stringify(APP_TOKEN)};</script>\n</head>`);
+    `<meta name="app-token" content=${JSON.stringify(APP_TOKEN)}>\n</head>`);
 }
 
 function _buildHeaders(ext, etag, useGzip) {
@@ -461,13 +578,17 @@ function _prewarm() {
 ══════════════════════════════════════════════════════════════════ */
 function _readBody(req, maxBytes = 512 * 1024) {
   return new Promise((resolve, reject) => {
-    const chunks = []; let total = 0;
+    const chunks = []; let total = 0; let tooLarge = false;
     req.on('data', c => {
       total += c.length;
-      if (total > maxBytes) { req.destroy(); return reject(new Error('body_too_large')); }
+      if (total > maxBytes) {
+        if (!tooLarge) { tooLarge = true; reject(new Error('body_too_large')); }
+        return; // drain without storing — keeps socket alive for 413 response
+      }
       chunks.push(c);
     });
     req.on('end', () => {
+      if (tooLarge) return;
       try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
       catch { reject(new Error('invalid_json')); }
     });
@@ -502,9 +623,29 @@ async function _handleSaveRegistration(req, res) {
   catch (e) { return _json(res, e.message === 'body_too_large' ? 413 : 400, { error: e.message }); }
   const { student, sessionId } = body || {};
   if (!sessionId) return _json(res, 400, { error: 'sessionId is required' });
+
   try {
-    await _dbWrite(() => dbModule.saveRegistration(student || {}, sessionId));
-    _json(res, 200, { ok: true, sessionId });
+    // EMAIL IS THE IDENTITY. saveRegistration is now atomic find-or-create:
+    // it resolves by email and inserts inside a single transaction, with the
+    // UNIQUE(email) constraint as the backstop. No check-then-write race even
+    // under hundreds of simultaneous first-time registrations.
+    //   • existing email → returns that row's session_id (+ whether test taken)
+    //   • new email      → creates the row with the client's sessionId
+    const reg = await _dbWrite(() => dbModule.saveRegistration(student || {}, sessionId));
+
+    if (reg && reg.session_id) {
+      return _json(res, 200, {
+        ok: true,
+        sessionId: reg.session_id,
+        existing: !!reg.existing,
+        testTaken: !!reg.testTaken,
+      });
+    }
+
+    // _dbWrite returned null only when the write queue was saturated (overload
+    // protection). The client keeps its local sessionId and data in localStorage;
+    // this is non-fatal and the next save will retry.
+    _json(res, 200, { ok: true, sessionId, existing: false, testTaken: false, queued: false });
   } catch (err) {
     log.error('[save-registration]', err.message);
     _json(res, 500, { error: 'Server error' });
@@ -518,8 +659,20 @@ async function _handleSaveSection(req, res) {
   catch (e) { return _json(res, e.message === 'body_too_large' ? 413 : 400, { error: e.message }); }
   const { sessionId, moduleKey, answers, scores, duration } = body || {};
   if (!sessionId || !moduleKey) return _json(res, 400, { error: 'sessionId and moduleKey are required' });
+
+  // DB validation: sessionId must exist in students table.
+  // Prevents arbitrary session IDs from writing assessment data.
+  // This is the only server-side identity check for student data writes —
+  // no per-student token is needed because each student only writes to their own row
+  // and the sessionId is a cryptographic random hex string (not guessable).
+  const studentRow = dbModule.getStudentBySessionId
+    ? dbModule.getStudentBySessionId(sessionId)
+    : null;
+  if (!studentRow) {
+    return _json(res, 404, { error: 'Session not found. Please register first.' });
+  }
+
   try {
-    // _dbWrite batches this write — non-blocking to the event loop
     await _dbWrite(() => dbModule.saveSection(sessionId, moduleKey, {
       raw_answers: answers, scores, duration: duration || 0,
     }));
@@ -538,13 +691,25 @@ async function _handleSaveReport(req, res) {
   catch (e) { return _json(res, e.message === 'body_too_large' ? 413 : 400, { error: e.message }); }
   if (!body?.sessionId) return _json(res, 400, { error: 'sessionId is required' });
 
+  // DB validation: sessionId must belong to a registered student
+  const studentRow = dbModule.getStudentBySessionId
+    ? dbModule.getStudentBySessionId(body.sessionId)
+    : null;
+  if (!studentRow) return _json(res, 404, { error: 'Session not found.' });
+
   // AI concurrency gate — prevent report storm at 5k concurrent
-  if (_aiInFlight >= _maxAI) {
-    log.warn('[save-report] AI cap hit —', _aiInFlight, '/', _maxAI, 'in flight');
+  if (_aiInFlight >= MAX_CONCURRENT_AI) {
+    log.warn('[save-report] AI cap hit —', _aiInFlight, '/', MAX_CONCURRENT_AI, 'in flight');
     return _json(res, 429, { error: 'Report generation is busy. Please wait 30 seconds and try again.', retry_after: 30 });
   }
   try {
     await _dbWrite(() => dbModule.saveReport(body));
+    // Invalidate the per-student report cache and RAG context cache so the next
+    // counsellor request gets fresh data rather than a stale pre-report snapshot.
+    // body.student.email is present when the full report body is sent from the client.
+    if (body?.student?.email) {
+      try { cdb._invalidateReportCache(body.student.email); } catch (_) {}
+    }
     _json(res, 200, { ok: true });
   } catch (err) {
     log.error('[save-report]', err.message);
@@ -556,9 +721,19 @@ async function _handleAIReport(req, res) {
   if (!_checkToken(req))  return _json(res, 401, { error: 'Unauthorized' });
   if (!OPENAI_KEY)        return _json(res, 503, { error: 'AI not configured.' });
 
-  // Concurrency cap — prevents socket exhaustion and runaway spend
+  // Local per-worker cap (fast, in-memory)
   if (_aiInFlight >= MAX_CONCURRENT_AI) {
     res.writeHead(503, { 'Retry-After': '10', 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Server busy — please try again in a few seconds.' }));
+  }
+
+  // Cluster-wide cap via shared SQLite rate_limits table.
+  // Window = 60s; resets each minute so cap is "MAX_CONCURRENT_AI streams/min globally".
+  // This is a rate-limit proxy for concurrency — not perfect but prevents runaway spend
+  // across workers without adding complex shared-memory IPC.
+  const globalRl = _rlCheckDb('ai-global', 'slots', MAX_CONCURRENT_AI, 60 * 1000);
+  if (!globalRl.allowed) {
+    res.writeHead(503, { 'Retry-After': String(globalRl.retryAfter || 10), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Server busy — please try again in a few seconds.' }));
   }
 
@@ -576,24 +751,29 @@ async function _handleAIReport(req, res) {
   const temp   = Math.max(0, Math.min(1, Number(body.temperature) ?? 0.65));
 
   _aiInFlight++;
+  let _aiReleased = false;
+  const releaseAi = () => { if (!_aiReleased) { _aiReleased = true; _aiInFlight--; } };
+  res.on('close', releaseAi); // client disconnect before stream ends
   try {
     const upstream = await _openaiReq('/v1/chat/completions', {
       model: AI_MODEL, temperature: temp,
       max_tokens: maxTok, stream: true, messages: safeMsgs,
     });
     if (upstream.statusCode !== 200) {
-      _aiInFlight--;
+      releaseAi();
       const eb = await new Promise(r => { const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => r(Buffer.concat(c).toString())); });
       try { return _json(res, upstream.statusCode, JSON.parse(eb).error || { message: eb }); }
       catch { return _json(res, upstream.statusCode, { error: eb.slice(0, 300) }); }
     }
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
     upstream.pipe(res);
-    const _done = () => { _aiInFlight--; if (!res.writableEnded) res.end(); };
+    // Bind to both end and error; release() is idempotent so an error-then-end
+    // sequence can't double-decrement the counter.
+    const _done = () => { releaseAi(); if (!res.writableEnded) res.end(); };
     upstream.on('end',   _done);
     upstream.on('error', _done);
   } catch (err) {
-    _aiInFlight--;
+    releaseAi();
     log.error('[ai-report]', err.message);
     if (!res.headersSent) _json(res, 502, { error: 'AI service error' });
   }
@@ -630,14 +810,14 @@ async function _handleAIReport(req, res) {
 
 ══════════════════════════════════════════════════════════════════ */
 
-// Short-lived tokens proving a student just verified an OTP — allows PIN set
-// Map: token → { email, expiresAt }
-const _otpVerifiedTokens = new Map();
-const OTP_VER_TTL = 15 * 60 * 1000; // 15 min to set PIN after verifying OTP
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of _otpVerifiedTokens) if (now > v.expiresAt) _otpVerifiedTokens.delete(k);
-}, 5 * 60 * 1000).unref();
+/* ── OTP stage tokens — now DB-backed via counsellor-db ─────────────
+   Replaced the in-memory _otpVerifiedTokens Map. That Map broke in PM2
+   cluster mode: worker A issued the token after OTP verify, but the
+   subsequent set-pin request landed on worker B where the Map was empty.
+   DB-backed tokens are visible to all workers immediately.
+   Functions: cdb.issueOtpStageToken(email)  → token string
+              cdb.verifyOtpStageToken(token, email) → bool (single-use, deletes on verify)
+─────────────────────────────────────────────────────────────────── */
 
 async function _handleCounsellorUnlock(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
@@ -654,71 +834,62 @@ async function _handleCounsellorUnlock(req, res) {
   }
 
   try {
-    if (!cdb.hasCompletedAssessment(email)) {
-      return _json(res, 200, { unlocked: false,
-        error: 'No completed assessment found. Please complete the NuMind MAPS test first.' });
-    }
-
+    // Step 1: does a COMPLETED REPORT exist for this email?
+    // getReportByEmail uses a LEFT JOIN, so it returns a truthy object whenever
+    // the student ROW exists — even with no report (e.g. admin-created but the
+    // test was never taken). The hard rule is: no student without a completed
+    // report may reach Aria. So we additionally require report.fit_tier, which
+    // is only ever set when saveReport() has written a report_summary row.
     const reportObj = cdb.getReportByEmail(email);
-    if (!reportObj) return _json(res, 200, { unlocked: false, error: 'Report not found.' });
-
-    // ── Tier 1: Same device — sessionId from localStorage ──────────
-    const clientSessionId = String(body?.sessionId || '').trim();
-    if (clientSessionId) {
-      const dbSessionId = reportObj.session_id || null;
-      if (dbSessionId && clientSessionId === dbSessionId) {
-        // Trusted same-device access — issue token immediately
-        log.info('[unlock]', email, '| verified via: sessionId (same-device)');
-        return _jsonUnlocked(res, email, reportObj);
-      }
-      // sessionId mismatch — fall through to PIN/OTP flow
-      log.warn('[unlock] sessionId mismatch for', email, '— falling through to PIN flow');
+    const hasReport = !!(reportObj && reportObj.report &&
+      (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
+    if (!reportObj || !hasReport) {
+      return _json(res, 200, { unlocked: false,
+        error: 'No report found for this email. Please complete your NuMind MAPS assessment first.' });
     }
 
-    // ── Tier 2: PIN-based auth ──────────────────────────────────────
+    // Step 2: does this student have a PIN set?
     const pinSet = cdb.hasPinSet(email);
 
     if (!pinSet) {
+      // First time. Email is the identity, so verify ownership of the inbox
+      // with an OTP before letting them set a PIN — exactly what you asked for.
+      // If SMTP is configured, send the code and move to the otp step.
+      // If SMTP is NOT configured, fall back to direct PIN setup so the
+      // counsellor never becomes completely unreachable.
       if (_emailFn) {
-        // SMTP configured — send OTP to verify identity and set a PIN
-        const otp = await _dbWrite(() => cdb.createOtp(email, 'register'));
-        const studentName = reportObj.student?.firstName || 'Student';
-        _emailFn({
-          to:      email,
-          subject: 'NuMind MAPS — Your one-time access code',
-          text: [
-            `Hi ${studentName},`,
-            '',
-            'Here is your one-time code to set up your AI Counsellor access PIN:',
-            '',
-            `  ${otp}`,
-            '',
-            'This code expires in 10 minutes. Never share it with anyone.',
-            '',
-            'If you did not request this, please ignore this email.',
-            '',
-            '\u2014 NuMind MAPS Team',
-          ].join('\n'),
-        });
-        log.info('[unlock] OTP sent to', email, '(first-time PIN setup)');
-        return _json(res, 200, { unlocked: false, step: 'otp-sent',
-          message: `We've sent a 6-digit code to ${email}. Enter it to set your PIN.` });
-      } else {
-        // SMTP not configured — fall back to name+class ownership verification.
-        // Student proves identity with details from their registration record.
-        log.warn('[unlock] SMTP not configured — using name+class verification for', email);
-        return _json(res, 200, { unlocked: false, step: 'verify-name',
-          message: 'Confirm your registration details to access your AI Counsellor.' });
+        try {
+          const code = await _dbWrite(() => cdb.createOtp(email, 'register'));
+          _emailFn({
+            to: email,
+            subject: 'Your NuMind MAPS verification code',
+            text: 'Welcome to NuMind MAPS!\n\n' +
+                  'Your verification code is: ' + code + '\n\n' +
+                  'Enter this code to set up your AI Counsellor PIN. ' +
+                  'It expires in 10 minutes.\n\n' +
+                  'If you did not request this, you can ignore this email.',
+          });
+          log.info('[unlock]', email, '| OTP sent (first-time setup)');
+          return _json(res, 200, { unlocked: false, step: 'otp-sent', purpose: 'register',
+            message: 'We sent a 6-digit code to your email. Enter it to continue.' });
+        } catch (mailErr) {
+          log.error('[unlock] OTP send failed for', email, '-', mailErr.message);
+          // SMTP hiccup — degrade gracefully to direct PIN setup rather than
+          // blocking the student entirely.
+          return _json(res, 200, { unlocked: false, step: 'set-pin',
+            message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
+        }
       }
+      return _json(res, 200, { unlocked: false, step: 'set-pin',
+        message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
     }
 
-    // PIN exists — prompt for it
-    log.info('[unlock]', email, '| PIN set, requesting PIN entry');
+    // PIN exists — ask for it
     return _json(res, 200, { unlocked: false, step: 'enter-pin',
-      message: 'Welcome back! Enter your PIN to continue.' });
+      message: 'Enter your PIN to continue.' });
 
   } catch (err) {
-    log.error('[counsellor-unlock]', err.message, err.stack);
+    log.error('[counsellor-unlock]', err.message);
     _json(res, 500, { error: 'Server error. Please try again.' });
   }
 }
@@ -732,6 +903,17 @@ async function _jsonUnlocked(res, email, reportObj) {
   // hangs on "Checking…" forever with no error. Wrapping in our own
   // try/catch guarantees a response is always written.
   try {
+    // HARD GATE (single chokepoint): no student without a completed report
+    // may ever receive an unlocked counsellor session. Every unlock path
+    // (PIN, set-pin, reset-pin, name-verify) funnels through here, so this
+    // one guard enforces the rule everywhere. getReportByEmail LEFT-JOINs,
+    // so a bare student row is truthy; require a real report via fit_tier.
+    const hasReport = !!(reportObj && reportObj.report &&
+      (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
+    if (!hasReport) {
+      return _json(res, 200, { unlocked: false,
+        error: 'No report found for this email. Please complete your NuMind MAPS assessment first.' });
+    }
     const name    = reportObj.student?.firstName || reportObj.student?.fullName || 'Student';
     const history = cdb.getHistory(email, { limit: 40 });
     let reportSummary = null;
@@ -842,21 +1024,62 @@ async function _handleCounsellorVerifyOtp(req, res) {
     if (!valid) {
       return _json(res, 200, { ok: false, error: 'Incorrect or expired code. Please try again.' });
     }
-    // Issue a short-lived in-memory token proving OTP was verified
-    const otpToken  = crypto.randomBytes(24).toString('hex');
-    const expiresAt = Date.now() + OTP_VER_TTL;
-    _otpVerifiedTokens.set(otpToken, { email, expiresAt });
+    // Issue a short-lived DB-backed token proving OTP was verified.
+    // DB-backed so it survives PM2 worker routing — the set-pin call may
+    // land on a different worker than the verify-otp call.
+    const otpToken = await _dbWrite(() => cdb.issueOtpStageToken(email));
 
     if (purpose === 'reset') {
-      // PIN reset: return next step prompt (set-pin)
       return _json(res, 200, { ok: true, step: 'set-pin', otpToken,
         message: 'Code verified. Set your new PIN.' });
     }
-    // First-time registration: prompt PIN creation
     return _json(res, 200, { ok: true, step: 'set-pin', otpToken,
       message: 'Code verified! Now set a 4-6 digit PIN to use when logging in.' });
   } catch (err) {
     log.error('[counsellor-verify-otp]', err.message);
+    _json(res, 500, { error: 'Server error.' });
+  }
+}
+
+/* ── POST /api/counsellor-request-otp ─────────────────────────────
+   Sends a PIN-reset OTP. Used by the "Forgot PIN?" flow. The only gate
+   is that a report exists for this email (proof they completed the test).
+   No counsellor session is required — they're locked out, that's the point.
+*/
+async function _handleCounsellorRequestOtp(req, res) {
+  if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
+  let body;
+  try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
+
+  const email = String(body?.email || '').toLowerCase().trim();
+  if (!email) return _json(res, 400, { error: 'Email is required.' });
+
+  const rl = _rlCheckDb('request-otp', email, 5, RL_WINDOW);
+  if (!rl.allowed) {
+    res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Too many attempts. Please wait before trying again.' }));
+  }
+
+  try {
+    const reportObj = cdb.getReportByEmail(email);
+    // Anti-enumeration: respond ok regardless, but only actually send if the
+    // report exists AND SMTP is configured.
+    if (reportObj && _emailFn) {
+      const code = await _dbWrite(() => cdb.createOtp(email, 'reset'));
+      _emailFn({
+        to: email,
+        subject: 'Reset your NuMind MAPS PIN',
+        text: 'You asked to reset your AI Counsellor PIN.\n\n' +
+              'Your verification code is: ' + code + '\n\n' +
+              'Enter this code to set a new PIN. It expires in 10 minutes.\n\n' +
+              'If you did not request this, you can safely ignore this email.',
+      });
+      log.info('[request-otp]', email, '| reset OTP sent');
+    }
+    return _json(res, 200, { ok: true, step: 'otp-sent', purpose: 'reset',
+      message: 'If an account exists for that email, a reset code has been sent.' });
+  } catch (err) {
+    log.error('[counsellor-request-otp]', err.message);
     _json(res, 500, { error: 'Server error.' });
   }
 }
@@ -870,30 +1093,42 @@ async function _handleCounsellorSetPin(req, res) {
   let body;
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
 
-  const otpToken = (req.headers['x-counsellor-otp-token'] || '').trim();
-  const email    = String(body?.email || '').toLowerCase().trim();
-  const pin      = String(body?.pin   || '').trim();
-
+  const email = String(body?.email || '').toLowerCase().trim();
+  const pin   = String(body?.pin   || '').trim();
   if (!email || !pin) return _json(res, 400, { error: 'email and pin are required.' });
   if (!/^\d{4,6}$/.test(pin)) return _json(res, 400, { error: 'PIN must be 4–6 digits.' });
 
-  // Verify the OTP token
-  const session = _otpVerifiedTokens.get(otpToken);
-  if (!session || session.email !== email || Date.now() > session.expiresAt) {
-    return _json(res, 403, { error: 'Session expired. Please request a new code.' });
+  const rl = _rlCheckDb('set-pin', email, 5, RL_WINDOW);
+  if (!rl.allowed) {
+    res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Too many attempts.' }));
   }
-  _otpVerifiedTokens.delete(otpToken); // single-use
+
+  // When SMTP/OTP is active, a first-time PIN may only be set AFTER the OTP
+  // was verified. The proof is the single-use DB-backed stage token returned
+  // by /counsellor-verify-otp, sent here in the X-Counsellor-Otp-Token header.
+  // (If SMTP is off, the unlock flow used direct set-pin, so we skip this.)
+  if (_emailFn) {
+    const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
+    if (!cdb.verifyOtpStageToken(otpToken, email)) {
+      return _json(res, 401, { unlocked: false, step: 'otp-sent',
+        error: 'Please verify the code sent to your email first.' });
+    }
+  }
 
   try {
+    const reportObj = cdb.getReportByEmail(email);
+    if (!reportObj) return _json(res, 200, { unlocked: false, error: 'No report found for this email.' });
+
+    if (cdb.hasPinSet(email) && !body?.changeOnly) {
+      return _json(res, 200, { unlocked: false, step: 'enter-pin',
+        error: 'PIN already set. Please enter your existing PIN.' });
+    }
+
     await _dbWrite(() => cdb.setStudentPin(email, pin));
     log.info('[set-pin]', email);
-
-    // After first-time PIN setup, immediately unlock the session
-    if (!body?.changeOnly) {
-      const reportObj = cdb.getReportByEmail(email);
-      if (reportObj) return _jsonUnlocked(res, email, reportObj);
-    }
-    _json(res, 200, { ok: true, message: 'PIN set successfully.' });
+    if (!body?.changeOnly) return _jsonUnlocked(res, email, reportObj);
+    _json(res, 200, { ok: true, message: 'PIN updated.' });
   } catch (err) {
     log.error('[counsellor-set-pin]', err.message);
     _json(res, 500, { error: 'Server error.' });
@@ -937,88 +1172,54 @@ async function _handleCounsellorVerifyPin(req, res) {
    Sends a PIN-reset OTP to the student's registered email.
    Requires an active counsellor session (X-Counsellor-Token).
 */
-/* ── POST /api/counsellor-reset-otp ───────────────────────────────
-   Unauthenticated — sends a PIN reset OTP to email.
-   Used by the "Forgot PIN" flow where the student has no session token.
-   Rate limited per email to prevent spam.
+/* ── POST /api/counsellor-reset-pin ───────────────────────────────
+   Resets a student's PIN without any OTP or email.
+   Rule: if the report exists in the DB for this email, the student
+   is allowed to set a new PIN. That is the only check needed.
+   The report existing IS the proof they completed the assessment.
+   Rate limited to prevent brute-force PIN takeover.
 */
-async function _handleCounsellorResetOtp(req, res) {
+async function _handleCounsellorResetPin(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
-  if (!_emailFn) return _json(res, 503, { error: 'Email service not configured.' });
   let body;
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
 
   const email = String(body?.email || '').toLowerCase().trim();
-  if (!email) return _json(res, 400, { error: 'Email is required.' });
+  const pin   = String(body?.pin   || '').trim();
+  if (!email || !pin) return _json(res, 400, { error: 'email and pin are required.' });
+  if (!/^\d{4,6}$/.test(pin)) return _json(res, 400, { error: 'PIN must be 4–6 digits.' });
 
-  const rl = _rlCheckDb('otp-reset', email, 5, RL_WINDOW);
+  const rl = _rlCheckDb('reset-pin', email, 5, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Too many reset attempts. Try again later.' }));
+    return res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
+  }
+
+  // When SMTP/OTP is active, a reset must be preceded by OTP verification
+  // (proving the requester controls the inbox). The single-use stage token
+  // from /counsellor-verify-otp is the proof. If SMTP is off, the report-
+  // exists check below is the only available gate.
+  if (_emailFn) {
+    const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
+    if (!cdb.verifyOtpStageToken(otpToken, email)) {
+      return _json(res, 401, { ok: false, step: 'otp-sent',
+        error: 'Please verify the code sent to your email before resetting your PIN.' });
+    }
   }
 
   try {
-    if (!cdb.hasCompletedAssessment(email)) {
-      return _json(res, 200, { ok: false, error: 'No account found for this email.' });
+    // The only gate: report must exist in DB
+    const reportObj = cdb.getReportByEmail(email);
+    if (!reportObj) {
+      return _json(res, 200, { ok: false,
+        error: 'No report found for this email. Complete your assessment first.' });
     }
-    if (!cdb.hasPinSet(email)) {
-      return _json(res, 200, { ok: false, error: 'No PIN set for this account.' });
-    }
-    const reportObj   = cdb.getReportByEmail(email);
-    const studentName = reportObj?.student?.firstName || 'Student';
-    const otp         = await _dbWrite(() => cdb.createOtp(email, 'reset'));
-    _emailFn({
-      to: email, subject: 'NuMind MAPS — PIN Reset Code',
-      text: ['Hi ' + studentName + ',', '',
-        'Your PIN reset code:', '', '  ' + otp, '',
-        'This code expires in 10 minutes.',
-        'If you did not request this, please ignore this email.',
-        '', '\u2014 NuMind MAPS Team'].join('\n'),
-    });
-    log.info('[reset-otp] sent to', email);
-    _json(res, 200, { ok: true, message: 'Reset code sent to ' + email + '.' });
+    await _dbWrite(() => cdb.setStudentPin(email, pin));
+    log.info('[reset-pin]', email);
+    // Immediately issue a session token so they don't need to re-enter the PIN
+    return _jsonUnlocked(res, email, reportObj);
   } catch (err) {
-    log.error('[counsellor-reset-otp]', err.message);
-    _json(res, 500, { error: 'Server error.' });
-  }
-}
-
-async function _handleCounsellorRequestOtp(req, res) {
-  if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
-  if (!_emailFn) return _json(res, 503, { error: 'Email service not configured.' });
-
-  const email = _verifyCounsellorToken(req);
-  if (!email) return _json(res, 401, { error: 'Session expired.' });
-
-  const rl = _rlCheckDb('otp-request', email, 5, RL_WINDOW);
-  if (!rl.allowed) {
-    res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Too many OTP requests. Try again later.' }));
-  }
-
-  try {
-    const reportObj   = cdb.getReportByEmail(email);
-    const studentName = reportObj?.student?.firstName || 'Student';
-    const otp         = await _dbWrite(() => cdb.createOtp(email, 'reset'));
-    _emailFn({
-      to:      email,
-      subject: 'NuMind MAPS — PIN Reset Code',
-      text: [
-        `Hi ${studentName},`,
-        '',
-        'Here is your PIN reset code:',
-        '',
-        `  ${otp}`,
-        '',
-        'This code expires in 10 minutes. If you did not request a reset, please ignore this email.',
-        '',
-        '— NuMind MAPS Team',
-      ].join('\n'),
-    });
-    log.info('[request-otp] PIN reset OTP sent to', email);
-    _json(res, 200, { ok: true, message: `A reset code has been sent to ${email}.` });
-  } catch (err) {
-    log.error('[counsellor-request-otp]', err.message);
+    log.error('[counsellor-reset-pin]', err.message);
     _json(res, 500, { error: 'Server error.' });
   }
 }
@@ -1044,6 +1245,24 @@ async function _handleCounsellorChat(req, res) {
     return res.end(JSON.stringify({ error: `Rate limit reached. Wait ${Math.ceil(rl.retryAfter / 60)} min.` }));
   }
 
+  // Concurrent stream cap — prevents 500 students opening Aria simultaneously
+  // and saturating the HTTPS agent / OpenAI rate limits.
+  // Students over the cap get a friendly retry message, not a hard error.
+  if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
+    res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Aria is busy right now — please try again in a few seconds.' }));
+  }
+  _chatInFlight++;
+  // The stream finishes ASYNCHRONOUSLY via upstream events, long after this
+  // function's try-block returns. Decrementing in `finally` would drop the
+  // counter immediately and make MAX_CONCURRENT_CHAT meaningless. Instead use
+  // a single idempotent release() called from every terminal path (success,
+  // upstream error, early return, catch, client disconnect). Guard ensures it
+  // runs exactly once — a double-decrement is as harmful as a leak.
+  let _released = false;
+  const release = () => { if (!_released) { _released = true; _chatInFlight--; } };
+  res.on('close', release); // client disconnected before stream finished
+
   try {
     const reportObj    = cdb.getReportByEmail(email);
     const summaryRow   = conversationId ? cdb.getConversationSummary(email, conversationId) : null;
@@ -1061,6 +1280,7 @@ async function _handleCounsellorChat(req, res) {
 
     if (upstream.statusCode !== 200) {
       const eb = await new Promise(r => { const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => r(Buffer.concat(c).toString())); });
+      release();
       try { return _json(res, upstream.statusCode, { error: JSON.parse(eb)?.error?.message || 'AI error' }); }
       catch { return _json(res, 502, { error: 'AI service error' }); }
     }
@@ -1090,6 +1310,7 @@ async function _handleCounsellorChat(req, res) {
         }
       }
       res.end();
+      release(); // stream finished — now safe to free the slot
       if (fullText.trim()) {
         // Save via write-queue — non-blocking
         _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message  })).catch(e => log.error('[saveMessage user]', e.message));
@@ -1097,10 +1318,11 @@ async function _handleCounsellorChat(req, res) {
       }
     });
 
-    upstream.on('error', err => { log.error('[counsellor upstream]', err.message); if (!res.writableEnded) res.end(); });
+    upstream.on('error', err => { log.error('[counsellor upstream]', err.message); release(); if (!res.writableEnded) res.end(); });
 
   } catch (err) {
     log.error('[counsellor-chat]', err.message, err.stack);
+    release();
     if (!res.headersSent) _json(res, 502, { error: 'AI service error. Please try again.' });
   }
 }
@@ -1118,10 +1340,12 @@ async function _handleCounsellorSummarise(req, res) {
   try {
     const transcript = messages.map(m => (m.role === 'user' ? 'Student' : 'Aria') + ': ' + m.content).join('\n\n');
     const prompt = 'Compress this counselling conversation into a dense 250-word summary preserving: career decisions, concerns, goals, action items, emotional state.\n\nWrite in third-person.\n\nCONVERSATION:\n' + transcript;
-    const buf = Buffer.from(JSON.stringify({ model: AI_MODEL, temperature: 0.3, max_tokens: 400, stream: false, messages: [{ role: 'user', content: prompt }] }));
-    const upstream = await _openaiReq('/v1/chat/completions', buf);
+    const upstream = await _openaiReq('/v1/chat/completions', {
+      model: AI_MODEL, temperature: 0.3, max_tokens: 400, stream: false,
+      messages: [{ role: 'user', content: prompt }],
+    });
     const chunks = [];
-    await new Promise((res, rej) => { upstream.on('data', d => chunks.push(d)); upstream.on('end', res); upstream.on('error', rej); });
+    await new Promise((resolve, rej) => { upstream.on('data', d => chunks.push(d)); upstream.on('end', resolve); upstream.on('error', rej); });
     let summary = '';
     try { summary = JSON.parse(Buffer.concat(chunks).toString())?.choices?.[0]?.message?.content?.trim() || ''; } catch { return _json(res, 502, { error: 'AI parse error' }); }
     if (summary) await _dbWrite(() => cdb.saveConversationSummary({ email, conversationId, summary, messageCount: messages.length }));
@@ -1158,6 +1382,21 @@ async function _handleCounsellorGreeting(req, res) {
 
   const email = _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
+
+  // Same cap as counsellor-chat — greetings open a stream too.
+  // A school deployment where 200 students all open Aria at the same time
+  // (e.g. a teacher says "open the counsellor now") would otherwise
+  // saturate the HTTPS agent and trigger cascading 429s.
+  if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
+    res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Aria is busy right now — please try again in a few seconds.' }));
+  }
+  _chatInFlight++;
+  // Same async-stream caveat as counsellor-chat: release the slot only when the
+  // stream truly terminates, via a once-only release() on every exit path.
+  let _released = false;
+  const release = () => { if (!_released) { _released = true; _chatInFlight--; } };
+  res.on('close', release);
 
   try {
     const reportObj    = cdb.getReportByEmail(email);
@@ -1200,6 +1439,7 @@ async function _handleCounsellorGreeting(req, res) {
 
     if (upstream.statusCode !== 200) {
       const eb = await new Promise(r => { const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => r(Buffer.concat(c).toString())); });
+      release();
       return _json(res, 502, { error: 'AI error' });
     }
 
@@ -1228,21 +1468,27 @@ async function _handleCounsellorGreeting(req, res) {
     });
     upstream.on('end', () => {
       res.end();
-      // Save the greeting as the first assistant message in this conversation
+      release();
+      // Save the greeting as the first assistant message in this conversation.
+      // Use _dbWrite so this write goes through the queue rather than blocking
+      // the event loop synchronously after the streaming response completes.
       if (fullText.trim() && body.conversationId) {
-        try {
-          const sessionId = reportObj?.session_id || null;
-          cdb.saveMessage({ email, sessionId, conversationId: body.conversationId, role: 'assistant', content: fullText });
-        } catch (e) { console.error('[Greeting] saveMessage:', e.message); }
+        const sessionId = reportObj?.session_id || null;
+        _dbWrite(() => cdb.saveMessage({
+          email, sessionId, conversationId: body.conversationId,
+          role: 'assistant', content: fullText,
+        })).catch(e => log.error('[Greeting] saveMessage:', e.message));
       }
     });
     upstream.on('error', err => {
-      console.error('[Greeting] upstream error:', err.message);
+      log.error('[Greeting] upstream error:', err.message);
+      release();
       if (!res.writableEnded) res.end();
     });
 
   } catch (err) {
-    console.error('[/api/counsellor-greeting]', err.message);
+    log.error('[/api/counsellor-greeting]', err.message);
+    release();
     if (!res.headersSent) _json(res, 502, { error: 'AI service error.' });
   }
 }
@@ -1259,7 +1505,7 @@ async function _handleCounsellorConversations(req, res) {
     const convs = cdb.getConversations(email);
     _json(res, 200, { conversations: convs });
   } catch (err) {
-    console.error('[/api/counsellor-conversations]', err.message);
+    log.error('[/api/counsellor-conversations]', err.message);
     _json(res, 500, { error: 'Server error' });
   }
 }
@@ -1361,8 +1607,11 @@ async function _handleCounsellorQuery(req, res) {
 const _startTime = Date.now();
 
 async function _handleRequest(req, res) {
-  // Per-request timeout — kills slow-loris and stalled clients
-  req.setTimeout(15000, () => {
+  // Per-request timeout — kills slow-loris and stalled clients.
+  // Import endpoint gets a longer window: 2000-row transactions on a slow
+  // Render disk can take 20-30s. The global 15s was killing valid imports.
+  const isImport = (req.url || '').includes('/students/import');
+  req.setTimeout(isImport ? 120000 : 15000, () => {
     req.destroy();
     if (!res.headersSent) { res.writeHead(408); res.end('Request timeout'); }
   });
@@ -1372,7 +1621,7 @@ async function _handleRequest(req, res) {
   const method   = req.method || 'GET';
 
   res.setHeader('Access-Control-Allow-Origin',  ALLOWED_ORIGIN);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Token, X-Session-ID, Authorization, X-Counsellor-Token, X-Counsellor-Otp-Token');
   if (method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
@@ -1402,12 +1651,12 @@ async function _handleRequest(req, res) {
     if (method === 'GET'  && pathname === '/api/counsellor-conversations') return await _handleCounsellorConversations(req, res);
     if (method === 'GET'  && pathname === '/api/counsellor-history')       return await _handleCounsellorHistory(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-unlock')        return await _handleCounsellorUnlock(req, res);
-    if (method === 'POST' && pathname === '/api/counsellor-verify-otp')   return await _handleCounsellorVerifyOtp(req, res);
-    if (method === 'POST' && pathname === '/api/counsellor-verify-name')  return await _handleCounsellorVerifyName(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-verify-otp')    return await _handleCounsellorVerifyOtp(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-verify-name')   return await _handleCounsellorVerifyName(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-request-otp')   return await _handleCounsellorRequestOtp(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-pin')   return await _handleCounsellorVerifyPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-set-pin')      return await _handleCounsellorSetPin(req, res);
-    if (method === 'POST' && pathname === '/api/counsellor-reset-otp')    return await _handleCounsellorResetOtp(req, res);
-    if (method === 'POST' && pathname === '/api/counsellor-request-otp')  return await _handleCounsellorRequestOtp(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-reset-pin')    return await _handleCounsellorResetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-chat')          return await _handleCounsellorChat(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-clear-history') return await _handleCounsellorClearHistory(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-summarise')     return await _handleCounsellorSummarise(req, res);
@@ -1436,6 +1685,7 @@ async function _handleRequest(req, res) {
     if (pathname.startsWith('/api/'))                                      return _json(res, 404, { error: 'Unknown API route' });
 
     if (method !== 'GET') { res.writeHead(405); return res.end('Method not allowed'); }
+    if (pathname === '/favicon.ico') { res.writeHead(204); return res.end(); }
     if (pathname === '/') return _serveStatic(res, path.join(__dirname, 'index.html'), req);
 
     const rel      = pathname.slice(1);
@@ -1462,12 +1712,7 @@ async function _handleRequest(req, res) {
 }
 
 
-// Prune rate-limiter Maps (prevent unbounded growth at 20k unique IPs)
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, e] of _ipRL)    if (now > e.reset)    _ipRL.delete(ip);
-  for (const [ip, e] of _loginRL) if (now > e.reset) _loginRL.delete(ip);
-}, 5 * 60 * 1000).unref();
+// (Rate-limiter Map sweep is at the top of the file, after the RL declarations.)
 
 /* ══════════════════════════════════════════════════════════════════
    START
@@ -1482,6 +1727,13 @@ async function _handleDashboardInsights(req, res) {
   const auth  = req.headers['authorization'] || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return _json(res, 401, { error: 'Unauthorized' });
+
+  // Validate token against DB — previously only checked token was non-empty,
+  // meaning any string in Authorization header would pass. Actual session
+  // verification is required to prevent unauthorized OpenAI API spend.
+  const dashUser = require('./dashboard-db.js').verifyToken(token);
+  if (!dashUser) return _json(res, 401, { error: 'Unauthorized' });
+
   if (!OPENAI_KEY) return _json(res, 503, { error: 'OpenAI not configured on this server.' });
 
   let body;
@@ -1493,8 +1745,11 @@ async function _handleDashboardInsights(req, res) {
 
   try {
     const upstream = await _openaiReq('/v1/chat/completions', {
-      model: CHAT_MODEL, max_tokens: 900, temperature: 0.5,
-      messages: [{ role: 'user', content: prompt }],
+      model: AI_MODEL, max_tokens: 900, temperature: 0.4,
+      messages: [
+        { role: 'system', content: 'You are a concise education analyst. Respond ONLY with valid JSON — no markdown, no backticks, no preamble.' },
+        { role: 'user', content: prompt },
+      ],
     });
 
     const raw = await new Promise(r => {

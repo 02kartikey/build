@@ -130,6 +130,20 @@ function init(db) {
       used       INTEGER NOT NULL DEFAULT 0,
       FOREIGN KEY (user_id) REFERENCES dashboard_users(id) ON DELETE CASCADE
     );
+
+    /* ── Analytics cache — pre-computed by background refresher every 5 min ──
+       Keyed by "scope:school_hash" so each school's data is stored independently.
+       Value is a JSON string. background_refreshAnalytics() writes here;
+       getAggregateScores/getSchoolSummaries/getCareerDistribution/getModuleTiming
+       read from here (instant SELECT) instead of running live GROUP BY scans.
+       cache_version allows stale entries from old schemas to be discarded. */
+    CREATE TABLE IF NOT EXISTS analytics_cache (
+      cache_key     TEXT    PRIMARY KEY,
+      cache_value   TEXT    NOT NULL,
+      computed_at   TEXT    NOT NULL,
+      cache_version INTEGER NOT NULL DEFAULT 1
+    );
+    CREATE INDEX IF NOT EXISTS idx_analytics_cache_ts ON analytics_cache(computed_at);
   `);
 
   /* ── ALTER TABLE guards — add columns missing from legacy DBs ── */
@@ -234,9 +248,43 @@ function login(email, password) {
   return { token, user: { id: user.id, name: user.name, email: user.email, role: user.role, schools, permissions } };
 }
 
+/* ── Token verification cache ─────────────────────────────────────
+   Each dashboard request calls verifyToken(). At 500 concurrent users
+   making multiple requests/second this hits SQLite N×500 times/sec.
+   A 30-second in-memory LRU (max 2000 entries) reduces that to ~zero.
+   Cache is invalidated on logout() so session revocation is immediate.
+   In PM2 cluster each worker has its own cache — acceptable because:
+     • Cache entries expire in 30s anyway
+     • A logout() on one worker clears that worker's cache; other workers
+       will re-validate against DB on next request and get null (expired session).
+─────────────────────────────────────────────────────────────────── */
+const _TOKEN_CACHE_TTL  = 30 * 1000;  // 30 seconds
+const _TOKEN_CACHE_MAX  = 2000;
+const _tokenCache       = new Map();  // token → { user, cachedAt }
+
+function _tokenCacheGet(token) {
+  const entry = _tokenCache.get(token);
+  if (!entry) return undefined;
+  if (Date.now() - entry.cachedAt > _TOKEN_CACHE_TTL) { _tokenCache.delete(token); return undefined; }
+  return entry.user;
+}
+
+function _tokenCacheSet(token, user) {
+  if (_tokenCache.size >= _TOKEN_CACHE_MAX) {
+    // Evict the oldest entry (Map preserves insertion order)
+    _tokenCache.delete(_tokenCache.keys().next().value);
+  }
+  _tokenCache.set(token, { user, cachedAt: Date.now() });
+}
+
 function verifyToken(token) {
   if (!_db) throw new Error('dashboard-db not initialised');
   if (!token) return null;
+
+  // Cache hit — skip DB entirely
+  const cached = _tokenCacheGet(token);
+  if (cached !== undefined) return cached;
+
   const now = new Date().toISOString();
   const session = _db.prepare(`
     SELECT s.user_id, u.name, u.email, u.role, u.active, u.permissions
@@ -245,16 +293,19 @@ function verifyToken(token) {
     WHERE s.token = ? AND s.expires_at > ?
   `).get(token, now);
 
-  if (!session || !session.active) return null;
+  if (!session || !session.active) { _tokenCacheSet(token, null); return null; }
   const schools = _db.prepare('SELECT school FROM dashboard_user_schools WHERE user_id = ?')
                      .all(session.user_id).map(r => r.school);
   let permissions = {};
   try { permissions = JSON.parse(session.permissions || '{}'); } catch (_) {}
-  return { id: session.user_id, name: session.name, email: session.email, role: session.role, schools, permissions };
+  const user = { id: session.user_id, name: session.name, email: session.email, role: session.role, schools, permissions };
+  _tokenCacheSet(token, user);
+  return user;
 }
 
 function logout(token) {
   if (!_db) throw new Error('dashboard-db not initialised');
+  _tokenCache.delete(token); // invalidate cache immediately on logout
   _db.prepare('DELETE FROM dashboard_sessions WHERE token = ?').run(token);
 }
 
@@ -418,32 +469,84 @@ function countStudentsBySchool(schools) {
 function getSchoolSummaries(schools) {
   if (!_db) throw new Error('dashboard-db not initialised');
   const list = (Array.isArray(schools) ? schools : [schools]).filter(Boolean);
-  return list.map(school => {
-    const counts  = countStudentsBySchool([school]);
-    const classes = _db.prepare(`
-      SELECT s.class,
-             COUNT(*) AS total,
-             SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)                          AS completed,
-             SUM(CASE WHEN rs.session_id IS NULL AND a.session_id IS NOT NULL THEN 1 ELSE 0 END) AS in_progress
-      FROM students s
-      LEFT JOIN assessments    a  ON a.session_id  = s.session_id
-      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-      WHERE LOWER(s.school) = ?
-      GROUP BY s.class ORDER BY s.class
-    `).all(school.toLowerCase());
-    return { school, ...counts, classes };
-  });
+  if (!list.length) return [];
+  const ph     = list.map(() => '?').join(',');
+  const params = list.map(x => x.toLowerCase());
+
+  // Previously: 1 query per school × 2 (countStudentsBySchool + classes breakdown)
+  // = 2N queries for N schools. Now: a single GROUP BY query for everything.
+  const rows = _db.prepare(`
+    SELECT
+      s.school,
+      s.class,
+      COUNT(*)                                                                   AS total,
+      SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)                AS completed,
+      SUM(CASE WHEN rs.session_id IS NULL AND a.session_id IS NOT NULL THEN 1 ELSE 0 END) AS in_progress,
+      SUM(CASE WHEN a.session_id IS NULL THEN 1 ELSE 0 END)                     AS not_started
+    FROM students s
+    LEFT JOIN assessments    a  ON a.session_id  = s.session_id
+    LEFT JOIN report_summary rs ON rs.session_id = s.session_id
+    WHERE LOWER(s.school) IN (${ph})
+    GROUP BY LOWER(s.school), s.class
+    ORDER BY s.school, s.class
+  `).all(...params);
+
+  // Roll up class rows into per-school summaries in JS
+  const schoolMap = new Map();
+  for (const row of rows) {
+    const key = row.school.toLowerCase();
+    if (!schoolMap.has(key)) {
+      schoolMap.set(key, {
+        school:      row.school,
+        total:       0,
+        completed:   0,
+        in_progress: 0,
+        not_started: 0,
+        classes:     [],
+      });
+    }
+    const s = schoolMap.get(key);
+    s.total       += row.total;
+    s.completed   += row.completed;
+    s.in_progress += row.in_progress;
+    s.not_started += row.not_started;
+    s.classes.push({
+      class:       row.class,
+      total:       row.total,
+      completed:   row.completed,
+      in_progress: row.in_progress,
+    });
+  }
+  return [...schoolMap.values()];
 }
+
+/* Cache for getAllSchools — avoids a GROUP BY full-scan on every admin API call.
+   TTL: 60 seconds. Invalidated on any student upsert/delete via _getAllSchoolsCache=null. */
+let _getAllSchoolsCache   = null;
+let _getAllSchoolsCacheTs = 0;
+const _SCHOOL_CACHE_TTL  = 60 * 1000;
 
 function getAllSchools() {
   if (!_db) throw new Error('dashboard-db not initialised');
-  return _db.prepare(`
+  const now = Date.now();
+  if (_getAllSchoolsCache && (now - _getAllSchoolsCacheTs) < _SCHOOL_CACHE_TTL) {
+    return _getAllSchoolsCache;
+  }
+  const result = _db.prepare(`
     SELECT school, COUNT(*) AS total_students
     FROM students
     WHERE school IS NOT NULL AND school != ''
     GROUP BY LOWER(school)
     ORDER BY school
   `).all();
+  _getAllSchoolsCache   = result;
+  _getAllSchoolsCacheTs = now;
+  return result;
+}
+
+function _invalidateSchoolCache() {
+  _getAllSchoolsCache   = null;
+  _getAllSchoolsCacheTs = 0;
 }
 
 function getStudentBySessionId(sessionId) {
@@ -531,29 +634,58 @@ function getAggregateScores(schools) {
 /**
  * Students whose seaa_status = 'Support Needed', with their domain scores.
  * Used to surface the wellbeing alert panel on every dashboard overview.
+ * Single query with LEFT JOIN — eliminates the previous N+1 pattern.
  */
 function getWellbeingAlerts(schools) {
   if (!_db) throw new Error('dashboard-db not initialised');
   const { ph, params } = _schoolClause(schools);
   if (!params.length) return [];
 
-  const students = _db.prepare(`
+  // Single JOIN fetches students + all their SEA domain rows in one pass.
+  // We then group in JS — far cheaper than N individual prepared-statement calls.
+  const rows = _db.prepare(`
     SELECT s.session_id, s.full_name, s.first_name, s.school, s.class, s.section,
-           s.email, s.gender, rs.seaa_status, rs.fit_score, rs.fit_tier
+           s.email, s.gender, rs.seaa_status, rs.fit_score, rs.fit_tier,
+           se.title AS se_title, se.score AS se_score,
+           se.category AS se_category, se.cat_label AS se_cat_label
     FROM report_summary rs
-    JOIN students s ON s.session_id = rs.session_id
+    JOIN students s      ON s.session_id  = rs.session_id
+    LEFT JOIN report_seaa se ON se.session_id = rs.session_id
     WHERE LOWER(s.school) IN (${ph})
       AND rs.seaa_status = 'Support Needed'
-    ORDER BY rs.fit_score ASC
-    LIMIT 100
+    ORDER BY rs.fit_score ASC, s.session_id, se.key
+    LIMIT 300
   `).all(...params);
 
-  return students.map(stu => {
-    const seaa = _db.prepare(
-      'SELECT title, score, category, cat_label FROM report_seaa WHERE session_id = ?'
-    ).all(stu.session_id);
-    return { ...stu, seaa };
-  });
+  // Group SEAA domain rows back onto their parent student object
+  const map = new Map();
+  for (const row of rows) {
+    if (!map.has(row.session_id)) {
+      map.set(row.session_id, {
+        session_id: row.session_id,
+        full_name:  row.full_name,
+        first_name: row.first_name,
+        school:     row.school,
+        class:      row.class,
+        section:    row.section,
+        email:      row.email,
+        gender:     row.gender,
+        seaa_status: row.seaa_status,
+        fit_score:   row.fit_score,
+        fit_tier:    row.fit_tier,
+        seaa: [],
+      });
+    }
+    if (row.se_title !== null) {
+      map.get(row.session_id).seaa.push({
+        title:     row.se_title,
+        score:     row.se_score,
+        category:  row.se_category,
+        cat_label: row.se_cat_label,
+      });
+    }
+  }
+  return [...map.values()].slice(0, 100);
 }
 
 /**
@@ -622,6 +754,153 @@ function getModuleTiming(schools) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   ANALYTICS CACHE — pre-computed aggregates for dashboard panels
+
+   Problem this solves:
+     Every admin dashboard load triggered 4+ heavy GROUP BY queries:
+     getAggregateScores, getWellbeingAlerts, getCareerDistribution,
+     getModuleTiming, getSchoolSummaries. With 50 schools and 10 000
+     students, each takes 50-300ms. Under concurrent admin load this
+     queues the write thread and delays student assessment saves.
+
+   Solution:
+     A background job (refreshAnalyticsCache) runs every 5 minutes and
+     pre-computes all aggregates for all schools, writing the results as
+     JSON blobs to the analytics_cache table. Dashboard reads then do a
+     single fast PK lookup instead of a full scan.
+
+     Cache version 1. If the schema changes, bump _CACHE_VERSION and
+     all entries are treated as stale on next read.
+
+   Staleness: 5 minutes max. Acceptable — school completion counts
+   don't change faster than that in practice.
+══════════════════════════════════════════════════════════════════ */
+const _CACHE_VERSION = 1;
+const _CACHE_TTL_MS  = 5 * 60 * 1000; // 5 minutes — matches refresh interval
+
+function _cacheKey(scope, schools) {
+  // Stable key: sorted school names joined, so the same set always maps to the same key
+  const sorted = (Array.isArray(schools) ? schools : [schools])
+    .filter(Boolean).map(s => s.toLowerCase()).sort().join('|');
+  return `${scope}:${sorted}`;
+}
+
+function _cacheRead(key) {
+  if (!_db) return null;
+  const row = _db.prepare(
+    'SELECT cache_value, computed_at, cache_version FROM analytics_cache WHERE cache_key = ?'
+  ).get(key);
+  if (!row) return null;
+  if (row.cache_version !== _CACHE_VERSION) return null;
+  if (Date.now() - new Date(row.computed_at).getTime() > _CACHE_TTL_MS) return null;
+  try { return JSON.parse(row.cache_value); } catch { return null; }
+}
+
+function _cacheWrite(key, value) {
+  if (!_db) return;
+  _db.prepare(`
+    INSERT INTO analytics_cache (cache_key, cache_value, computed_at, cache_version)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      cache_value   = excluded.cache_value,
+      computed_at   = excluded.computed_at,
+      cache_version = excluded.cache_version
+  `).run(key, JSON.stringify(value), new Date().toISOString(), _CACHE_VERSION);
+}
+
+/**
+ * Cache-aware wrappers. Each function checks the DB cache first.
+ * On a hit it returns instantly. On a miss it runs the live query and
+ * populates the cache for subsequent requests.
+ * The background refresher calls the underlying _compute* functions
+ * directly so it doesn't depend on the cache itself.
+ */
+function getAggregateScoresCached(schools) {
+  const key    = _cacheKey('agg', schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh = getAggregateScores(schools);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+
+function getSchoolSummariesCached(schools) {
+  const key    = _cacheKey('schools', schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh = getSchoolSummaries(schools);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+
+function getCareerDistributionCached(schools) {
+  const key    = _cacheKey('careers', schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh = getCareerDistribution(schools);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+
+function getModuleTimingCached(schools) {
+  const key    = _cacheKey('timing', schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh = getModuleTiming(schools);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+
+function getCompletionTrendCached(schools, days = 14) {
+  const key    = _cacheKey(`trend_${days}`, schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh  = getCompletionTrend(schools, days);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+
+/**
+ * refreshAnalyticsCache() — called by the background interval in server.js
+ * every 5 minutes. Pre-computes all aggregates for all known schools so
+ * the first dashboard load after any interval is never a cache miss.
+ * Runs inside the write queue (_dbWrite) so it doesn't contend with student writes.
+ */
+function refreshAnalyticsCache() {
+  if (!_db) return;
+  const schools = getAllSchools().map(s => s.school);
+  if (!schools.length) return;
+
+  const allSchoolKey = _cacheKey('agg', schools);
+  _cacheWrite(allSchoolKey,                        getAggregateScores(schools));
+  _cacheWrite(_cacheKey('schools',   schools),     getSchoolSummaries(schools));
+  _cacheWrite(_cacheKey('careers',   schools),     getCareerDistribution(schools));
+  _cacheWrite(_cacheKey('timing',    schools),     getModuleTiming(schools));
+  _cacheWrite(_cacheKey('trend_14',  schools),     getCompletionTrend(schools, 14));
+  _cacheWrite(_cacheKey('wellbeing', schools),     getWellbeingAlerts(schools));
+
+  for (const school of schools) {
+    _cacheWrite(_cacheKey('agg',       [school]),  getAggregateScores([school]));
+    _cacheWrite(_cacheKey('schools',   [school]),  getSchoolSummaries([school]));
+    _cacheWrite(_cacheKey('careers',   [school]),  getCareerDistribution([school]));
+    _cacheWrite(_cacheKey('timing',    [school]),  getModuleTiming([school]));
+    _cacheWrite(_cacheKey('wellbeing', [school]),  getWellbeingAlerts([school]));
+  }
+
+  _db.prepare(
+    'DELETE FROM analytics_cache WHERE computed_at < ?'
+  ).run(new Date(Date.now() - 2 * _CACHE_TTL_MS).toISOString());
+}
+
+function getWellbeingAlertsCached(schools) {
+  const key    = _cacheKey('wellbeing', schools);
+  const cached = _cacheRead(key);
+  if (cached !== null) return cached;
+  const fresh = getWellbeingAlerts(schools);
+  _cacheWrite(key, fresh);
+  return fresh;
+}
+/* ══════════════════════════════════════════════════════════════════
    REMINDERS
 ══════════════════════════════════════════════════════════════════ */
 function logReminder({ studentEmail, sentBy, subject, message }) {
@@ -682,9 +961,10 @@ function getAuditLog({ limit = 200, userId } = {}) {
 ══════════════════════════════════════════════════════════════════ */
 function upsertStudent({ session_id, first_name, last_name, full_name, email, class: cls, section, school, school_state, school_city, age, gender }) {
   if (!_db) throw new Error('dashboard-db not initialised');
-  const now = new Date().toISOString();
-  const sid = session_id || crypto.randomBytes(16).toString('hex');
-  _db.prepare(`
+  const now  = new Date().toISOString();
+  const norm = String(email || '').toLowerCase().trim();
+
+  const doUpsert = (sid) => _db.prepare(`
     INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
@@ -695,13 +975,85 @@ function upsertStudent({ session_id, first_name, last_name, full_name, email, cl
       school_city  = excluded.school_city,   age          = excluded.age,
       gender       = excluded.gender
   `).run(sid, first_name||'', last_name||'', full_name||(first_name+' '+(last_name||'')).trim(),
-         email||'', cls||'', section||'', school||'', school_state||'', school_city||'', age||'', gender||'', now);
-  return sid;
+         norm, cls||'', section||'', school||'', school_state||'', school_city||'', age||'', gender||'', now);
+
+  // EMAIL IS IDENTITY: resolve-and-write atomically so an admin create can't
+  // race a student self-registration (or another admin) into a second row.
+  // The lookup + insert share one transaction; UNIQUE(email) is the backstop.
+  const tx = _db.transaction(() => {
+    let sid = session_id;
+    if (norm) {
+      const existing = _db.prepare('SELECT session_id FROM students WHERE LOWER(email) = ?').get(norm);
+      if (existing) sid = existing.session_id;   // reuse — update in place
+    }
+    if (!sid) sid = crypto.randomBytes(16).toString('hex');
+    doUpsert(sid);
+    return sid;
+  });
+
+  let resultSid;
+  try {
+    resultSid = tx();
+  } catch (e) {
+    // A concurrent insert committed the same email first. Reuse its row.
+    if (norm && /UNIQUE constraint failed: students.email/i.test(String(e.message))) {
+      const row = _db.prepare('SELECT session_id FROM students WHERE LOWER(email) = ?').get(norm);
+      if (row) { _invalidateSchoolCache(); return row.session_id; }
+    }
+    throw e;
+  }
+  _invalidateSchoolCache();
+  return resultSid;
 }
+
+/**
+ * runImportTransaction — bulk import rows in a single SQLite transaction.
+ * Called by dashboard-api._importStudents via _dbWrite so it runs in the
+ * write-queue slot without blocking the event loop.
+ * Returns { imported: N, skipped: M }.
+ */
+function getStudentByEmail(email) {
+  if (!_db || !email) return null;
+  return _db.prepare(
+    'SELECT session_id, full_name, email, school FROM students WHERE LOWER(email) = ? LIMIT 1'
+  ).get(String(email).toLowerCase().trim()) || null;
+}
+
+/**
+ * runImportTransaction — bulk import rows in a single SQLite transaction.
+ * Called by dashboard-api._importStudents via _dbWrite so it runs in the
+ * write-queue slot without blocking the event loop.
+ * Returns { imported: N, skipped: M }.
+ */
+function runImportTransaction(rows) {
+  if (!_db) throw new Error('dashboard-db not initialised');
+  let imported = 0, skipped = 0;
+  // SQLite transaction: all rows committed atomically — no partial imports on crash.
+  const run = _db.transaction(() => {
+    for (const r of rows) {
+      if (!r.first_name && !r.full_name) { skipped++; continue; }
+      try {
+        const fn = r.first_name || (r.full_name || '').split(' ')[0];
+        const ln = r.last_name  || (r.full_name || '').split(' ').slice(1).join(' ');
+        upsertStudent({
+          first_name: fn, last_name: ln,
+          email: r.email||'', class: r.class||r.Class||'', section: r.section||r.Section||'',
+          school: r.school||r.School||'', age: r.age||'', gender: r.gender||'',
+          school_state: r.school_state||'', school_city: r.school_city||'',
+        });
+        imported++;
+      } catch (_) { skipped++; }
+    }
+  });
+  run();
+  return { imported, skipped };
+}
+
 
 function deleteStudent(sessionId) {
   if (!_db) throw new Error('dashboard-db not initialised');
   _db.prepare('DELETE FROM students WHERE session_id = ?').run(sessionId);
+  _invalidateSchoolCache();
 }
 
 function resetStudentAssessment(sessionId) {
@@ -786,9 +1138,34 @@ function upsertRegisteredSchool({ id, name, city, state, active }) {
     if (fields.length) { vals.push(id); _db.prepare(`UPDATE schools_registry SET ${fields.join(', ')} WHERE id = ?`).run(...vals); }
     return id;
   }
-  return _db.prepare(
-    'INSERT OR IGNORE INTO schools_registry (name, city, state, added_at, active) VALUES (?, ?, ?, ?, 1)'
-  ).run(String(name).slice(0, 200), city||'', state||'', new Date().toISOString()).lastInsertRowid;
+
+  // CREATE path. name is UNIQUE COLLATE NOCASE. The old code used
+  // INSERT OR IGNORE, which SILENTLY did nothing when the name already
+  // existed (including a previously-deactivated school or a case variant) —
+  // the UI showed "School added" but no row appeared. Use an upsert that
+  // reactivates/updates on conflict and always returns the real row id.
+  const nm = String(name || '').slice(0, 200).trim();
+  if (!nm) throw new Error('school name required');
+  const now = new Date().toISOString();
+  const info = _db.prepare(`
+    INSERT INTO schools_registry (name, city, state, added_at, active)
+    VALUES (?, ?, ?, ?, 1)
+    ON CONFLICT(name) DO UPDATE SET
+      city   = excluded.city,
+      state  = excluded.state,
+      active = 1
+  `).run(nm, city||'', state||'', now);
+
+  // On a fresh insert lastInsertRowid is the new id; on the conflict-update
+  // path it is unreliable, so resolve the id by name.
+  if (info.changes && info.lastInsertRowid) {
+    // Verify the row actually has this id (INSERT path); if it was an UPDATE,
+    // lastInsertRowid may point elsewhere, so confirm by name.
+    const row = _db.prepare('SELECT id FROM schools_registry WHERE LOWER(name) = LOWER(?)').get(nm);
+    return row ? row.id : info.lastInsertRowid;
+  }
+  const row = _db.prepare('SELECT id FROM schools_registry WHERE LOWER(name) = LOWER(?)').get(nm);
+  return row ? row.id : null;
 }
 
 function deleteRegisteredSchool(id) {
@@ -832,9 +1209,9 @@ module.exports = {
   listUsers, createUser, updateUser, deleteUser, getUserByEmail,
   /* students */
   getStudentsBySchool, getStudentBySessionId,
-  countStudentsBySchool, getSchoolSummaries, getAllSchools, getCompletionTrend,
+  countStudentsBySchool, getAllSchools,
   /* student CRUD */
-  upsertStudent, deleteStudent, resetStudentAssessment, moveStudent,
+  upsertStudent, deleteStudent, resetStudentAssessment, moveStudent, runImportTransaction, getStudentByEmail,
   /* notes & tags */
   addStudentNote, getStudentNotes, deleteStudentNote,
   setStudentTags, getStudentTags,
@@ -846,6 +1223,12 @@ module.exports = {
   listRegisteredSchools, upsertRegisteredSchool, deleteRegisteredSchool,
   /* password reset */
   createPasswordResetToken, consumePasswordResetToken,
-  /* aggregate analytics (new) */
-  getAggregateScores, getWellbeingAlerts, getCareerDistribution, getModuleTiming,
+  /* analytics — cached wrappers (use these in API handlers) */
+  getAggregateScores:    getAggregateScoresCached,
+  getWellbeingAlerts:    getWellbeingAlertsCached,
+  getCareerDistribution: getCareerDistributionCached,
+  getModuleTiming:       getModuleTimingCached,
+  getSchoolSummaries:    getSchoolSummariesCached,
+  getCompletionTrend:    getCompletionTrendCached,
+  refreshAnalyticsCache,
 };

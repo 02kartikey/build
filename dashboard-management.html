@@ -552,8 +552,47 @@ select.ti{cursor:pointer}
 
       <!-- REMINDER ACTIVITY -->
       <div class="section" id="section-reminders">
-        <div class="ph"><div><h1>Reminder Activity</h1><p>Email reminders sent by all counsellors.</p></div></div>
-        <div class="card"><div id="remlog-wrap"><div class="empty"><div class="spinner spd"></div></div></div></div>
+        <div class="ph">
+          <div><h1>Reminder Activity</h1><p>Email reminders sent to students across your schools.</p></div>
+          <div class="ph-r">
+            <button class="btn btn-primary btn-sm" onclick="openMgmtRemModal()">📧 Send Reminder</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <div class="card-title">Reminder Log <span id="remlog-count" style="font-size:12px;color:var(--ink4);font-weight:400;margin-left:6px"></span></div>
+            <input class="ti" type="search" id="remlog-q" placeholder="🔍 Search by email…" style="width:200px" oninput="filterMgmtRemLog()">
+          </div>
+          <div id="remlog-wrap"><div class="empty"><div class="spinner spd"></div></div></div>
+        </div>
+      </div>
+
+      <!-- REMINDER MODAL -->
+      <div class="overlay" id="mgmt-rem-modal">
+        <div class="modal" style="max-width:560px">
+          <div class="modal-head"><div class="modal-title">📧 Send Reminder</div><button class="modal-close" onclick="closeModal('mgmt-rem-modal')">✕</button></div>
+          <div class="modal-body">
+            <div class="form-row"><label class="form-lbl">Send to</label>
+              <select class="ti" id="mgmt-rem-target" style="width:100%">
+                <option value="not_started">All Not Started students</option>
+                <option value="in_progress">All In Progress students</option>
+                <option value="all_pending">All Pending (not completed)</option>
+              </select>
+            </div>
+            <div class="form-row"><label class="form-lbl">Subject</label><input class="ti" id="mgmt-rem-subj" value="Reminder: Complete your NuMind MAPS Assessment" style="width:100%"></div>
+            <div class="form-row"><label class="form-lbl">Message</label><textarea class="ti" id="mgmt-rem-msg" rows="5" style="width:100%;resize:vertical">Dear Student,
+
+This is a reminder to complete your NuMind MAPS assessment. Your career guidance report is waiting for you.
+
+Please log in and complete the assessment at your earliest convenience.
+
+Thank you.</textarea></div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn btn-outline" onclick="closeModal('mgmt-rem-modal')">Cancel</button>
+            <button class="btn btn-primary" id="mgmt-rem-send" onclick="sendMgmtReminder()"><span id="mgmt-rem-lbl">📧 Send</span><span class="spinner isp" id="mgmt-rem-sp"></span></button>
+          </div>
+        </div>
       </div>
 
       <!-- ACTION PLAN -->
@@ -599,7 +638,7 @@ const _charts={};
 async function _api(method,url,body,auth=true){
   const h={'Content-Type':'application/json'};
   if(auth&&_token)h['Authorization']='Bearer '+_token;
-  const at=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';if(at)h['X-App-Token']=at;
+  const _atMeta=document.querySelector('meta[name="app-token"]');const at=_atMeta?(_atMeta.getAttribute('content')||''):(typeof window._APP_TOKEN!=='undefined'?window._APP_TOKEN:'');if(at)h['X-App-Token']=at;
   const opts={method,headers:h};if(body&&method!=='GET')opts.body=JSON.stringify(body);
   const res=await fetch(url,opts);const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(data.error||'HTTP '+res.status);return data;
@@ -631,7 +670,7 @@ async function initApp(){
 }
 
 // ── NAV ──
-const TITLES={overview:['Dashboard','Assessment programme overview'],schools:['School Reports','Detailed breakdown per school'],comparison:['School Comparison','Side-by-side performance metrics'],counsellors:['Counsellors','Assigned counsellor accounts'],atrisk:['At-Risk Students','In progress 3+ days'],reminders:['Reminder Activity','Email reminders by counsellors']};
+const TITLES={overview:['Dashboard','Assessment programme overview'],schools:['School Reports','Detailed breakdown per school'],comparison:['School Comparison','Side-by-side performance metrics'],counsellors:['Counsellors','School-level completion by assigned school'],atrisk:['At-Risk Students','In progress 3+ days without completion'],reminders:['Reminder Activity','Email reminders sent to students'],interventions:['Action Plan','Schools needing attention to hit 80% target']};
 function show(name){
   document.querySelectorAll('.section').forEach(el=>el.classList.remove('active'));document.querySelectorAll('.nav-item').forEach(el=>el.classList.remove('active'));
   const sec=document.getElementById('section-'+name),nav=document.getElementById('nav-'+name);
@@ -867,6 +906,29 @@ async function loadAtRisk(){
   }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
 }
 
+// ── MANAGEMENT SEND REMINDER ──
+function openMgmtRemModal(){openModal('mgmt-rem-modal');}
+async function sendMgmtReminder(){
+  const target=document.getElementById('mgmt-rem-target').value;
+  const subj=document.getElementById('mgmt-rem-subj').value.trim();
+  const msg=document.getElementById('mgmt-rem-msg').value.trim();
+  if(!msg){toast('Message required.','error');return;}
+  setLoad('mgmt-rem-lbl','mgmt-rem-sp','mgmt-rem-send',true);
+  try{
+    const{students}=await _api('GET','/api/dashboard/students?limit=2000');
+    let targets=students;
+    if(target==='not_started')targets=students.filter(s=>s.status==='not_started'&&s.email);
+    else if(target==='in_progress')targets=students.filter(s=>s.status==='in_progress'&&s.email);
+    else targets=students.filter(s=>s.status!=='completed'&&s.email);
+    if(!targets.length){toast('No students match this filter.','error');return;}
+    const{sent,failed}=await _api('POST','/api/dashboard/send-reminder',{students:targets,subject:subj,message:msg});
+    closeModal('mgmt-rem-modal');
+    toast('✅ '+sent+' email'+(sent!==1?'s':'')+' sent'+(failed?', '+failed+' failed':''),'success');
+    loadReminderLog();
+  }catch(e){toast('Error: '+e.message,'error');}
+  finally{setLoad('mgmt-rem-lbl','mgmt-rem-sp','mgmt-rem-send',false);}
+}
+
 // ── REMINDER LOG ──
 let _mgmtRemLog=[];
 async function loadReminderLog(){
@@ -891,6 +953,9 @@ function _mDots(n){let h='<div class="mprog">';for(let i=0;i<4;i++)h+='<div clas
 function _fmtDate(iso){if(!iso)return '—';return new Date(iso).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 function _esc(s){return String(s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 function toast(msg,type=''){const el=document.createElement('div');el.className='toast '+type;el.textContent=msg;document.getElementById('toasts').appendChild(el);setTimeout(()=>el.remove(),4000);}
+function openModal(id){const el=document.getElementById(id);if(el)el.classList.add('open');}
+function closeModal(id){const el=document.getElementById(id);if(el)el.classList.remove('open');}
+function setLoad(lblId,spId,btnId,loading){const l=document.getElementById(lblId),s=document.getElementById(spId),b=document.getElementById(btnId);if(l)l.style.opacity=loading?'0':'1';if(s)s.style.display=loading?'inline-block':'none';if(b)b.disabled=loading;}
 
 // ── BOOTSTRAP ──
 // ══ AI INSIGHTS ══════════════════════════════════════════════
@@ -1090,7 +1155,31 @@ async function loadAggregateMetrics() {
       }
     }
 
-  } catch(e) { console.error('[AggMetrics]', e.message); }
+  } catch(e) { /* aggregate metrics are non-critical — fail silently, overview still shows */ }
+}
+
+// ── ACTION PLAN (Interventions) ──
+async function loadInterventions(){
+  const wrap=document.getElementById('action-below-wrap');if(!wrap)return;
+  wrap.innerHTML='<div class="empty"><div class="spinner spd"></div></div>';
+  try{
+    const{schools}=await _api('GET','/api/dashboard/schools');
+    const below=schools.filter(s=>s.total&&s.completed/s.total<0.8).sort((a,b)=>(a.total?a.completed/a.total:0)-(b.total?b.completed/b.total:0));
+    if(!below.length){wrap.innerHTML='<div class="empty" style="padding:24px"><div class="ei">🎉</div><div class="et">All schools at or above 80% target!</div></div>';return;}
+    wrap.innerHTML='<table class="tbl"><thead><tr><th>School</th><th>Completion</th><th>Needed to reach 80%</th><th>Not Started</th><th>In Progress</th></tr></thead><tbody>'
+      +below.map(s=>{
+        const pct=Math.round(s.completed/(s.total||1)*100);
+        const needed=Math.ceil((s.total||0)*0.8)-s.completed;
+        const col=pct<40?'var(--danger)':pct<60?'var(--warn)':'var(--info)';
+        return '<tr>'
+          +'<td style="font-weight:600;color:var(--ink)">'+_esc(s.school)+'</td>'
+          +'<td><span style="font-size:14px;font-weight:900;color:'+col+'">'+pct+'%</span></td>'
+          +'<td><span style="color:var(--warn);font-weight:700">'+Math.max(0,needed)+' more</span></td>'
+          +'<td style="color:var(--ink4)">'+((s.not_started)||0)+'</td>'
+          +'<td style="color:var(--warn)">'+((s.in_progress)||0)+'</td>'
+          +'</tr>';
+      }).join('')+'</tbody></table>';
+  }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
 }
 
 function _aggBars(rows) {

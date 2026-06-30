@@ -105,6 +105,20 @@ function init(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_otp_email ON student_otps(email);
     CREATE INDEX IF NOT EXISTS idx_otp_exp   ON student_otps(expires_at);
+
+    /* ── OTP stage tokens — persisted across PM2 workers ──────────────
+       After a student verifies their OTP, this short-lived DB-backed token
+       proves the verification happened. Replaces the in-memory Map that
+       broke in PM2 cluster mode (worker A issues token, worker B can't see it).
+       TTL: 15 minutes (same as the old in-memory OTP_VER_TTL). */
+    CREATE TABLE IF NOT EXISTS otp_stage_tokens (
+      token      TEXT PRIMARY KEY,
+      email      TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ost_email ON otp_stage_tokens(email);
+    CREATE INDEX IF NOT EXISTS idx_ost_exp   ON otp_stage_tokens(expires_at);
   `);
 
   /* ── Step 2: ALTER TABLE guard for conversation_id ── */
@@ -161,13 +175,47 @@ function updateQuery(id, { status, adminNote } = {}) {
   _db.prepare(`UPDATE counsellor_queries SET ${fields.join(', ')} WHERE id = ?`).run(...vals);
 }
 
+/* ─── Report cache — keyed by normalised email ──────────────────────
+   getReportByEmail runs 6 synchronous DB queries and is called on
+   every chat message, greeting, summarise, and several unlock paths.
+   A student's report never changes once generated (the DB uses
+   is_fallback guards to protect AI prose). Cache it for the duration
+   of a counsellor session (8h TTL matching the session token TTL).
+   Cache is invalidated when a new report is saved (not exposed here —
+   if needed, call _invalidateReportCache(email) from server.js).
+─────────────────────────────────────────────────────────────────── */
+const _REPORT_CACHE_TTL = 8 * 60 * 60 * 1000; // 8 hours — matches session TTL
+const _REPORT_CACHE_MAX = 500;                  // max students in cache at once
+const _reportCache      = new Map();            // norm_email → { report, cachedAt }
+
+function _reportCacheGet(norm) {
+  const entry = _reportCache.get(norm);
+  if (!entry) return undefined;
+  if (Date.now() - entry.cachedAt > _REPORT_CACHE_TTL) { _reportCache.delete(norm); return undefined; }
+  return entry.report;
+}
+
+function _reportCacheSet(norm, report) {
+  if (_reportCache.size >= _REPORT_CACHE_MAX) {
+    _reportCache.delete(_reportCache.keys().next().value); // evict oldest
+  }
+  _reportCache.set(norm, { report, cachedAt: Date.now() });
+}
+
+function _invalidateReportCache(email) {
+  if (!email) return;
+  _reportCache.delete(String(email).toLowerCase().trim());
+}
+
 /* ─── Report lookup by email ────────────────────────────────────── */
 function getReportByEmail(email) {
   if (!_db) throw new Error('counsellor-db not initialised');
   const norm = String(email || '').toLowerCase().trim();
   if (!norm) return null;
 
-  // LEFT JOIN — works even if report_summary hasn't been generated yet.
+  // Cache hit — skip all 6 DB queries
+  const cached = _reportCacheGet(norm);
+  if (cached !== undefined) return cached;
   // A student who completed sections but whose AI report failed/hasn't run
   // will still be unlocked; Aria will have their raw scores but no prose summaries.
   const student = _db.prepare(`
@@ -189,7 +237,7 @@ function getReportByEmail(email) {
     LIMIT  1
   `).get(norm);
 
-  if (!student) return null;
+  if (!student) { _reportCacheSet(norm, null); return null; }
 
   const personality = _db.prepare(
     `SELECT name, stanine, band FROM report_personality WHERE session_id = ? ORDER BY position`
@@ -213,7 +261,7 @@ function getReportByEmail(email) {
 
   const jp = (v) => { try { return JSON.parse(v); } catch { return null; } };
 
-  return {
+  const result = {
     student: {
       firstName: student.first_name,
       lastName:  student.last_name,
@@ -260,6 +308,8 @@ function getReportByEmail(email) {
     careers,
     session_id: student.session_id,
   };
+  _reportCacheSet(norm, result);
+  return result;
 }
 
 /* ─── Check if student has completed assessment (by email) ──────── */
@@ -268,39 +318,29 @@ function hasCompletedAssessment(email) {
   const norm = String(email || '').toLowerCase().trim();
   if (!norm) return false;
 
-  // Path 1: full report generated
-  const withReport = _db.prepare(`
+  // Single query covers all three original paths:
+  //  · has report_summary row (full completion)
+  //  · has all 4 core section scores (report generation may have failed)
+  //  · has completed_at set OR any assessments row (partial / edge-case)
+  const row = _db.prepare(`
     SELECT 1 FROM students s
-    JOIN   report_summary rs ON rs.session_id = s.session_id
-    WHERE  LOWER(s.email) = ?
-    LIMIT  1
+    LEFT JOIN assessments a      ON a.session_id  = s.session_id
+    LEFT JOIN report_summary rs  ON rs.session_id = s.session_id
+    WHERE LOWER(s.email) = ?
+      AND (
+        rs.session_id IS NOT NULL
+        OR (
+          a.nmap_scores_json    IS NOT NULL AND
+          a.cpi_scores_json     IS NOT NULL AND
+          a.sea_scores_json     IS NOT NULL AND
+          a.daab_va_scores_json IS NOT NULL
+        )
+        OR s.completed_at IS NOT NULL
+        OR a.session_id IS NOT NULL
+      )
+    LIMIT 1
   `).get(norm);
-  if (withReport) return true;
-
-  // Path 2: all 4 section scores saved (report generation may have failed)
-  const withSections = _db.prepare(`
-    SELECT 1 FROM students s
-    JOIN   assessments a ON a.session_id = s.session_id
-    WHERE  LOWER(s.email) = ?
-      AND  a.nmap_scores_json    IS NOT NULL
-      AND  a.cpi_scores_json     IS NOT NULL
-      AND  a.sea_scores_json     IS NOT NULL
-      AND  a.daab_va_scores_json IS NOT NULL
-    LIMIT  1
-  `).get(norm);
-  if (withSections) return true;
-
-  // Path 3: student row exists with any completed assessment data
-  // Catches edge cases where individual section saves succeeded but
-  // the assessments join above fails due to partial data
-  const withCompleted = _db.prepare(`
-    SELECT 1 FROM students s
-    LEFT JOIN assessments a ON a.session_id = s.session_id
-    WHERE  LOWER(s.email) = ?
-      AND  (s.completed_at IS NOT NULL OR a.session_id IS NOT NULL)
-    LIMIT  1
-  `).get(norm);
-  return !!withCompleted;
+  return !!row;
 }
 
 /* ─── Chat history ──────────────────────────────────────────────── */
@@ -563,15 +603,56 @@ function pruneOtps() {
   _db.prepare('DELETE FROM student_otps WHERE expires_at<=? OR used=1').run(cutoff);
 }
 
+/* ─── OTP stage tokens (DB-backed, cluster-safe) ───────────────────
+   Replaces the in-memory _otpVerifiedTokens Map in server.js.
+   Called by server.js after OTP verification succeeds, and then again
+   in /counsellor-set-pin to validate the token before writing the PIN.
+   Single-use: the token is deleted immediately on first successful verify.
+─────────────────────────────────────────────────────────────────── */
+const OTP_STAGE_TTL_MS = 15 * 60 * 1000; // 15 minutes
+
+function issueOtpStageToken(email) {
+  if (!_db) throw new Error('counsellor-db not initialised');
+  const token     = crypto.randomBytes(24).toString('hex');
+  const now       = new Date();
+  const expiresAt = new Date(now.getTime() + OTP_STAGE_TTL_MS).toISOString();
+  const norm      = String(email).toLowerCase().trim();
+  // Clean up any prior unused stage tokens for this email
+  _db.prepare('DELETE FROM otp_stage_tokens WHERE email = ?').run(norm);
+  _db.prepare(
+    'INSERT INTO otp_stage_tokens (token, email, created_at, expires_at) VALUES (?, ?, ?, ?)'
+  ).run(token, norm, now.toISOString(), expiresAt);
+  return token;
+}
+
+function verifyOtpStageToken(token, email) {
+  if (!_db) return false;
+  if (!token || !email) return false;
+  const norm = String(email).toLowerCase().trim();
+  const row  = _db.prepare(
+    'SELECT token FROM otp_stage_tokens WHERE token = ? AND email = ? AND expires_at > ?'
+  ).get(String(token), norm, new Date().toISOString());
+  if (!row) return false;
+  // Single-use: delete immediately
+  _db.prepare('DELETE FROM otp_stage_tokens WHERE token = ?').run(String(token));
+  return true;
+}
+
+function pruneOtpStageTokens() {
+  if (!_db) return;
+  _db.prepare('DELETE FROM otp_stage_tokens WHERE expires_at <= ?').run(new Date().toISOString());
+}
+
 function close() { /* shares DB from db.js — stub for graceful shutdown */ }
 
 module.exports = {
   init,
   saveQuery, listQueries, updateQuery,
-  getReportByEmail, hasCompletedAssessment,
+  getReportByEmail, hasCompletedAssessment, _invalidateReportCache,
   saveMessage, getHistory, getConversations, clearHistory,
   saveConversationSummary, getConversationSummary,
   issueToken, verifyToken, pruneTokens,
+  issueOtpStageToken, verifyOtpStageToken, pruneOtpStageTokens,
   rlCheck, rlPrune,
   hasPinSet, verifyStudentPin, setStudentPin,
   createOtp, verifyOtp, pruneOtps,

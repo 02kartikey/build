@@ -784,7 +784,7 @@ const CHIP_COLORS=['#0f766e','#059669','#2563eb','#d97706','#dc2626'];
 async function _api(method,url,body,auth=true){
   const h={'Content-Type':'application/json'};
   if(auth&&_token)h['Authorization']='Bearer '+_token;
-  const at=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';if(at)h['X-App-Token']=at;
+  const _atMeta=document.querySelector('meta[name="app-token"]');const at=_atMeta?(_atMeta.getAttribute('content')||''):(typeof window._APP_TOKEN!=='undefined'?window._APP_TOKEN:'');if(at)h['X-App-Token']=at;
   const opts={method,headers:h};if(body&&method!=='GET')opts.body=JSON.stringify(body);
   const res=await fetch(url,opts);const data=await res.json().catch(()=>({}));
   if(!res.ok)throw new Error(data.error||'HTTP '+res.status);return data;
@@ -822,6 +822,7 @@ function show(name){
   const sec=document.getElementById('section-'+name),nav=document.getElementById('nav-'+name);
   if(sec)sec.classList.add('active');if(nav)nav.classList.add('active');_curSection=name;
   const[t,s]=TITLES[name]||[name,''];document.getElementById('topbar-title').textContent=t;document.getElementById('topbar-sub').textContent=s;
+  if(name==='students')loadStudents();
   if(name==='atrisk')loadAtRisk();if(name==='pending')loadPending();
   if(name==='followups'){renderFollowUps();document.getElementById('fu-due').valueAsDate=new Date();}
   if(name==='myStats')loadMyStats();if(name==='reminders')loadReminderLog();
@@ -1001,13 +1002,13 @@ async function sendReminders(){
   if(!msg){toast('Enter a message.','error');return;}
   if(!_remTargets.length){toast('No students selected.','error');return;}
   setLoad('rem-lbl','rem-sp','rem-send-btn',true);
-  try{const{sent,failed}=await _api('POST','/api/dashboard/send-reminder',{students:_remTargets,subject:subj,message:msg});toast('✅ '+sent+' email'+(sent!==1?'s':'')+' sent'+(failed?', '+failed+' failed':''),'success');_remTargets=[];document.getElementById('rem-to-display').textContent='Select students from My Students or At-Risk, or send to all pending below.';loadReminderLog();}
+  try{const{sent,failed}=await _api('POST','/api/dashboard/send-reminder',{students:_remTargets,subject:subj,message:msg});toast('✅ '+sent+' email'+(sent!==1?'s':'')+' sent'+(failed?', '+failed+' failed':''),'success');if(sent>0)_bumpRemCounter(sent);_remTargets=[];document.getElementById('rem-to-display').textContent='Select students from My Students or At-Risk, or send to all pending below.';loadReminderLog();}
   catch(e){toast('Error: '+e.message,'error');}finally{setLoad('rem-lbl','rem-sp','rem-send-btn',false);}
 }
 async function sendModalReminder(){
   const subj=document.getElementById('rem-modal-subj').value.trim(),msg=document.getElementById('rem-modal-msg').value.trim();
   if(!msg){toast('Enter a message.','error');return;}setLoad('rem-modal-lbl','rem-modal-sp','rem-modal-send',true);
-  try{const{sent,failed}=await _api('POST','/api/dashboard/send-reminder',{students:_remTargets,subject:subj,message:msg});closeModal('rem-modal');toast('✅ '+sent+' email'+(sent!==1?'s':'')+' sent'+(failed?', '+failed+' failed':''),'success');loadReminderLog();}
+  try{const{sent,failed}=await _api('POST','/api/dashboard/send-reminder',{students:_remTargets,subject:subj,message:msg});closeModal('rem-modal');toast('✅ '+sent+' email'+(sent!==1?'s':'')+' sent'+(failed?', '+failed+' failed':''),'success');if(sent>0)_bumpRemCounter(sent);loadReminderLog();}
   catch(e){toast('Error: '+e.message,'error');}finally{setLoad('rem-modal-lbl','rem-modal-sp','rem-modal-send',false);}
 }
 // FIX: /api/dashboard/reminder-log requires management|admin — counsellors get 403.
@@ -1133,7 +1134,7 @@ async function loadMyStats(){
     ]);
     document.getElementById('ms-students').textContent=stats.total||0;
     document.getElementById('ms-done').textContent=stats.completed||0;
-    document.getElementById('ms-atrisk').textContent=students.filter(s=>s.status==='in_progress'&&s.days_in_progress>=3).length;
+    document.getElementById('ms-atrisk').textContent=students.filter(s=>s.status==='in_progress'&&(Date.now()-new Date(s.registered_at||0).getTime())>=3*86400000).length;
     document.getElementById('ms-reminders').textContent=document.getElementById('rem-count-big')?.textContent||0;
     // Class chart
     const classMap={};students.forEach(s=>{const c=s.class||'?';if(!classMap[c])classMap[c]={t:0,d:0};classMap[c].t++;if(s.status==='completed')classMap[c].d++;});
@@ -1173,7 +1174,7 @@ function applyTemplate(key){const t=TEMPLATES[key];if(!t)return;document.getElem
 
 // ── AT-RISK QUICK LOAD FOR REMINDER ──
 function loadAtRiskForReminder(){
-  const atRisk=_students.filter(s=>s.status==='in_progress'&&(s.days_in_progress||0)>=3);
+  const atRisk=_students.filter(s=>s.status==='in_progress'&&(Date.now()-new Date(s.registered_at||0).getTime())>=3*86400000);
   if(!atRisk.length){toast('No at-risk students found.','error');return;}
   _remTargets=atRisk;
   document.getElementById('rem-to-display').textContent=atRisk.length+' at-risk students';

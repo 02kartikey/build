@@ -1040,7 +1040,7 @@ const CHIP_COLORS=['#7c3aed','#10b981','#3b82f6','#f59e0b','#ef4444'];
 async function _api(method,url,body,auth=true){
   const h={'Content-Type':'application/json'};
   if(auth&&_token)h['Authorization']='Bearer '+_token;
-  const at=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+  const _atMeta=document.querySelector('meta[name="app-token"]');const at=_atMeta?(_atMeta.getAttribute('content')||''):(typeof window._APP_TOKEN!=='undefined'?window._APP_TOKEN:'');
   if(at)h['X-App-Token']=at;
   const opts={method,headers:h};
   if(body&&method!=='GET')opts.body=JSON.stringify(body);
@@ -1081,6 +1081,15 @@ async function initApp(){
     const r=new FileReader();r.onload=ev=>{_parsedRows=parseCsv(ev.target.result);const p=document.getElementById('import-prev');p.style.display='block';p.textContent='✓ '+_parsedRows.length+' rows parsed. Click Import to proceed.';};r.readAsText(file);
   });
   loadOverview();loadStudents();loadUsers();
+  // Pre-load school registry names for user-modal suggestions
+  _api('GET','/api/dashboard/schools-registry').then(({schools})=>{
+    if(schools&&schools.length){
+      const rn=schools.filter(s=>s.active!==0&&s.active!==false).map(s=>s.name);
+      _allSchoolNames=[...new Set([...rn,..._allSchoolNames])].sort();
+    }
+  }).catch(()=>{});
+  // Start 30-second auto-refresh so live student progress shows automatically
+  _startAutoRefresh();
   // Pre-load pending query count for the sidebar badge
   _api('GET','/api/dashboard/queries?limit=1').then(({pending})=>{
     const nb=document.getElementById('queries-nb');
@@ -1115,7 +1124,7 @@ async function loadOverview(){
       _api('GET','/api/dashboard/trend?days=14').catch(()=>({trend:[]})),
       _api('GET','/api/dashboard/students?limit=2000').catch(()=>({students:[]})),
     ]);
-    _schools=schools;_allSchoolNames=schools.map(s=>s.school);
+    _schools=schools;{const stuNames=schools.map(s=>s.school);_allSchoolNames=[...new Set([..._allSchoolNames,...stuNames])].sort();}
     const total=stats.total||0,done=stats.completed||0,prog=stats.in_progress||0,none=stats.not_started||0;
     const pD=total?Math.round(done/total*100):0,pP=total?Math.round(prog/total*100):0;
     document.getElementById('ov-schools').textContent=schools.length;
@@ -1247,8 +1256,27 @@ function sendRiskReminders(){
 let _allSchools=[];
 async function loadSchools(){
   const wrap=document.getElementById('schools-wrap');wrap.innerHTML='<div class="empty"><div class="spinner spd"></div></div>';
-  try{const{schools}=await _api('GET','/api/dashboard/schools');_allSchools=schools;filterSchools();}
-  catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
+  try{
+    // Fetch both student-derived schools AND registry schools (may have 0 students)
+    const [{schools:studentSchools},{schools:regSchools}]=await Promise.all([
+      _api('GET','/api/dashboard/schools'),
+      _api('GET','/api/dashboard/schools-registry').catch(()=>({schools:[]})),
+    ]);
+    // Build a merged list: registry schools as base, student data overlaid
+    const stuMap={};
+    studentSchools.forEach(s=>{stuMap[s.school.toLowerCase()]=s;});
+    const merged=[...studentSchools];
+    regSchools.forEach(r=>{
+      if(r.active!==0&&!stuMap[r.name.toLowerCase()]){
+        merged.push({school:r.name,total:0,completed:0,in_progress:0,not_started:0,classes:[]});
+      }
+    });
+    _allSchools=merged;
+    // Also keep _allSchoolNames in sync
+    const allNames=merged.map(s=>s.school);
+    _allSchoolNames=[...new Set([..._allSchoolNames,...allNames])].sort();
+    filterSchools();
+  }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
 }
 function filterSchools(){
   const wrap=document.getElementById('schools-wrap');
@@ -1342,14 +1370,50 @@ async function openDrawer(sid){
   document.getElementById('dr-rep-btn').style.display=stu.status==='completed'?'':'none';
   drTab(0);
   document.getElementById('d-overlay').classList.add('open');document.body.style.overflow='hidden';
-  // Load report if completed
-  if(stu.status==='completed'){loadDrawerReport(sid);}
-  else{
-    document.getElementById('dr-psych').innerHTML='<div class="empty"><div class="ei">📊</div><div class="et">Assessment not completed</div><div class="es">Scores appear here after all modules are done.</div></div>';
+
+  if(stu.status==='completed'){
+    // Completed: load full psychometric report
+    loadDrawerReport(sid);
+  } else if(stu.status==='in_progress'){
+    // In-progress: show real module progress pulled live from DB via student list data
+    // modules_done is already in the student row from getStudentsBySchool
+    const done=stu.modules_done||0;
+    const total=11;
+    const pct=Math.round(done/total*100);
+    const MODULE_NAMES=['CPI (Interests)','SEA (Wellbeing)','NMAP (Personality)','DAAB: Verbal','DAAB: Perceptual','DAAB: Numerical','DAAB: Language & Spatial','DAAB: Hand & Mechanical','DAAB: Abstract Reasoning','DAAB: Memory','DAAB: Social'];
+    document.getElementById('dr-psych').innerHTML=
+      '<div style="padding:8px 0 16px">'
+      +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+      +'<div style="font-size:14px;font-weight:700;color:var(--ink)">Assessment Progress</div>'
+      +'<div style="font-size:22px;font-weight:900;color:'+(pct>=80?'var(--ok)':pct>=40?'var(--warn)':'var(--brand3)')+'">'+done+'/'+total+'</div>'
+      +'</div>'
+      +'<div style="background:var(--bg2);border-radius:6px;height:8px;overflow:hidden;margin-bottom:16px">'
+      +'<div style="height:100%;background:var(--brand);border-radius:6px;width:'+pct+'%;transition:width .3s"></div></div>'
+      +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">'
+      +MODULE_NAMES.map((m,i)=>{
+        const isDone=i<done;// modules_done is cumulative count; this is approximate order
+        const col=isDone?'var(--ok)':'var(--ink5)';
+        const bg=isDone?'rgba(16,185,129,.08)':'var(--surface2)';
+        const border=isDone?'rgba(16,185,129,.2)':'var(--border)';
+        return '<div style="background:'+bg+';border:1px solid '+border+';border-radius:7px;padding:8px 10px;display:flex;align-items:center;gap:7px">'
+          +'<span style="font-size:14px">'+(isDone?'✅':'⏳')+'</span>'
+          +'<span style="font-size:11.5px;color:'+col+';font-weight:'+(isDone?'600':'400')+'">'+_esc(m)+'</span>'
+          +'</div>';
+      }).join('')
+      +'</div>'
+      +'<div style="margin-top:14px;padding:10px 14px;background:rgba(124,58,237,.06);border-radius:8px;font-size:12px;color:var(--ink4);border:1px solid rgba(124,58,237,.12)">'
+      +'📊 Full psychometric scores and AI report will appear here once the student completes all '+total+' modules.'
+      +'</div></div>';
+    document.getElementById('dr-career').innerHTML='<div class="empty"><div class="ei">🎯</div><div class="et">'+done+' of '+total+' modules done</div><div class="es">Career fit data available after completion.</div></div>';
+    document.getElementById('dr-report').innerHTML='<div class="empty"><div class="ei">📄</div><div class="et">'+done+' of '+total+' modules done</div><div class="es">AI report generates automatically after all modules complete.</div></div>';
+  } else {
+    // Not started
+    document.getElementById('dr-psych').innerHTML='<div class="empty"><div class="ei">📊</div><div class="et">Not started yet</div><div class="es">Student has registered but not begun the assessment.</div></div>';
     document.getElementById('dr-career').innerHTML='<div class="empty"><div class="ei">🎯</div><div class="et">No career data yet</div></div>';
     document.getElementById('dr-report').innerHTML='<div class="empty"><div class="ei">📄</div><div class="et">No AI report yet</div></div>';
   }
-  // notes + reminders in parallel
+
+  // notes + reminders always load
   _api('GET','/api/dashboard/students/'+sid+'/notes').then(({notes,tags})=>{_curStuTags=tags||[];_renderNotes(notes||[]);_renderTags();}).catch(()=>{});
   _api('GET','/api/dashboard/students/'+sid+'/reminders').then(({log})=>{
     const r=log||[];document.getElementById('dr-rems').innerHTML=r.length?r.map(rem=>'<div style="padding:10px 0;border-bottom:1px solid var(--border)"><div style="font-size:13px;color:var(--ink2)">'+_esc(rem.subject||'Reminder')+'</div><div style="font-size:11px;color:var(--ink5);margin-top:3px">'+_fmtDate(rem.sent_at)+' · '+_esc(rem.sent_by_name||'User')+'</div></div>').join(''):'<div class="empty" style="padding:24px"><div class="et">No reminders sent yet</div></div>';
@@ -1532,15 +1596,21 @@ function exportCsv(){const school=document.getElementById('stu-school').value,cl
 // ── SCHOOL REGISTRY ──
 async function loadSchoolsReg(){
   const wrap=document.getElementById('schools-reg-wrap');wrap.innerHTML='<div class="empty"><div class="spinner spd"></div></div>';
-  try{const{schools}=await _api('GET','/api/dashboard/schools-registry');if(!schools.length){wrap.innerHTML='<div class="empty"><div class="ei">🏫</div><div class="et">No schools registered</div><div class="es">Add schools so counsellors can be assigned before students register.</div></div>';return;}
-    wrap.innerHTML='<table class="tbl"><thead><tr><th>School Name</th><th>City</th><th>State</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+schools.map(s=>'<tr><td style="font-size:13px;font-weight:600;color:var(--ink)">'+_esc(s.name)+'</td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.city||'—')+'</td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.state||'—')+'</td><td><span class="badge '+(s.active?'b-active':'b-inactive')+'">'+(s.active?'Active':'Inactive')+'</span></td><td><button class="btn btn-outline btn-xs" onclick="editSchoolReg('+s.id+')" data-name="'+_esc(s.name)+'" data-city="'+_esc(s.city||'')+'" data-state="'+_esc(s.state||'')+'">✏ Edit</button> <button class="btn btn-danger btn-xs" onclick="confirmDelSchReg('+s.id+')" data-name="'+_esc(s.name)+'">🗑</button></td></tr>').join('')+'</tbody></table>';
+  try{const{schools}=await _api('GET','/api/dashboard/schools-registry');
+    // Keep _allSchoolNames in sync so user-modal suggestions are always current
+    if(schools&&schools.length){
+      const rn=schools.filter(s=>s.active!==0&&s.active!==false).map(s=>s.name);
+      _allSchoolNames=[...new Set([...rn,..._allSchoolNames])].sort();
+    }
+    if(!schools.length){wrap.innerHTML='<div class="empty"><div class="ei">🏫</div><div class="et">No schools registered</div><div class="es">Add schools so counsellors can be assigned before students register.</div></div>';return;}
+    wrap.innerHTML='<table class="tbl"><thead><tr><th>School Name</th><th>City</th><th>State</th><th>Status</th><th>Actions</th></tr></thead><tbody>'+schools.map(s=>'<tr><td style="font-size:13px;font-weight:600;color:var(--ink)">'+_esc(s.name)+'</td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.city||'—')+'</td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.state||'—')+'</td><td><span class="badge '+(s.active?'b-active':'b-inactive')+'">'+(s.active?'Active':'Inactive')+'</span></td><td><button class="btn btn-outline btn-xs" onclick="editSchoolReg('+s.id+',this)" data-name="'+_esc(s.name)+'" data-city="'+_esc(s.city||'')+'" data-state="'+_esc(s.state||'')+'">✏ Edit</button> <button class="btn btn-danger btn-xs" onclick="confirmDelSchReg('+s.id+',this)" data-name="'+_esc(s.name)+'">🗑</button></td></tr>').join('')+'</tbody></table>';
   }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
 }
 function openSchoolRegModal(){_editSchRegId=null;document.getElementById('sr-title').textContent='🏫 Add School';['sr-name','sr-city','sr-state'].forEach(id=>document.getElementById(id).value='');openModal('school-reg-modal');}
-function editSchoolReg(id){const btn=event.currentTarget;_editSchRegId=id;document.getElementById('sr-title').textContent='✏ Edit School';document.getElementById('sr-name').value=btn.dataset.name||'';document.getElementById('sr-city').value=btn.dataset.city||'';document.getElementById('sr-state').value=btn.dataset.state||'';openModal('school-reg-modal');}
-async function saveSchoolReg(){const name=document.getElementById('sr-name').value.trim();if(!name){toast('School name required.','error');return;}setLoad('sr-lbl','sr-sp','sr-save',true);try{await _api('POST','/api/dashboard/schools-registry',{id:_editSchRegId,name,city:document.getElementById('sr-city').value.trim(),state:document.getElementById('sr-state').value.trim()});toast(_editSchRegId?'School updated.':'School added.','success');closeModal('school-reg-modal');loadSchoolsReg();}catch(e){toast('Error: '+e.message,'error');}finally{setLoad('sr-lbl','sr-sp','sr-save',false);}
+function editSchoolReg(id,btn){_editSchRegId=id;document.getElementById('sr-title').textContent='✏ Edit School';document.getElementById('sr-name').value=btn.dataset.name||'';document.getElementById('sr-city').value=btn.dataset.city||'';document.getElementById('sr-state').value=btn.dataset.state||'';openModal('school-reg-modal');}
+async function saveSchoolReg(){const name=document.getElementById('sr-name').value.trim();if(!name){toast('School name required.','error');return;}setLoad('sr-lbl','sr-sp','sr-save',true);try{await _api('POST','/api/dashboard/schools-registry',{id:_editSchRegId,name,city:document.getElementById('sr-city').value.trim(),state:document.getElementById('sr-state').value.trim()});toast(_editSchRegId?'School updated.':'School added.','success');if(!_allSchoolNames.includes(name))_allSchoolNames=[...new Set([..._allSchoolNames,name])].sort();closeModal('school-reg-modal');loadSchoolsReg();}catch(e){toast('Error: '+e.message,'error');}finally{setLoad('sr-lbl','sr-sp','sr-save',false);}
 }
-function confirmDelSchReg(id){const name=event.currentTarget.dataset.name||String(id);document.getElementById('cf-title').textContent='Delete "'+name+'"?';document.getElementById('cf-body').textContent='Removes from registry. Existing students are unaffected.';document.getElementById('cf-ok').onclick=async()=>{closeConfirm();try{await _api('DELETE','/api/dashboard/schools-registry/'+id);loadSchoolsReg();toast('Deleted.','success');}catch(e){toast('Error: '+e.message,'error');}};document.getElementById('conf-ov').classList.add('open');}
+function confirmDelSchReg(id,btn){const name=(btn&&btn.dataset.name)||String(id);document.getElementById('cf-title').textContent='Delete "'+name+'"?';document.getElementById('cf-body').textContent='Removes from registry. Existing students are unaffected.';document.getElementById('cf-ok').onclick=async()=>{closeConfirm();try{await _api('DELETE','/api/dashboard/schools-registry/'+id);loadSchoolsReg();toast('Deleted.','success');}catch(e){toast('Error: '+e.message,'error');}};document.getElementById('conf-ov').classList.add('open');}
 
 // ── AUDIT LOG ──
 async function loadAuditLog(){
@@ -1644,6 +1714,21 @@ function setLoad(lblId,spId,btnId,loading){const l=document.getElementById(lblId
 function openModal(id){document.getElementById(id).classList.add('open');}
 function closeModal(id){document.getElementById(id).classList.remove('open');}
 function closeConfirm(){document.getElementById('conf-ov').classList.remove('open');}
+
+// ── AUTO-REFRESH — pull fresh student data every 30s so in-progress
+// module counts and status changes show without the admin clicking anything
+let _autoRefreshTimer=null;
+function _startAutoRefresh(){
+  if(_autoRefreshTimer)return;
+  _autoRefreshTimer=setInterval(()=>{
+    // Only refresh if not in a modal and students section is visible
+    const overlay=document.getElementById('d-overlay');
+    if(overlay&&overlay.classList.contains('open'))return;// don't interrupt drawer
+    if(_curSection==='students'||_curSection==='overview'||_curSection==='atrisk'){
+      loadStudents();
+    }
+  },30000);
+}
 
 // ── BOOTSTRAP ──
 

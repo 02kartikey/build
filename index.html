@@ -71,6 +71,20 @@
 </nav>
 
 <script>
+// ── App token reader ──────────────────────────────────────────────
+// The server injects the token as <meta name="app-token"> (NOT as a
+// window._APP_TOKEN global). Every API call from this page must read it
+// from the meta tag. The window._APP_TOKEN fallback is legacy only and is
+// normally empty — relying on it caused blank tokens and 401 Unauthorized.
+function _getAppToken() {
+  try {
+    var m = document.querySelector('meta[name="app-token"]');
+    if (m && m.getAttribute('content')) return m.getAttribute('content');
+  } catch (e) {}
+  return (typeof window._APP_TOKEN !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
+}
+window._getAppToken = _getAppToken;
+
 // Staff login dropdown toggle
 function toggleStaffMenu() {
   const dd  = document.getElementById('staff-dropdown');
@@ -118,7 +132,7 @@ function submitCounsellorQuery() {
   var message = (document.getElementById('cq-message') || {}).value || '';
   if (!name || !email || !message) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  var tok = (typeof window._APP_TOKEN !== 'undefined') ? window._APP_TOKEN : '';
+  var tok = _getAppToken();
   var headers = { 'Content-Type': 'application/json' };
   if (tok) headers['X-App-Token'] = tok;
   fetch('/api/counsellor-query', {
@@ -2175,7 +2189,7 @@ var _sessions=[],_activeSess=null;
 /* Load conversations from server and populate sidebar */
 async function _loadConversationsFromServer(email){
   try{
-    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var tok=_getAppToken();
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
     var res=await fetch('/api/counsellor-conversations?email='+encodeURIComponent(email),{headers:h});
     if(!res.ok) return;
@@ -2200,7 +2214,7 @@ async function _loadConversationsFromServer(email){
 /* Load messages for a specific conversation from server */
 async function _loadConvMessages(email, convId){
   try{
-    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var tok=_getAppToken();
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
     var res=await fetch('/api/counsellor-history?email='+encodeURIComponent(email)+'&conversationId='+encodeURIComponent(convId),{headers:h});
     if(!res.ok) return [];
@@ -2239,7 +2253,7 @@ async function _fireGreeting(convId){
   var msgs=document.getElementById('acp-messages');
   var welc=document.getElementById('acp-welcome');
   try{
-    var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+    var tok=_getAppToken();
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
     var res=await fetch('/api/counsellor-greeting',{
       method:'POST',headers:h,
@@ -2484,7 +2498,7 @@ _acWhenReady(function(){
   if(stored&&stored.email){
     (async function(){
       try{
-        var tok=(typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'';
+        var tok=_getAppToken();
         var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
         var res=await fetch('/api/counsellor-unlock',{method:'POST',headers:h,body:JSON.stringify({email:stored.email})});
         if(!res.ok){_clear();return;}

@@ -332,6 +332,66 @@ function _initDb() {
     `);
   }
 
+  /* ── Email-identity migration ────────────────────────────────────
+     Email is now the student identity. Enforce one row per email with a
+     UNIQUE index. Before adding it, collapse any duplicate-email rows left
+     by the old session_id-only model (admin row + login row for the same
+     student). Keep the row that has a report (rule: "test taken" = report
+     exists); if none has a report, keep the oldest by registered_at. Loser
+     rows are deleted; their child tables cascade via FK.
+  ─────────────────────────────────────────────────────────────────── */
+  try {
+    const dupEmails = _db.prepare(`
+      SELECT LOWER(TRIM(email)) AS em, COUNT(*) AS n
+      FROM students
+      WHERE email IS NOT NULL AND TRIM(email) <> ''
+      GROUP BY LOWER(TRIM(email))
+      HAVING n > 1
+    `).all();
+
+    if (dupEmails.length) {
+      process.stderr.write('[WARN]  [DB] Email migration: collapsing ' + dupEmails.length + ' duplicate-email group(s).\n');
+      _db.pragma('foreign_keys = ON'); // ensure child rows cascade on delete
+      const dedupeTx = _db.transaction(() => {
+        for (const { em } of dupEmails) {
+          const rows = _db.prepare(`
+            SELECT s.session_id,
+                   s.registered_at,
+                   CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END AS has_report
+            FROM students s
+            LEFT JOIN report_summary rs ON rs.session_id = s.session_id
+            WHERE LOWER(TRIM(s.email)) = ?
+          `).all(em);
+
+          // Winner: report first, then oldest registered_at.
+          rows.sort((a, b) => {
+            if (a.has_report !== b.has_report) return b.has_report - a.has_report;
+            return String(a.registered_at || '').localeCompare(String(b.registered_at || ''));
+          });
+          const keep = rows[0];
+          for (const r of rows) {
+            if (r.session_id === keep.session_id) continue;
+            _db.prepare(`DELETE FROM students WHERE session_id = ?`).run(r.session_id);
+          }
+          process.stderr.write('[INFO]  [DB] email "' + em + '": kept ' + keep.session_id +
+            ' (report=' + keep.has_report + '), removed ' + (rows.length - 1) + ' duplicate(s).\n');
+        }
+      });
+      dedupeTx();
+    }
+
+    // Normalise emails to a canonical lowercase/trim form so the UNIQUE
+    // index treats "A@x.com" and "a@x.com " as the same identity.
+    _db.exec(`UPDATE students SET email = LOWER(TRIM(email)) WHERE email IS NOT NULL AND email <> LOWER(TRIM(email))`);
+
+    // Enforce uniqueness. Partial index so legacy rows with blank email
+    // (should not exist, but be safe) don't all collide on ''.
+    _db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_students_email
+              ON students(email) WHERE email IS NOT NULL AND email <> ''`);
+  } catch (e) {
+    process.stderr.write('[ERROR] [DB] Email-identity migration failed: ' + e.message + '\n');
+  }
+
   /* ── Drop superseded "reports" table from very old deployments ─ */
   try {
     const legacyExists = _db.prepare(
@@ -530,22 +590,52 @@ function _prep() {
 ══════════════════════════════════════════════════════════════════ */
 
 function saveRegistration(student, sessionId) {
-  const s = _prep();
-  s.upsertStudent.run({
-    session_id:    sessionId,
-    first_name:    student.firstName    || '',
-    last_name:     student.lastName     || '',
-    full_name:     student.fullName     || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
-    class:         student.class        || '',
-    section:       student.section      || '',
-    school:        student.school       || '',
-    school_state:  student.schoolState  || '',
-    school_city:   student.schoolCity   || '',
-    age:           String(student.age   || ''),
-    gender:        student.gender       || '',
-    email:         student.email        || '',
-    registered_at: student.registeredAt || new Date().toISOString(),
+  const db = _initDb();
+  const s  = _prep();
+  const norm = String(student.email || '').toLowerCase().trim();
+
+  // Atomic find-or-create keyed on email. Running the lookup and the insert
+  // inside ONE transaction (plus the UNIQUE(email) backstop) removes the
+  // check-then-write race: under 500 concurrent users, two first-time
+  // registrations for the same email can't both insert. The loser reuses
+  // the winner's row instead of throwing a 500.
+  const result = db.transaction(() => {
+    if (norm) {
+      const existing = s.getStudentByEmail.get(norm);
+      if (existing) {
+        // Identity already exists — reuse it. Never overwrite, never dupe.
+        return { session_id: existing.session_id, existing: true, testTaken: existing.fit_tier != null };
+      }
+    }
+    s.upsertStudent.run({
+      session_id:    sessionId,
+      first_name:    student.firstName    || '',
+      last_name:     student.lastName     || '',
+      full_name:     student.fullName     || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+      class:         student.class        || '',
+      section:       student.section      || '',
+      school:        student.school       || '',
+      school_state:  student.schoolState  || '',
+      school_city:   student.schoolCity   || '',
+      age:           String(student.age   || ''),
+      gender:        student.gender       || '',
+      email:         norm,
+      registered_at: student.registeredAt || new Date().toISOString(),
+    });
+    return { session_id: sessionId, existing: false, testTaken: false };
   });
+
+  try {
+    return result();
+  } catch (e) {
+    // UNIQUE(email) collision from a simultaneous insert that committed first.
+    // Resolve to the row that won and reuse it — this is success, not error.
+    if (norm && /UNIQUE constraint failed: students.email/i.test(String(e.message))) {
+      const row = s.getStudentByEmail.get(norm);
+      if (row) return { session_id: row.session_id, existing: true, testTaken: row.fit_tier != null };
+    }
+    throw e;
+  }
 }
 
 function saveSection(sessionId, moduleKey, payload) {
@@ -694,6 +784,29 @@ function getSectionProgress(sessionId) {
 function getStudentByEmail(email) {
   if (!email) return null;
   return _prep().getStudentByEmail.get(String(email).toLowerCase().trim()) || null;
+}
+
+/* ── Email-identity resolver ──────────────────────────────────────
+   The single source of truth for "what session_id owns this email".
+   Used by /api/save-registration (student login/registration) so that:
+     • email already in DB  → reuse that row's session_id (no new row)
+     • email not in DB      → caller creates one row with the given sid
+   Returns { session_id, exists, testTaken }.
+     testTaken === true  ⇢ a report exists in the backend for this email
+                          (this is the ONLY definition of "test taken").
+   Because students.email is UNIQUE, there is at most one row per email,
+   so this is unambiguous and race-safe (the UNIQUE index is the backstop
+   if two requests try to insert the same email simultaneously).
+─────────────────────────────────────────────────────────────────── */
+function resolveStudentByEmail(email) {
+  const norm = String(email || '').toLowerCase().trim();
+  if (!norm) return { session_id: null, exists: false, testTaken: false };
+  const row = _prep().getStudentByEmail.get(norm);
+  if (!row) return { session_id: null, exists: false, testTaken: false };
+  // getStudentByEmail LEFT JOINs report_summary; fit_tier is non-null only
+  // when a report row exists. That is our "report exists in backend" test.
+  const testTaken = row.fit_tier != null;
+  return { session_id: row.session_id, exists: true, testTaken };
 }
 
 function close() {
@@ -876,6 +989,11 @@ function _deriveSummary(personality, aptitude, interests, seaa, careers, report)
 /* ══════════════════════════════════════════════════════════════════
    EXPORTS
 ══════════════════════════════════════════════════════════════════ */
+function getStudentBySessionId(sessionId) {
+  if (!sessionId) return null;
+  return _prep().getStudent.get(String(sessionId)) || null;
+}
+
 module.exports = {
   _initDb,
   saveRegistration,
@@ -884,6 +1002,8 @@ module.exports = {
   getFullReport,
   getSectionProgress,
   getStudentByEmail,
+  resolveStudentByEmail,
+  getStudentBySessionId,
   close,
   MODULES,
 };
