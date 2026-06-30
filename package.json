@@ -4,7 +4,7 @@
   "description": "NuMind MAPS — Multi-dimensional Assessment & Profiling System",
   "main": "server.js",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node server.js",
@@ -26,7 +26,6 @@
     "better-sqlite3": "^9.4.3",
     "dotenv": "^16.4.5"
   },
-  "devDependencies": {},
-  "license": "UNLICENSED",
-  "private": true
+  "private": true,
+  "license": "UNLICENSED"
 }
