@@ -78,7 +78,7 @@ function _acEl(id) { return document.getElementById(id); }
 
 /* ── Email unlock ───────────────────────────────────────────────── */
 /* ── Auth state for multi-step lock flow ───────────────────────── */
-const _LOCK = { email: null, step: null, otpToken: null, purpose: 'register', _isReset: false };
+const _LOCK = { email: null, step: null, otpToken: null, purpose: 'register' };
 
 /* ── Step manager (DOM-based) ───────────────────────────────────── */
 function _makeLockInput(id, type, placeholder, inputmode, onEnter) {
@@ -86,7 +86,7 @@ function _makeLockInput(id, type, placeholder, inputmode, onEnter) {
   el.id = id; el.type = type; el.placeholder = placeholder;
   if (inputmode) el.setAttribute('inputmode', inputmode);
   el.maxLength = 6;
-  el.style.cssText = 'width:100%;padding:12px 14px;background:rgba(255,255,255,0.07);border:1.5px solid rgba(255,255,255,0.15);border-radius:10px;color:#fff;font-size:20px;letter-spacing:0.3em;text-align:center;box-sizing:border-box;outline:none;margin-bottom:10px';
+  el.style.cssText = 'width:100%;padding:12px 14px;background:#faf9fc;border:1.5px solid var(--bdr2, #ccc8bf);border-radius:10px;color:#3c3454;font-size:20px;letter-spacing:0.3em;text-align:center;box-sizing:border-box;outline:none;margin-bottom:10px';
   if (onEnter) el.addEventListener('keydown', function(e){ if (e.key === 'Enter') onEnter(); });
   return el;
 }
@@ -105,11 +105,9 @@ function _makeLockErr(id) {
 
 function _lockStep(step, opts) {
   _LOCK.step = step;
-  if (opts && opts.purpose) _LOCK.purpose = opts.purpose;
-  if (opts && typeof opts.isReset !== 'undefined') _LOCK._isReset = !!opts.isReset;
   var card = _acEl('acp-lock-card');
   if (!card) return;
-  ['acp-step-otp','acp-step-pin','acp-step-set-pin'].forEach(function(id){
+  ['acp-step-pin','acp-step-set-pin','acp-step-otp'].forEach(function(id){
     var el = document.getElementById(id); if (el) el.parentNode.removeChild(el);
   });
   var container = card.querySelector('.nc-lock-form') || card;
@@ -134,34 +132,21 @@ function _lockStep(step, opts) {
 
   if (step === 'otp') {
     wrap.id = 'acp-step-otp';
-    var odesc = document.createElement('p');
-    odesc.textContent = 'Enter the 6-digit code we emailed you.';
-    odesc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px';
-    wrap.appendChild(odesc);
-    wrap.appendChild(_makeLockInput('acp-otp-input', 'text', '6-digit code', 'numeric', _acSubmitOtp));
+    var descOtp = document.createElement('p');
+    descOtp.textContent = 'We sent a 6-digit code to your email. Enter it below to continue.';
+    descOtp.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px;line-height:1.5';
+    wrap.appendChild(descOtp);
+    wrap.appendChild(_makeLockInput('acp-otp-input', 'text', '\u2022\u2022\u2022\u2022\u2022\u2022', 'numeric', _acSubmitOtp));
     wrap.appendChild(_makeLockErr('acp-otp-err'));
     wrap.appendChild(_makeLockBtn('acp-otp-btn', 'Verify Code', 'linear-gradient(135deg,#6d28d9,#7c3aed)', _acSubmitOtp));
-    var rp = document.createElement('p');
-    rp.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0 0 8px';
-    rp.appendChild(document.createTextNode("Didn't get it? "));
+    var p3 = document.createElement('p');
+    p3.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
+    p3.appendChild(document.createTextNode("Didn't get a code? "));
     var resend = document.createElement('a'); resend.href = 'javascript:void(0)';
     resend.textContent = 'Resend'; resend.style.color = '#a78bfa';
     resend.addEventListener('click', _acResendOtp);
-    rp.appendChild(resend);
-    wrap.appendChild(rp);
-    // SMTP-free escape: email delivery can fail silently (the sender is
-    // fire-and-forget). Never trap the student on this screen — let them
-    // verify with their registration details instead and still reach Aria.
-    var esc = document.createElement('p');
-    esc.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
-    esc.appendChild(document.createTextNode('Still no code? '));
-    var altLink = document.createElement('a'); altLink.href = 'javascript:void(0)';
-    altLink.textContent = 'Verify another way'; altLink.style.color = '#a78bfa';
-    altLink.addEventListener('click', function(){
-      if (typeof _acShowVerificationForm === 'function') _acShowVerificationForm(_LOCK.email);
-    });
-    esc.appendChild(altLink);
-    wrap.appendChild(esc);
+    p3.appendChild(resend);
+    wrap.appendChild(p3);
     container.appendChild(wrap);
     setTimeout(function(){ var i = document.getElementById('acp-otp-input'); if (i) i.focus(); }, 100);
   }
@@ -240,41 +225,69 @@ async function acUnlock() {
     });
     var data = await resp.json();
 
+    // Whatever the response, we now have something to show — reverse the
+    // spinner state that goToCounsellor()'s fast path may have set (spinner
+    // shown, lock-card hidden). Without this, a set-pin/enter-pin step or an
+    // error gets built correctly into #acp-lock-card, but that container is
+    // still display:none, leaving the student stuck on "Loading…" forever.
+    var lockLoader = _acEl('acp-lock-loading');
+    var lockCard   = _acEl('acp-lock-card');
+    if (lockLoader) lockLoader.style.display = 'none';
+    if (lockCard)   lockCard.style.display   = '';
+
     if (data.unlocked) { _acApplySession(data); return; }
 
     if (btn) { btn.style.display = 'none'; }
     emailEl.disabled = true;
 
-    if (data.step === 'otp-sent') {
-      _LOCK.purpose = data.purpose || 'register';
-      _lockStep('otp', { email: email, purpose: _LOCK.purpose });
-    } else if (data.step === 'set-pin') {
+    if (data.step === 'set-pin') {
       _lockStep('set-pin', { email: email });
     } else if (data.step === 'enter-pin') {
       _lockStep('enter-pin', { email: email });
+    } else if (data.step === 'otp-sent') {
+      _LOCK.purpose = data.purpose || 'register';
+      _lockStep('otp', { email: email });
     } else {
       if (errEl) { errEl.textContent = data.error || 'Something went wrong.'; errEl.style.display = 'block'; }
       emailEl.disabled = false;
       if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Continue \u2192'; }
     }
   } catch (e) {
+    var lockLoader2 = _acEl('acp-lock-loading');
+    var lockCard2   = _acEl('acp-lock-card');
+    if (lockLoader2) lockLoader2.style.display = 'none';
+    if (lockCard2)   lockCard2.style.display   = '';
     if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Continue \u2192'; }
     if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
   }
 }
 
 async function _acResendOtp() {
-  // Re-send OTP for the current purpose (register or reset)
+  // Re-send OTP for the current purpose (register or reset).
   if (!_LOCK.email) return;
-  var endpoint = (_LOCK.purpose === 'reset') ? '/api/counsellor-request-otp' : '/api/counsellor-unlock';
+  var errEl = document.getElementById('acp-otp-err');
+  var resendLink = document.querySelector('#acp-step-otp a');
   try {
-    await fetch(endpoint, {
-      method: 'POST', headers: _acHeaders(),
-      body: JSON.stringify({ email: _LOCK.email }),
-    });
-    var errEl = document.getElementById('acp-otp-err');
-    if (errEl) { errEl.style.color = '#34d399'; errEl.textContent = 'A new code has been sent.'; errEl.style.display = 'block'; }
-  } catch (_) {}
+    if (resendLink) { resendLink.textContent = 'Sending\u2026'; resendLink.style.pointerEvents = 'none'; }
+    if (_LOCK.purpose === 'reset') {
+      await fetch('/api/counsellor-request-otp', {
+        method: 'POST', headers: _acHeaders(),
+        body: JSON.stringify({ email: _LOCK.email }),
+      });
+    } else {
+      // Register-purpose OTPs are sent as a side effect of counsellor-unlock —
+      // re-calling it with the same email resends a fresh code.
+      await fetch('/api/counsellor-unlock', {
+        method: 'POST', headers: _acHeaders(),
+        body: JSON.stringify({ email: _LOCK.email }),
+      });
+    }
+    if (errEl) { errEl.textContent = 'A new code has been sent.'; errEl.style.color = '#34d399'; errEl.style.display = 'block'; }
+  } catch (_) {
+    if (errEl) { errEl.textContent = 'Could not resend — check your connection.'; errEl.style.color = ''; errEl.style.display = 'block'; }
+  } finally {
+    if (resendLink) { resendLink.textContent = 'Resend'; resendLink.style.pointerEvents = ''; }
+  }
 }
 
 async function _acSubmitOtp() {
@@ -359,19 +372,15 @@ async function _acSetPin() {
     // Use reset-pin (overwrites existing) when coming from "forgot PIN" flow
     // Use set-pin (blocks if PIN exists) for first-time setup
     var endpoint = (_LOCK.step === 'set-pin' && _LOCK._isReset) ? '/api/counsellor-reset-pin' : '/api/counsellor-set-pin';
-    var _h = _acHeaders();
-    // Attach the single-use OTP stage token proving email ownership.
-    if (_LOCK.otpToken) _h['X-Counsellor-Otp-Token'] = _LOCK.otpToken;
     var resp = await fetch(endpoint, {
-      method: 'POST', headers: _h,
-      body: JSON.stringify({ email: _LOCK.email, pin: pin }),
+      method: 'POST', headers: _acHeaders(),
+      body: JSON.stringify({ email: _LOCK.email, pin: pin, otpToken: _LOCK.otpToken || undefined }),
     });
     var data = await resp.json();
     if (data.error) {
       if (errEl) { errEl.textContent = data.error; errEl.style.display = 'block'; }
       if (btn) { btn.disabled = false; btn.textContent = 'Set PIN & Enter'; }
       if (data.step === 'enter-pin') _lockStep('enter-pin', { email: _LOCK.email });
-      else if (data.step === 'otp-sent') _lockStep('otp', { email: _LOCK.email, purpose: _LOCK.purpose });
       return;
     }
     if (data.unlocked) {
@@ -391,20 +400,16 @@ async function _acForgotPin() {
   _LOCK.purpose  = 'reset';
   var errEl = document.getElementById('acp-pin-err');
   try {
-    var resp = await fetch('/api/counsellor-request-otp', {
+    await fetch('/api/counsellor-request-otp', {
       method: 'POST', headers: _acHeaders(),
       body: JSON.stringify({ email: _LOCK.email }),
     });
-    var data = await resp.json();
-    if (data.step === 'otp-sent' || data.ok) {
-      _lockStep('otp', { email: _LOCK.email, purpose: 'reset', isReset: true });
-    } else if (errEl) {
-      errEl.textContent = data.error || 'Could not start reset. Try again.';
-      errEl.style.display = 'block';
-    }
   } catch (_) {
-    if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
+    // Fall through regardless — request-otp responds ok:true even on most
+    // failures (anti-enumeration), so a network hiccup here is rare; the
+    // OTP step's own "Resend" link covers the case where no email arrives.
   }
+  _lockStep('otp', { email: _LOCK.email });
 }
 
 function _acApplySession(data) {
@@ -427,14 +432,21 @@ function _acApplySession(data) {
 /* ── Change PIN from within the chat ────────────────────────────── */
 async function acChangePinRequest() {
   if (!_AC.unlocked || !_AC.email) return;
-  // Show set-pin form directly — no OTP needed.
-  // Server confirms report exists before saving the new PIN.
-  _LOCK.email = _AC.email; _LOCK._isReset = true;
+  _LOCK.email = _AC.email; _LOCK._isReset = true; _LOCK.purpose = 'reset';
   var chat = document.getElementById('acp-chat');
   var lock = document.getElementById('acp-lock');
   if (chat) chat.style.display = 'none';
   if (lock) lock.style.display = '';
-  _lockStep('set-pin', { email: _AC.email });
+  // Server now requires OTP verification before any PIN reset when SMTP is
+  // configured — even for an already-authenticated student. Request the
+  // code, then show the OTP step (not set-pin directly, which would 401).
+  try {
+    await fetch('/api/counsellor-request-otp', {
+      method: 'POST', headers: _acHeaders(),
+      body: JSON.stringify({ email: _AC.email }),
+    });
+  } catch (_) {}
+  _lockStep('otp', { email: _AC.email });
 }
 window.acChangePinRequest = acChangePinRequest;
 
@@ -851,23 +863,48 @@ function _acRenderReportPanel() {
   const el = document.getElementById('ac-report-panel-body');
   if (!el || el.dataset.rendered === '1') return;
   el.dataset.rendered = '1';
-  const fs = _AC.fullScores;
-  const S  = window.S;
-  const rs = _AC.reportSummary;
+  const fs = _AC.fullScores || {};
+  const rs = _AC.reportSummary || {};
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const bar = (w,cls) => `<div class="arp-bar-track"><div class="arp-bar-fill ${cls||''}" style="width:${Math.round(Math.min(100,Math.max(0,w)))}%"></div></div>`;
   let html = '';
 
-  if (rs) {
+  // Status snapshot
+  const statuses = [
+    ['🧠', rs.personality_status, 'Personality'],
+    ['📐', rs.aptitude_status,    'Aptitude'],
+    ['🎯', rs.interest_status,    'Interests'],
+    ['💚', rs.seaa_status,        'Wellbeing'],
+  ].filter(s => s[1]);
+  if (statuses.length) {
+    html += `<div class="arp-section"><div style="display:grid;grid-template-columns:repeat(${statuses.length},1fr);gap:8px">`;
+    html += statuses.map(([ic,v,l]) => `<div style="background:var(--sb2);border-radius:8px;padding:10px;text-align:center"><div style="font-size:15px;margin-bottom:3px">${ic}</div><div style="font-size:10px;color:var(--sbm);margin-bottom:3px">${l}</div><div style="font-size:11px;font-weight:700;color:var(--sbt)">${esc(v)}</div></div>`).join('');
+    html += `</div></div>`;
+  }
+
+  if (rs.fit_score != null || rs.recommended_primary) {
     html += `<div class="arp-section"><div class="arp-head">📊 Overall Result</div>`;
     if (rs.fit_score != null) html += `<div class="arp-kv"><span>Fit Score</span><strong>${Math.round(rs.fit_score)}% <em>${esc(rs.fit_tier||'')}</em></strong></div>`;
     if (rs.recommended_primary) html += `<div class="arp-kv"><span>Best Stream</span><strong>${esc(rs.recommended_primary)}</strong></div>`;
+    if (rs.recommended_alternate) html += `<div class="arp-kv"><span>Alternate</span><strong>${esc(rs.recommended_alternate)}</strong></div>`;
     html += `</div>`;
   }
 
-  const personality = (fs&&fs.personality&&fs.personality.length) ? fs.personality
-    : (S&&S.nmap&&S.nmap.scores&&S.nmap.scores.dims) ? S.nmap.scores.dims : null;
-  if (personality&&personality.length) {
+  const _fitCols = [
+    ['Strong Fit', rs.strong_fit_pathways, 'var(--green)'],
+    ['Emerging Fit', rs.emerging_fit_pathways, 'var(--v2)'],
+    ['Exploratory', rs.exploratory_pathways, 'var(--sbm)'],
+  ].filter(([, arr]) => Array.isArray(arr) && arr.length);
+  if (_fitCols.length) {
+    html += `<div class="arp-section"><div style="display:grid;grid-template-columns:repeat(${_fitCols.length},1fr);gap:10px">`;
+    html += _fitCols.map(([label, arr, col]) =>
+      `<div style="background:var(--sb2);border-radius:9px;padding:10px 12px"><div style="font-size:10px;font-weight:700;color:${col};text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px">${label}</div>${arr.map(p => `<div style="font-size:12px;color:var(--sbt);padding:3px 0;border-bottom:1px solid var(--sbb)">${esc(p)}</div>`).join('')}</div>`
+    ).join('');
+    html += `</div></div>`;
+  }
+
+  const personality = (fs.personality && fs.personality.length) ? fs.personality : null;
+  if (personality) {
     html += `<div class="arp-section"><div class="arp-head">🧠 Personality</div>`;
     html += personality.map(d => {
       const w = Math.round(((typeof d.stanine==='number'?d.stanine:5)-1)/8*100);
@@ -876,7 +913,17 @@ function _acRenderReportPanel() {
     html += `</div>`;
   }
 
-  const interests = (fs&&fs.interests&&fs.interests.length) ? fs.interests : null;
+  const aptitude = (fs.aptitude && fs.aptitude.length) ? fs.aptitude : null;
+  if (aptitude) {
+    html += `<div class="arp-section"><div class="arp-head">📐 Aptitude</div>`;
+    html += aptitude.map(d => {
+      const w = Math.round(((typeof d.stanine==='number'?d.stanine:5)-1)/8*100);
+      return `<div class="arp-bar-row"><span>${esc(d.name||d.label||'')}</span>${bar(w)}<small>${esc(d.band||'')}</small></div>`;
+    }).join('');
+    html += `</div>`;
+  }
+
+  const interests = (fs.interests && fs.interests.length) ? fs.interests : null;
   if (interests) {
     html += `<div class="arp-section"><div class="arp-head">🎯 Interests</div>`;
     html += interests.slice(0,8).map(r => {
@@ -886,7 +933,36 @@ function _acRenderReportPanel() {
     html += `</div>`;
   }
 
-  if (!html) html = `<div style="padding:20px;color:#94a3b8;text-align:center;font-size:13px"><div style="font-size:24px;margin-bottom:8px">📋</div>Ask Aria — she has your full report.</div>`;
+  const seaa = (fs.seaa && fs.seaa.length) ? fs.seaa : null;
+  if (seaa) {
+    html += `<div class="arp-section"><div class="arp-head">💚 Wellbeing</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">`;
+    html += seaa.map(se => `<div style="background:var(--sb2);border-radius:7px;padding:10px;text-align:center"><div style="font-size:10px;color:var(--sbm);margin-bottom:4px">${esc(se.title)}</div><div style="font-size:16px;font-weight:800;color:var(--v2)">${se.score}</div><div style="font-size:10px;color:var(--sbm);margin-top:2px">${esc(se.cat_label||'')}</div></div>`).join('');
+    html += `</div></div>`;
+  }
+
+  const careers = (fs.careers && fs.careers.length) ? fs.careers : null;
+  if (careers) {
+    html += `<div class="arp-section"><div class="arp-head">💼 Career Matches</div>`;
+    html += careers.slice(0,6).map(c => `<div class="arp-kv"><span>${esc(c.career||'')}</span><strong>${c.suitability_pct||0}%</strong></div>`).join('');
+    html += `</div>`;
+  }
+
+  // Narrative sections — the actual written report, previously never sent by
+  // the server at all, so this panel could only ever show numbers.
+  const narratives = [
+    ['📋 Holistic Summary', rs.holistic_summary],
+    ['🧠 Personality Profile', rs.personality_profile],
+    ['📐 Aptitude Profile', rs.aptitude_profile],
+    ['🎯 Interest Profile', rs.interest_profile],
+    ['💡 Internal Motivators', rs.internal_motivators],
+    ['💚 Wellbeing Guidance', rs.wellbeing_guidance],
+    ['🎓 Stream Advice', rs.stream_advice],
+  ].filter(([,v]) => v);
+  if (narratives.length) {
+    html += narratives.map(([t,v]) => `<div class="arp-section"><div class="arp-head">${t}</div><div class="prose-block">${esc(v)}</div></div>`).join('');
+  }
+
+  if (!html) html = `<div style="padding:20px;color:var(--sbm);text-align:center;font-size:13px"><div style="font-size:24px;margin-bottom:8px">📋</div>Ask Aria — she has your full report.</div>`;
   el.innerHTML = html;
 }
 

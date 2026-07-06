@@ -220,7 +220,17 @@ async function doRegister() {
       S.sessionId = data.sessionId;
     }
 
-    showDbStatus(error?'error':'saved', error?'Could not save — continuing anyway ✓':'✓ Details saved!');
+    if (error) {
+      // Do NOT proceed into the assessment on a failed registration save.
+      // S.sessionId is preserved (not regenerated) so the retry below reuses
+      // the same id and will not create a duplicate row once it succeeds.
+      showDbStatus('error', 'Could not save your details. Please check your connection and try again.');
+      if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = '1'; }
+      _registering = false;
+      return;
+    }
+
+    showDbStatus('saved', '✓ Details saved!');
 
     // ── Test-already-taken gate ───────────────────────────────────────
     // testTaken === true means a report already exists in the backend for

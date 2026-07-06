@@ -41,9 +41,14 @@ const _log = (function() {
   var debug = false;
   try { debug = !!localStorage.getItem('numind_debug'); } catch(_) {}
   var noop = function() {};
-  return debug
-    ? { log: _log.log.bind(console,'[NuMind]'), warn: _log.warn.bind(console,'[NuMind]'), error: _log.error.bind(console,'[NuMind]') }
-    : { log: noop, warn: noop, error: noop };
+  return {
+    log:   debug ? console.log.bind(console,'[NuMind]')   : noop,
+    // warn/error stay active regardless of the debug flag — a save
+    // failure must always leave a trace somewhere, not just when a
+    // developer happens to have manually flipped on debug logging.
+    warn:  console.warn.bind(console,'[NuMind]'),
+    error: console.error.bind(console,'[NuMind]'),
+  };
 })();
 
 // Read auth tokens from <meta> tags injected server-side.
@@ -64,13 +69,24 @@ function _getRequestHeaders() {
 
 const DB = {
 
-  async saveRegistration(student, sessionId) {
+  async saveRegistration(student, sessionId, _attempt = 0) {
+    const MAX_RETRIES = 3;
     try {
       const res = await fetch('/api/save-registration', {
         method:  'POST',
         headers: _getRequestHeaders(),
         body:    JSON.stringify({ student, sessionId }),
       });
+      if (res.status === 503 && _attempt < MAX_RETRIES) {
+        // Server's write queue was momentarily saturated — this is a real,
+        // measured condition under load (see load-test results), not a
+        // permanent failure. Retry with the server's own suggested delay.
+        let retryAfterSec = 3;
+        try { const body = await res.clone().json(); if (body?.retry_after) retryAfterSec = body.retry_after; } catch (_) {}
+        _log.warn(`[DB] saveRegistration busy (503), retrying in ${retryAfterSec}s (attempt ${_attempt + 1}/${MAX_RETRIES})`);
+        await new Promise(r => setTimeout(r, retryAfterSec * 1000));
+        return DB.saveRegistration(student, sessionId, _attempt + 1);
+      }
       if (!res.ok) {
         const msg = await res.text();
         _log.error('[DB] saveRegistration HTTP ' + res.status + ':', msg);
@@ -88,18 +104,41 @@ const DB = {
   // Called after each module completes — saves raw answers + scores
   // immediately so data is never lost even if report generation fails.
   // Fire-and-forget: a save failure must never block the assessment flow.
-  saveSection(sessionId, moduleKey, answers, scores, duration) {
-    if (!sessionId) { _log.warn('[DB] saveSection: no sessionId'); return; }
+  // Retries once on a real 503 (write queue busy) before giving up and
+  // surfacing the failure event — a permanent give-up on the very first
+  // busy signal was needlessly pessimistic given this condition is
+  // typically momentary.
+  saveSection(sessionId, moduleKey, answers, scores, duration, _attempt = 0) {
+    const MAX_RETRIES = 2;
+    const fail = (reason) => {
+      _log.warn('[DB] saveSection failed:', moduleKey, sessionId, reason);
+      try {
+        document.dispatchEvent(new CustomEvent('nm:section-save-failed', {
+          detail: { moduleKey, sessionId, reason },
+        }));
+      } catch (_) {}
+    };
+    if (!sessionId) { fail('no sessionId'); return; }
     fetch('/api/save-section', {
       method:  'POST',
       headers: _getRequestHeaders(),
       body: JSON.stringify({ sessionId, moduleKey, answers, scores, duration }),
     })
       .then(r => {
-        if (!r.ok) r.text().then(t => _log.warn('[DB] saveSection HTTP ' + r.status + ':', t));
+        if (r.status === 503 && _attempt < MAX_RETRIES) {
+          r.json().then(body => {
+            const retryAfterSec = body?.retry_after || 3;
+            _log.warn(`[DB] saveSection busy (503) for ${moduleKey}, retrying in ${retryAfterSec}s`);
+            setTimeout(() => {
+              DB.saveSection(sessionId, moduleKey, answers, scores, duration, _attempt + 1);
+            }, retryAfterSec * 1000);
+          }).catch(() => fail('HTTP 503 (unparseable body)'));
+          return;
+        }
+        if (!r.ok) r.text().then(t => fail('HTTP ' + r.status + ': ' + t));
         else _log.log('[DB] Section saved:', moduleKey, sessionId);
       })
-      .catch(e => _log.warn('[DB] saveSection fetch failed:', e.message));
+      .catch(e => fail('network: ' + e.message));
   },
 
   // Kept as a stub for callers that still invoke it. Completion is now
