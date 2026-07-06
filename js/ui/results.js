@@ -19,12 +19,24 @@ import { renderAIReport } from '../ai/render.js';
 function buildResults() {
   const cpi=S.cpi.scores, sea=S.sea.scores, st=S.student;
 
+  // Safety guard: scores must exist before rendering.
+  // If missing, still fire generateAIReport so the report gets saved.
+  if (!cpi || !sea) {
+    console.warn('[buildResults] scores not ready — skipping DOM render');
+    setTimeout(function() { try { generateAIReport(); } catch(e) {} }, 300);
+    return;
+  }
+
+  // Safe accessor for sea.cls domain cat (defaults to 'A' if missing)
+  const seaCat = function(d) { return (sea.cls && sea.cls[d]) ? (sea.cls&&sea.cls[d]?sea.cls[d].cat:'A') : 'A'; };
+  const seaLvl = function(d) { return (sea.cls && sea.cls[d]) ? (sea.cls&&sea.cls[d]?sea.cls[d].level:'Excellent') : 'Excellent'; };
+
   document.getElementById('res-name').textContent = st.fullName;
   document.getElementById('res-meta').textContent = st.class+(st.section?' '+st.section:'')+' · '+st.school+(st.schoolLocation?' · '+st.schoolLocation:'');
   document.getElementById('res-date').textContent = 'Completed '+new Date().toLocaleDateString('en-IN',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
 
   // CPI bars
-  document.getElementById('r-cpi-bars').innerHTML = cpi.ranked.map(a=>{
+  document.getElementById('r-cpi-bars').innerHTML = (cpi.ranked||[]).map(a=>{
     const bc=a.level==='Strong'?'lvl-strong':a.level==='Moderate'?'lvl-moderate':'lvl-low';
     return `<div class="bar-row">
       <div class="bar-lbl">${a.label}</div>
@@ -104,10 +116,11 @@ function buildResults() {
 }
 
 function buildInterp(cpi, sea) {
-  const top=cpi.top3[0];
-  const emoOk=['A','B'].includes(sea.cls.E.cat);
-  const socOk=['A','B'].includes(sea.cls.S.cat);
-  const acaOk=['A','B'].includes(sea.cls.A.cat);
+  const seaCat=(d)=>(sea.cls&&sea.cls[d])?sea.cls[d].cat:'A';
+  const top=(cpi.top3&&cpi.top3[0])||{label:'—',score:0,level:'—'};
+  const emoOk=['A','B'].includes(seaCat('E'));
+  const socOk=['A','B'].includes(seaCat('S'));
+  const acaOk=['A','B'].includes(seaCat('A'));
   const badCount=[emoOk,socOk,acaOk].filter(x=>!x).length;
 
   let adjustMsg, adjustCls;
@@ -116,7 +129,7 @@ function buildInterp(cpi, sea) {
   else if(badCount===2) { adjustMsg='Two areas could use some focused support.'; adjustCls='cls-D'; }
   else                  { adjustMsg='All three areas would benefit from some support.'; adjustCls='cls-E'; }
 
-  let narrative = `Your strongest career interest is <strong>${top.label}</strong> (score: ${top.score}/20 — ${top.level}), with great secondary interest in <strong>${cpi.top3[1].label}</strong> and <strong>${cpi.top3[2].label}</strong>. `;
+  let narrative = `Your strongest career interest is <strong>${top.label}</strong> (score: ${top.score}/20 — ${top.level}), with great secondary interest in <strong>${(cpi.top3[1]||{label:'—'}).label}</strong> and <strong>${(cpi.top3[2]||{label:'—'}).label}</strong>. `;
   if (badCount===0) {
     narrative += `Your SEL readiness is healthy across all three dimensions — that's a fantastic foundation. You're set up to chase your interests with real confidence! 💪`;
   } else {
@@ -128,9 +141,9 @@ function buildInterp(cpi, sea) {
   }
 
   const notes=[];
-  if(!emoOk) notes.push({cls:'cls-E',icon:'💙',title:'Emotional Support Could Help',msg:`Your emotional score is ${sea.domScores.E}/20 (Category ${sea.cls.E.cat}). Talking to a counsellor or a trusted teacher about any stress or worries at school can make a real difference.`});
-  if(!socOk) notes.push({cls:'cls-D',icon:'🤝',title:'Building Social Connections',msg:`Your social score is ${sea.domScores.S}/20 (Category ${sea.cls.S.cat}). Joining clubs, group activities or team projects can be a great way to feel more connected at school.`});
-  if(!acaOk) notes.push({cls:'cls-D',icon:'📚',title:'Academic Engagement Tip',msg:`Your academic score is ${sea.domScores.A}/20 (Category ${sea.cls.A.cat}). Trying different study strategies or asking a teacher for extra help could really boost your confidence.`});
+  if(!emoOk) notes.push({cls:'cls-E',icon:'💙',title:'Emotional Support Could Help',msg:`Your emotional score is ${sea.domScores.E}/20 (Category ${seaCat('E')}). Talking to a counsellor or a trusted teacher about any stress or worries at school can make a real difference.`});
+  if(!socOk) notes.push({cls:'cls-D',icon:'🤝',title:'Building Social Connections',msg:`Your social score is ${sea.domScores.S}/20 (Category ${seaCat('S')}). Joining clubs, group activities or team projects can be a great way to feel more connected at school.`});
+  if(!acaOk) notes.push({cls:'cls-D',icon:'📚',title:'Academic Engagement Tip',msg:`Your academic score is ${sea.domScores.A}/20 (Category ${seaCat('A')}). Trying different study strategies or asking a teacher for extra help could really boost your confidence.`});
   if(badCount===0) notes.push({cls:'cls-A',icon:'✅',title:'You\'re Well Adjusted!',msg:'Healthy scores across all three school dimensions. Keep up the great work — you\'re in a brilliant position to explore your future!'});
 
   document.getElementById('r-interp').innerHTML = `
@@ -138,12 +151,12 @@ function buildInterp(cpi, sea) {
       <div class="iscard">
         <div class="eyebrow">Your Top Career Interest</div>
         <div class="iscard-title">${top.label}</div>
-        <div class="iscard-sub">Score: ${top.score}/20 · ${top.level}<br>2nd: ${cpi.top3[1].label} · 3rd: ${cpi.top3[2].label}</div>
+        <div class="iscard-sub">Score: ${top.score}/20 · ${top.level}<br>2nd: ${(cpi.top3[1]||{label:'—'}).label} · 3rd: ${(cpi.top3[2]||{label:'—'}).label}</div>
       </div>
       <div class="iscard">
         <div class="eyebrow">SEL Readiness Summary</div>
         <div class="iscard-title"><span class="bar-bdg ${adjustCls}" style="display:inline-block;margin-bottom:5px">${adjustMsg.split('—')[0].split('!')[0].trim()}</span></div>
-        <div class="iscard-sub">Emotional: Cat.${sea.cls.E.cat} &nbsp;·&nbsp; Social: Cat.${sea.cls.S.cat} &nbsp;·&nbsp; Academic: Cat.${sea.cls.A.cat}</div>
+        <div class="iscard-sub">Emotional: Cat.${seaCat('E')} &nbsp;·&nbsp; Social: Cat.${seaCat('S')} &nbsp;·&nbsp; Academic: Cat.${seaCat('A')}</div>
       </div>
     </div>
     <div class="narrative-block">${narrative}</div>
@@ -167,11 +180,13 @@ const CAREER_DB = {
 };
 
 function buildCareers(cpi, sea) {
-  const acaOk=['A','B'].includes(sea.cls.A.cat), emoOk=['A','B'].includes(sea.cls.E.cat);
+  if (!cpi || !cpi.top3 || !sea) return;
+  const seaCat=(d)=>(sea.cls&&sea.cls[d])?sea.cls[d].cat:'A';
+  const acaOk=['A','B'].includes(seaCat('A')), emoOk=['A','B'].includes(seaCat('E'));
   let html=`<div style="font-size:13px;color:var(--ink3);margin-bottom:1.5rem;line-height:1.7">
     Based on your top interests: <strong>${cpi.top3.map(a=>a.label).join(', ')}</strong>. Here are some exciting paths to explore!
   </div>`;
-  cpi.top3.forEach((area,rank)=>{
+  ((cpi.top3||[])).forEach((area,rank)=>{
     const careers=CAREER_DB[area.id]||[];
     const rankLabel=['🥇 Best Match','🥈 Great Fit','🥉 Also Great'][rank];
     html+=`<div style="margin-bottom:2rem">
@@ -200,6 +215,7 @@ function buildCareers(cpi, sea) {
 }
 
 function buildNMAPResults(nmap) {
+  if (!nmap || !nmap.dims || !nmap.sorted) return;
   if (!nmap) {
     document.getElementById('r-nmap-grid').innerHTML = '<p style="color:var(--ink3);font-size:13px">NMAP data not available.</p>';
     return;
