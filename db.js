@@ -622,6 +622,41 @@ function saveRegistration(student, sessionId) {
       email:         norm,
       registered_at: student.registeredAt || new Date().toISOString(),
     });
+
+    // Auto-register a new school in schools_registry if this student's school
+    // isn't already there. schools_registry was previously admin-curated only
+    // (added exclusively via the dashboard's manual "add school" screen), so a
+    // student typing a brand-new school name (the "Other" free-text option at
+    // registration) was silently invisible to School Management's per-school
+    // access and filtering — it existed only as a free-text value on this row.
+    // Defensive: a failure here is a missing side-effect, not a registration
+    // failure, so it must never throw past this point.
+    const schoolName = String(student.school || '').trim();
+    if (schoolName) {
+      try {
+        const already = db.prepare(
+          `SELECT id FROM schools_registry WHERE LOWER(name) = LOWER(?)`
+        ).get(schoolName);
+        if (!already) {
+          db.prepare(`
+            INSERT INTO schools_registry (name, city, state, added_at, active)
+            VALUES (?, ?, ?, ?, 1)
+          `).run(schoolName, student.schoolCity || null, student.schoolState || null, new Date().toISOString());
+          try {
+            db.prepare(`
+              INSERT INTO audit_log (user_id, user_email, action, target, detail, ip, ts)
+              VALUES (NULL, ?, 'school_auto_registered', ?, ?, NULL, ?)
+            `).run(
+              norm || 'unknown',
+              schoolName,
+              JSON.stringify({ city: student.schoolCity || null, state: student.schoolState || null, via: 'student_registration' }),
+              new Date().toISOString()
+            );
+          } catch (_) { /* audit_log missing/unavailable — non-fatal */ }
+        }
+      } catch (_) { /* schools_registry not yet initialised — non-fatal */ }
+    }
+
     return { session_id: sessionId, existing: false, testTaken: false };
   });
 

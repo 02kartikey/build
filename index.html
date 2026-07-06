@@ -71,20 +71,6 @@
 </nav>
 
 <script>
-// ── App token reader ──────────────────────────────────────────────
-// The server injects the token as <meta name="app-token"> (NOT as a
-// window._APP_TOKEN global). Every API call from this page must read it
-// from the meta tag. The window._APP_TOKEN fallback is legacy only and is
-// normally empty — relying on it caused blank tokens and 401 Unauthorized.
-function _getAppToken() {
-  try {
-    var m = document.querySelector('meta[name="app-token"]');
-    if (m && m.getAttribute('content')) return m.getAttribute('content');
-  } catch (e) {}
-  return (typeof window._APP_TOKEN !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
-}
-window._getAppToken = _getAppToken;
-
 // Staff login dropdown toggle
 function toggleStaffMenu() {
   const dd  = document.getElementById('staff-dropdown');
@@ -132,7 +118,8 @@ function submitCounsellorQuery() {
   var message = (document.getElementById('cq-message') || {}).value || '';
   if (!name || !email || !message) return;
   if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
-  var tok = _getAppToken();
+  var _appM = document.querySelector('meta[name="app-token"]');
+  var tok = _appM ? (_appM.getAttribute('content') || '') : ((typeof window._APP_TOKEN !== 'undefined') ? window._APP_TOKEN : '');
   var headers = { 'Content-Type': 'application/json' };
   if (tok) headers['X-App-Token'] = tok;
   fetch('/api/counsellor-query', {
@@ -1211,15 +1198,15 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="nc-overlay" id="nc-overlay" onclick="_acCloseSidebar()"></div>
 
   <!-- ══════════ SIDEBAR ══════════ -->
-  <aside class="nc-sidebar" id="acp-sidebar">
+  <aside class="nc-sidebar" id="acp-sidebar" style="display:none">
     <div class="nc-sb-glow"></div>
 
     <div class="nc-sb-top">
       <div class="nc-sb-brand">
         <div class="nc-brand-mark">
-          <!-- Animated orb mark -->
-          <svg class="nc-brand-star" width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white" opacity="0.92"/>
+          <img src="https://numind.co.in/wp-content/uploads/2025/12/numind_logo.png" alt="NuMind" class="nc-brand-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+          <svg class="nc-brand-star" width="16" height="16" viewBox="0 0 24 24" fill="none" style="display:none">
+            <path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#7c6fcd" opacity="0.92"/>
           </svg>
         </div>
         <div>
@@ -1262,10 +1249,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     <!-- Topbar -->
     <header class="nc-topbar">
-      <button class="nc-menu-btn" id="acp-toggle" onclick="_acOpenSidebar()" aria-label="Menu">
+      <button class="nc-menu-btn" id="acp-toggle" style="display:none" onclick="_acOpenSidebar()" aria-label="Menu">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
       <div class="nc-topbar-center">
+        <div class="nc-tb-logo">
+          <img src="https://numind.co.in/wp-content/uploads/2025/12/numind_logo.png" alt="NuMind" onerror="this.style.display='none'">
+        </div>
         <div class="nc-live-dot">
           <svg width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="#4ade80"/><circle cx="4" cy="4" r="3.5" fill="#4ade80" opacity="0"><animate attributeName="r" values="3.5;8;3.5" dur="2.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2.6s" repeatCount="indefinite"/></circle></svg>
         </div>
@@ -1276,7 +1266,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="nc-topbar-right">
         <!-- Context chip: shows student's top trait once unlocked -->
         <div class="nc-ctx-chip" id="nc-ctx-chip" style="display:none"></div>
-        <div class="nc-report-pill" id="acp-report-chip" style="display:none">
+        <div class="nc-report-pill" id="acp-report-chip" style="display:none;cursor:pointer" onclick="acToggleReportPanel()">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           Report
         </div>
@@ -1287,6 +1277,18 @@ document.addEventListener('DOMContentLoaded', function() {
         </button>
       </div>
     </header>
+
+    <!-- ══ REPORT PANEL (student's own reference to their report, mirrors admin's report view) ══ -->
+    <div id="ac-report-panel" class="arp-panel">
+      <div class="arp-panel-scrim" onclick="acToggleReportPanel()"></div>
+      <div class="arp-panel-sheet">
+        <div class="arp-panel-head">
+          <span>📋 Your Report</span>
+          <button class="arp-close-btn" onclick="acToggleReportPanel()" aria-label="Close">&times;</button>
+        </div>
+        <div id="ac-report-panel-body" class="arp-panel-body"></div>
+      </div>
+    </div>
 
     <!-- ══ LOCK SCREEN ══ -->
     <div id="acp-lock" class="nc-lock">
@@ -1299,7 +1301,8 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="nc-lock-glow"></div>
         <div class="nc-lock-hero">
           <div class="nc-lock-orb">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="white"/></svg>
+            <img src="https://numind.co.in/wp-content/uploads/2025/12/numind_logo.png" alt="NuMind" class="nc-lock-orb-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style="display:none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#7c6fcd"/></svg>
             <div class="nc-orb-ring"></div>
           </div>
           <h1 class="nc-lock-title">Your personal<br><em>AI Counsellor</em></h1>
@@ -1419,11 +1422,11 @@ document.addEventListener('DOMContentLoaded', function() {
    Lora · DM Sans · Fira Code
 ══════════════════════════════════════════════════════════ */
 :root {
-  --sb:     #111018;
-  --sb2:    rgba(255,255,255,0.055);
-  --sbb:    rgba(255,255,255,0.07);
-  --sbt:    rgba(255,255,255,0.78);
-  --sbm:    rgba(255,255,255,0.32);
+  --sb:     #faf9fc;
+  --sb2:    rgba(26,20,56,0.035);
+  --sbb:    rgba(26,20,56,0.08);
+  --sbt:    #3c3454;
+  --sbm:    #8b84a3;
 
   --bg:     #f7f5f0;
   --surf:   #ffffff;
@@ -1442,7 +1445,7 @@ document.addEventListener('DOMContentLoaded', function() {
   --gbg:    #ecfdf5;
   --gbd:    #a7f3d0;
 
-  --user-bubble: #1a0b3b;
+  --user-bubble: #6d5bd0;
   --ai-bubble:   #ffffff;
 
   --fd: 'Lora', Georgia, serif;
@@ -1463,6 +1466,7 @@ document.addEventListener('DOMContentLoaded', function() {
 /* ══ SIDEBAR ══ */
 .nc-sidebar {
   width:244px; flex-shrink:0; background:var(--sb);
+  border-right:1px solid var(--bdr);
   display:flex; flex-direction:column; overflow:hidden;
   position:relative;
   transition:transform .25s var(--ease-out);
@@ -1470,7 +1474,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-sb-glow {
   position:absolute; top:-30px; left:-20px;
   width:200px; height:180px;
-  background:radial-gradient(ellipse, rgba(91,33,182,0.22) 0%, transparent 65%);
+  background:radial-gradient(ellipse, rgba(124,111,205,0.10) 0%, transparent 65%);
   pointer-events:none;
 }
 .nc-sb-top {
@@ -1481,25 +1485,27 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-sb-brand { display:flex; align-items:center; gap:9px; }
 .nc-brand-mark {
   width:32px; height:32px; border-radius:9px;
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  background:#ffffff; border:1px solid var(--bdr);
   display:flex; align-items:center; justify-content:center; flex-shrink:0;
-  box-shadow:0 4px 12px rgba(91,33,182,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+  box-shadow:0 2px 8px rgba(26,31,46,0.06);
+  padding:5px;
 }
+.nc-brand-logo { width:100%; height:100%; object-fit:contain; }
 .nc-brand-star { animation:nc-star-spin 12s linear infinite; }
 @keyframes nc-star-spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }
 .nc-brand-name {
   font-family:var(--fd); font-size:13.5px; font-weight:600;
-  color:rgba(255,255,255,0.9); letter-spacing:-0.1px; line-height:1.2;
+  color:var(--ink); letter-spacing:-0.1px; line-height:1.2;
 }
 .nc-brand-sub { font-size:10px; color:var(--sbm); margin-top:1px; }
 .nc-new-btn {
   width:28px; height:28px; border-radius:7px;
-  background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.1);
-  color:rgba(255,255,255,0.55); cursor:pointer;
+  background:rgba(26,31,46,0.04); border:1px solid var(--bdr2);
+  color:var(--ink4); cursor:pointer;
   display:flex; align-items:center; justify-content:center;
   transition:background .15s, color .15s, transform .1s;
 }
-.nc-new-btn:hover { background:rgba(139,92,246,0.2); color:#a78bfa; transform:scale(1.08); }
+.nc-new-btn:hover { background:var(--vbg); color:var(--v2); transform:scale(1.08); }
 .nc-new-btn:active { transform:scale(0.93); }
 
 .nc-sb-divider { height:1px; background:var(--sbb); margin:0 14px; }
@@ -1514,36 +1520,36 @@ document.addEventListener('DOMContentLoaded', function() {
   border-radius:9px; cursor:pointer; border:1px solid transparent;
   transition:background .12s, border-color .12s; margin-bottom:2px;
 }
-.acp-sess-item:hover { background:rgba(255,255,255,0.05); }
-.acp-sess-item.active { background:rgba(139,92,246,0.14); border-color:rgba(139,92,246,0.22); }
+.acp-sess-item:hover { background:rgba(26,31,46,0.035); }
+.acp-sess-item.active { background:var(--vbg); border-color:var(--vbd); }
 .acp-sess-item-icon {
   width:25px; height:25px; border-radius:6px; flex-shrink:0;
-  background:rgba(255,255,255,0.05);
+  background:rgba(26,31,46,0.05);
   display:flex; align-items:center; justify-content:center; color:var(--sbm); font-size:12px;
 }
-.acp-sess-item.active .acp-sess-item-icon { background:rgba(139,92,246,0.18); color:#c4b5fd; }
+.acp-sess-item.active .acp-sess-item-icon { background:#fff; color:var(--v2); }
 .acp-sess-item-title {
   font-size:12px; font-weight:500; color:var(--sbt);
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
-.acp-sess-item.active .acp-sess-item-title { color:#c4b5fd; }
+.acp-sess-item.active .acp-sess-item-title { color:var(--v); font-weight:600; }
 .acp-sess-item-meta { font-size:10px; color:var(--sbm); margin-top:1px; }
 
 .nc-sb-foot { padding:11px 11px 15px; border-top:1px solid var(--sbb); display:flex; flex-direction:column; gap:9px; }
 .nc-user-row {
   display:flex; align-items:center; gap:9px; padding:8px 9px;
-  border-radius:9px; background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07);
+  border-radius:9px; background:#fff; border:1px solid var(--bdr);
 }
 .nc-user-av {
   width:30px; height:30px; border-radius:50%;
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  background:linear-gradient(135deg,var(--v),var(--v2));
   display:flex; align-items:center; justify-content:center;
   font-family:var(--fd); font-size:13px; font-weight:600; color:#fff; flex-shrink:0;
 }
-.nc-user-name { font-size:12px; font-weight:600; color:rgba(255,255,255,0.88); }
+.nc-user-name { font-size:12px; font-weight:600; color:var(--ink); }
 .nc-user-badge {
   display:flex; align-items:center; gap:5px;
-  font-size:10px; color:#4ade80; margin-top:1px;
+  font-size:10px; color:#059669; margin-top:1px;
 }
 .nc-badge-pulse {
   width:5px; height:5px; border-radius:50%; background:#4ade80; flex-shrink:0;
@@ -1553,13 +1559,13 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-sb-actions { display:flex; gap:6px; }
 .nc-action-btn {
   flex:1; padding:7px 8px; border-radius:7px;
-  background:rgba(255,255,255,0.04); border:1px solid rgba(255,255,255,0.07);
+  background:rgba(26,31,46,0.03); border:1px solid var(--bdr2);
   color:var(--sbm); font-family:var(--fb); font-size:11px; font-weight:500;
   cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px;
   transition:background .12s, color .12s, border-color .12s;
 }
-.nc-action-btn:hover { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.7); border-color:rgba(255,255,255,0.12); }
-.nc-action-danger:hover { background:rgba(239,68,68,0.1); color:#fca5a5; border-color:rgba(239,68,68,0.18); }
+.nc-action-btn:hover { background:rgba(26,31,46,0.06); color:var(--ink3); border-color:var(--bdr2); }
+.nc-action-danger:hover { background:rgba(220,38,38,0.08); color:#dc2626; border-color:rgba(220,38,38,0.2); }
 
 /* ══ TOPBAR ══ */
 .nc-main { flex:1; display:flex; flex-direction:column; min-width:0; }
@@ -1567,7 +1573,19 @@ document.addEventListener('DOMContentLoaded', function() {
   height:52px; background:rgba(247,245,240,0.96);
   backdrop-filter:blur(12px); border-bottom:1px solid var(--bdr);
   padding:0 17px; display:flex; align-items:center; gap:11px; flex-shrink:0;
+  position:relative;
 }
+.nc-topbar::after {
+  content:''; position:absolute; left:0; right:0; bottom:-1px; height:2px;
+  background:linear-gradient(90deg,var(--v2),#a855f7,transparent 70%);
+  opacity:0.55;
+}
+.nc-tb-logo {
+  width:24px; height:24px; border-radius:7px; flex-shrink:0;
+  background:#fff; border:1px solid var(--bdr);
+  display:flex; align-items:center; justify-content:center; padding:3px;
+}
+.nc-tb-logo img { width:100%; height:100%; object-fit:contain; }
 .nc-menu-btn {
   width:29px; height:29px; border-radius:7px; background:transparent;
   border:1px solid var(--bdr); display:none; align-items:center; justify-content:center;
@@ -1619,97 +1637,98 @@ document.addEventListener('DOMContentLoaded', function() {
 /* ══ LOCK SCREEN ══ */
 .nc-lock {
   flex:1; display:flex; align-items:center; justify-content:center;
-  padding:2rem; position:relative; overflow:hidden; background:var(--sb);
+  padding:2rem; position:relative; overflow:hidden;
+  background:linear-gradient(180deg,var(--bg),#f1eef7);
 }
-.nc-particles-cv { position:absolute; inset:0; pointer-events:none; opacity:0.5; }
+.nc-particles-cv { position:absolute; inset:0; pointer-events:none; opacity:0.35; }
 .nc-lock-loader {
   position:relative; z-index:2;
   display:flex; flex-direction:column; align-items:center; gap:18px; text-align:center;
 }
 .nc-loader-orb {
   width:42px; height:42px; border-radius:50%;
-  border:2.5px solid rgba(139,92,246,0.2);
-  border-top-color:#8b5cf6;
+  border:2.5px solid var(--vbd);
+  border-top-color:var(--v2);
   animation:nc-spin .75s linear infinite;
 }
 @keyframes nc-spin { to{transform:rotate(360deg)} }
-.nc-lock-loader span { font-size:13.5px; font-weight:500; color:rgba(255,255,255,0.5); }
+.nc-lock-loader span { font-size:13.5px; font-weight:500; color:var(--ink4); }
 
 .nc-lock-card {
   position:relative; z-index:2; width:100%; max-width:430px;
-  background:rgba(255,255,255,0.035); border:1px solid rgba(255,255,255,0.085);
+  background:var(--surf); border:1px solid var(--bdr);
   border-radius:22px; overflow:hidden;
-  backdrop-filter:blur(28px);
-  box-shadow:0 30px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06);
+  box-shadow:0 24px 60px rgba(26,20,56,0.14);
   animation:nc-cardin .5s var(--ease-spring);
 }
 @keyframes nc-cardin { from{opacity:0;transform:translateY(24px) scale(0.96)} to{opacity:1;transform:none} }
 .nc-lock-glow {
   position:absolute; top:-50px; left:50%; transform:translateX(-50%);
   width:240px; height:140px;
-  background:radial-gradient(ellipse,rgba(91,33,182,0.28) 0%,transparent 70%);
+  background:radial-gradient(ellipse,rgba(124,111,205,0.14) 0%,transparent 70%);
   pointer-events:none;
 }
 .nc-lock-hero {
   padding:2.2rem 2rem 1.5rem; text-align:center;
-  border-bottom:1px solid rgba(255,255,255,0.065);
+  border-bottom:1px solid var(--bdr);
 }
 .nc-lock-orb {
   width:64px; height:64px; border-radius:18px;
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  background:#ffffff; border:1px solid var(--bdr);
   display:flex; align-items:center; justify-content:center;
-  margin:0 auto 1.25rem; position:relative;
-  box-shadow:0 12px 36px rgba(91,33,182,0.5);
+  margin:0 auto 1.25rem; position:relative; padding:10px;
+  box-shadow:0 8px 24px rgba(124,111,205,0.22);
 }
+.nc-lock-orb-logo { width:100%; height:100%; object-fit:contain; }
 .nc-orb-ring {
   position:absolute; inset:-6px; border-radius:24px;
-  border:1.5px solid rgba(139,92,246,0.28);
+  border:1.5px solid var(--vbd);
   animation:nc-orbring 3s ease-in-out infinite;
 }
-@keyframes nc-orbring { 0%,100%{transform:scale(1);opacity:0.28} 50%{transform:scale(1.07);opacity:0.55} }
+@keyframes nc-orbring { 0%,100%{transform:scale(1);opacity:0.4} 50%{transform:scale(1.07);opacity:0.7} }
 .nc-lock-title {
   font-family:var(--fd); font-size:25px; font-weight:700;
-  color:rgba(255,255,255,0.92); letter-spacing:-0.35px; line-height:1.27; margin:0 0 .65rem;
+  color:var(--ink); letter-spacing:-0.35px; line-height:1.27; margin:0 0 .65rem;
 }
 .nc-lock-title em {
   font-style:italic;
-  background:linear-gradient(90deg,#a78bfa,#f0abfc);
+  background:linear-gradient(90deg,var(--v2),#a855f7);
   -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
 }
-.nc-lock-sub { font-size:13px; color:rgba(255,255,255,0.42); line-height:1.65; margin:0; }
+.nc-lock-sub { font-size:13px; color:var(--ink3); line-height:1.65; margin:0; }
 .nc-lock-caps {
   padding:15px 22px; display:flex; flex-direction:column; gap:10px;
-  border-bottom:1px solid rgba(255,255,255,0.065);
+  border-bottom:1px solid var(--bdr);
 }
-.nc-cap { display:flex; align-items:center; gap:10px; font-size:13px; color:rgba(255,255,255,0.58); line-height:1.4; }
+.nc-cap { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--ink3); line-height:1.4; }
 .nc-cap-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .nc-lock-form { padding:17px 22px 21px; }
-.nc-lock-label { display:block; font-size:11px; font-weight:600; color:rgba(255,255,255,0.38); margin-bottom:8px; letter-spacing:0.2px; }
+.nc-lock-label { display:block; font-size:11px; font-weight:600; color:var(--ink4); margin-bottom:8px; letter-spacing:0.2px; }
 .nc-lock-iw { position:relative; margin-bottom:8px; }
-.nc-lock-ii { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:rgba(255,255,255,0.26); pointer-events:none; }
+.nc-lock-ii { position:absolute; left:13px; top:50%; transform:translateY(-50%); color:var(--ink4); pointer-events:none; }
 .nc-lock-input {
   width:100%; padding:12px 13px 12px 37px; box-sizing:border-box;
-  border:1.5px solid rgba(255,255,255,0.1); border-radius:10px;
-  background:rgba(255,255,255,0.06); color:rgba(255,255,255,0.88);
+  border:1.5px solid var(--bdr2); border-radius:10px;
+  background:#faf9fc; color:var(--ink);
   font-family:var(--fb); font-size:14px; outline:none;
   transition:border-color .18s, box-shadow .18s;
 }
-.nc-lock-input::placeholder { color:rgba(255,255,255,0.22); }
-.nc-lock-input:focus { border-color:rgba(139,92,246,0.5); box-shadow:0 0 0 3px rgba(91,33,182,0.18); }
-.nc-lock-err { display:none; color:#fca5a5; font-size:12px; margin-bottom:8px; padding:0 2px; }
+.nc-lock-input::placeholder { color:var(--ink4); opacity:0.7; }
+.nc-lock-input:focus { border-color:var(--v2); box-shadow:0 0 0 3px var(--vbg); background:#fff; }
+.nc-lock-err { display:none; color:#dc2626; font-size:12px; margin-bottom:8px; padding:0 2px; }
 .nc-lock-btn {
   width:100%; padding:12px 16px; border-radius:10px;
-  background:linear-gradient(135deg,#5b21b6,#7c3aed); border:none; color:#fff;
+  background:linear-gradient(135deg,var(--v),var(--v2)); border:none; color:#fff;
   font-family:var(--fb); font-size:14px; font-weight:600;
   cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px;
   transition:opacity .17s, transform .12s, box-shadow .17s;
-  box-shadow:0 8px 22px rgba(91,33,182,0.4);
+  box-shadow:0 8px 22px rgba(91,33,182,0.28);
 }
-.nc-lock-btn:hover { opacity:.9; transform:translateY(-1px); box-shadow:0 12px 28px rgba(91,33,182,0.45); }
+.nc-lock-btn:hover { opacity:.9; transform:translateY(-1px); box-shadow:0 12px 28px rgba(91,33,182,0.32); }
 .nc-lock-btn:active { transform:none; }
 .nc-lock-btn:disabled { opacity:.38; cursor:not-allowed; transform:none; }
-.nc-lock-footer { text-align:center; font-size:11.5px; color:rgba(255,255,255,0.28); margin:11px 0 0; line-height:1.6; }
-.nc-lock-footer a { color:#a78bfa; font-weight:600; text-decoration:none; }
+.nc-lock-footer { text-align:center; font-size:11.5px; color:var(--ink4); margin:11px 0 0; line-height:1.6; }
+.nc-lock-footer a { color:var(--v2); font-weight:600; text-decoration:none; }
 .nc-lock-footer a:hover { text-decoration:underline; }
 
 /* ══ CHAT ══ */
@@ -1993,7 +2012,7 @@ document.addEventListener('DOMContentLoaded', function() {
     transform:translateX(-100%); transition:transform .22s ease;
   }
   .nc-sidebar.open { transform:translateX(0); box-shadow:16px 0 50px rgba(0,0,0,0.32); }
-  .nc-menu-btn { display:flex !important; }
+  .nc-menu-btn { display:flex; }
   .nc-topbar-sub,.nc-tb-sep,.nc-report-pill { display:none !important; }
   .nc-mobile-id { display:flex !important; }
   .nc-starters { grid-template-columns:1fr; }
@@ -2011,6 +2030,61 @@ document.addEventListener('DOMContentLoaded', function() {
   .nc-hint { display:none; }
   .nc-back-btn span { display:none; }
 }
+
+/* ── Report panel (student's own reference to their report) ── */
+.arp-panel {
+  position:fixed; inset:0; z-index:9500; display:none;
+}
+.arp-panel.open { display:block; }
+.arp-panel-scrim {
+  position:absolute; inset:0; background:rgba(0,0,0,0.55);
+  animation:arp-fadein .25s ease;
+}
+@keyframes arp-fadein { from{opacity:0} to{opacity:1} }
+.arp-panel-sheet {
+  position:absolute; top:0; right:0; height:100%; width:min(420px,100%);
+  background:var(--sb); border-left:1px solid var(--sbb);
+  display:flex; flex-direction:column;
+  animation:arp-slidein .28s cubic-bezier(.16,1,.3,1);
+  box-shadow:-24px 0 60px rgba(0,0,0,0.35);
+}
+@keyframes arp-slidein { from{transform:translateX(24px);opacity:0} to{transform:none;opacity:1} }
+.arp-panel-head {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:18px 20px; border-bottom:1px solid var(--sbb);
+  font-family:var(--fh,'Lora',serif); font-size:15px; font-weight:700; color:var(--sbt);
+  flex-shrink:0;
+}
+.arp-close-btn {
+  background:var(--sb2); border:none; color:var(--sbm); width:26px; height:26px;
+  border-radius:50%; cursor:pointer; font-size:18px; line-height:1;
+  display:flex; align-items:center; justify-content:center;
+}
+.arp-close-btn:hover { background:var(--sbb); color:var(--sbt); }
+.arp-panel-body { flex:1; overflow-y:auto; padding:18px 20px 32px; }
+.arp-section { margin-bottom:22px; }
+.arp-head {
+  font-size:11px; font-weight:700; letter-spacing:.02em; text-transform:uppercase;
+  color:var(--sbm); margin-bottom:10px;
+}
+.arp-kv {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 0; border-bottom:1px solid var(--sb2); font-size:13px; color:var(--sbt);
+}
+.arp-kv strong { color:#fff; font-weight:700; }
+.arp-kv em { font-style:normal; color:var(--v2); }
+.arp-bar-row {
+  display:grid; grid-template-columns:84px 1fr 44px; align-items:center; gap:8px;
+  font-size:12px; color:var(--sbt); padding:6px 0;
+}
+.arp-bar-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.arp-bar-row small { color:var(--sbm); text-align:right; font-size:11px; }
+.arp-bar-track {
+  height:6px; border-radius:6px; background:var(--sb2); overflow:hidden;
+}
+.arp-bar-fill { height:100%; border-radius:6px; background:var(--green); }
+.arp-bar-fill.arp-bar-violet { background:var(--v2); }
+
 </style>
 
 <script>
@@ -2189,8 +2263,11 @@ var _sessions=[],_activeSess=null;
 /* Load conversations from server and populate sidebar */
 async function _loadConversationsFromServer(email){
   try{
-    var tok=_getAppToken();
+    var _appM=document.querySelector('meta[name="app-token"]');
+    var tok=_appM?(_appM.getAttribute('content')||''):((typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'');
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    var ctok=(window._AC&&window._AC.counsellorToken)||(function(){try{return localStorage.getItem('nmind_ac_ctok')||'';}catch(_){return '';}})();
+    if(ctok)h['X-Counsellor-Token']=ctok;
     var res=await fetch('/api/counsellor-conversations?email='+encodeURIComponent(email),{headers:h});
     if(!res.ok) return;
     var data=await res.json();
@@ -2214,8 +2291,11 @@ async function _loadConversationsFromServer(email){
 /* Load messages for a specific conversation from server */
 async function _loadConvMessages(email, convId){
   try{
-    var tok=_getAppToken();
+    var _appM=document.querySelector('meta[name="app-token"]');
+    var tok=_appM?(_appM.getAttribute('content')||''):((typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'');
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    var ctok=(window._AC&&window._AC.counsellorToken)||(function(){try{return localStorage.getItem('nmind_ac_ctok')||'';}catch(_){return '';}})();
+    if(ctok)h['X-Counsellor-Token']=ctok;
     var res=await fetch('/api/counsellor-history?email='+encodeURIComponent(email)+'&conversationId='+encodeURIComponent(convId),{headers:h});
     if(!res.ok) return [];
     var data=await res.json();
@@ -2253,8 +2333,10 @@ async function _fireGreeting(convId){
   var msgs=document.getElementById('acp-messages');
   var welc=document.getElementById('acp-welcome');
   try{
-    var tok=_getAppToken();
+    var _appM=document.querySelector('meta[name="app-token"]');
+    var tok=_appM?(_appM.getAttribute('content')||''):((typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'');
     var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
+    if(AC.counsellorToken)h['X-Counsellor-Token']=AC.counsellorToken;
     var res=await fetch('/api/counsellor-greeting',{
       method:'POST',headers:h,
       body:JSON.stringify({email:AC.email,conversationId:convId})
@@ -2384,14 +2466,18 @@ function _applyUnlocked(name,messages){
   /* show chat */
   _initSession(name,messages||[]);
   _loadSession(_activeSess);
-  var chat=document.getElementById('acp-chat'),lock=document.getElementById('acp-lock');
+  var chat=document.getElementById('acp-chat'),lock=document.getElementById('acp-lock'),sbEl=document.getElementById('acp-sidebar');
   if(lock)lock.style.display='none';
   if(chat)chat.style.cssText='display:flex!important;flex:1;flex-direction:column;min-height:0';
+  if(sbEl)sbEl.style.display='';
+  var mb=document.getElementById('acp-toggle'); if(mb)mb.style.display='';
 }
 window._acSetPageView=function(view){
-  var lock=document.getElementById('acp-lock'),chat=document.getElementById('acp-chat');
+  var lock=document.getElementById('acp-lock'),chat=document.getElementById('acp-chat'),sbEl2=document.getElementById('acp-sidebar');
   if(lock)lock.style.display=view==='lock'?'':'none';
   if(chat){if(view==='chat'){chat.style.cssText='display:flex!important;flex:1;flex-direction:column;min-height:0';}else{chat.style.display='none';}}
+  if(sbEl2)sbEl2.style.display=view==='chat'?'':'none';
+  var mb2=document.getElementById('acp-toggle'); if(mb2)mb2.style.display=view==='chat'?'':'none';
 };
 
 /* ── Post-unlock UI transition ─────────────────────────────────────
@@ -2498,7 +2584,8 @@ _acWhenReady(function(){
   if(stored&&stored.email){
     (async function(){
       try{
-        var tok=_getAppToken();
+        var _appM=document.querySelector('meta[name="app-token"]');
+        var tok=_appM?(_appM.getAttribute('content')||''):((typeof window._APP_TOKEN!=='undefined')?window._APP_TOKEN:'');
         var h={'Content-Type':'application/json'}; if(tok)h['X-App-Token']=tok;
         var res=await fetch('/api/counsellor-unlock',{method:'POST',headers:h,body:JSON.stringify({email:stored.email})});
         if(!res.ok){_clear();return;}
@@ -2533,7 +2620,7 @@ _acWhenReady(function(){
           if(document.getElementById('ac-resume-chip')) return;
           var cp=document.getElementById('page-counsellor'); if(cp&&cp.classList.contains('active')) return;
           var chip=document.createElement('div'); chip.id='ac-resume-chip';
-          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:#111018;color:rgba(255,255,255,0.88);border:1px solid rgba(139,92,246,0.3);border-radius:12px;padding:11px 14px 11px 15px;font-family:DM Sans,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(0,0,0,0.38);cursor:pointer';
+          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:linear-gradient(135deg,#5b21b6,#6d5bd0);color:rgba(255,255,255,0.95);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:11px 14px 11px 15px;font-family:DM Sans,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(91,33,182,0.35);cursor:pointer';
           var inner=document.createElement('div'); inner.style.cssText='display:flex;align-items:center;gap:8px;flex:1';
           inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#a78bfa"/></svg> Resume AI Counsellor';
           inner.addEventListener('click',function(){chip.remove();if(typeof window.goPage==='function')window.goPage('counsellor');});

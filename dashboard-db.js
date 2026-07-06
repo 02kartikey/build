@@ -913,7 +913,7 @@ function logReminder({ studentEmail, sentBy, subject, message }) {
   );
 }
 
-function getReminderLog({ sentBy, studentEmail, limit = 100 } = {}) {
+function getReminderLog({ sentBy, studentEmail, schools, limit = 100 } = {}) {
   if (!_db) throw new Error('dashboard-db not initialised');
   if (studentEmail) {
     return _db.prepare(`
@@ -927,6 +927,19 @@ function getReminderLog({ sentBy, studentEmail, limit = 100 } = {}) {
   if (sentBy) {
     return _db.prepare('SELECT * FROM reminder_log WHERE sent_by = ? ORDER BY sent_at DESC LIMIT ?')
               .all(sentBy, limit);
+  }
+  // School-scoped: join to students on email so a management user only sees
+  // reminder history for students in their assigned school(s), not the whole DB.
+  if (Array.isArray(schools) && schools.length) {
+    const ph = schools.map(() => '?').join(',');
+    return _db.prepare(`
+      SELECT rl.*, du.name AS sent_by_name
+      FROM reminder_log rl
+      LEFT JOIN dashboard_users du ON du.id = rl.sent_by
+      JOIN students st ON LOWER(st.email) = LOWER(rl.student_email)
+      WHERE LOWER(st.school) IN (${ph})
+      ORDER BY rl.sent_at DESC LIMIT ?
+    `).all(...schools.map(s => s.toLowerCase()), limit);
   }
   return _db.prepare(`
     SELECT rl.*, du.name AS sent_by_name
@@ -1124,6 +1137,32 @@ function getStudentTags(sessionId) {
 ══════════════════════════════════════════════════════════════════ */
 function listRegisteredSchools() {
   if (!_db) throw new Error('dashboard-db not initialised');
+  // Reconcile against live student data first — a school can exist in real
+  // student records (from before the auto-registration-on-signup fix, or any
+  // other path that writes students.school directly) without ever having
+  // been added to schools_registry. Backfill anything missing so this list
+  // is always complete, not just whatever happened to be explicitly added.
+  try {
+    const liveSchools = getAllSchools(); // [{school, total_students}]
+    const existing = new Set(
+      _db.prepare('SELECT LOWER(name) AS n FROM schools_registry').all().map(r => r.n)
+    );
+    const insert = _db.prepare(`
+      INSERT INTO schools_registry (name, city, state, added_at, active)
+      VALUES (?, NULL, NULL, ?, 1)
+    `);
+    const now = new Date().toISOString();
+    for (const s of liveSchools) {
+      const name = (s.school || '').trim();
+      if (name && !existing.has(name.toLowerCase())) {
+        insert.run(name, now);
+        existing.add(name.toLowerCase());
+      }
+    }
+  } catch (e) {
+    // Reconciliation is a best-effort backfill — never let it block the
+    // actual list from being returned if something here fails.
+  }
   return _db.prepare('SELECT * FROM schools_registry ORDER BY name').all();
 }
 

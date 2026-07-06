@@ -49,7 +49,7 @@ import { startDAAB, renderDAABSub, advanceDAABSub, finishDAAB,
          renderVA, renderPA, renderNA, renderMCQ, renderAR, renderMA, renderSA,
          buildDAABResults } from './ui/daab-page.js';
 import { buildResults, buildCharts, buildCareers, buildNMAPResults } from './ui/results.js';
-import { initStateDropdown, populateCities, populateSchools, getSchoolValue, handleSchoolChange } from './registration.js';
+import { initStateDropdown, populateCities } from './ui/registration.js';
 import { restoreUI } from './ui/restore.js';
 
 // ── Charts ──
@@ -88,7 +88,7 @@ Object.assign(window, {
   // results & charts
   buildResults, buildCharts, switchChartTab,
   // registration helpers
-  initStateDropdown, populateCities, populateSchools, getSchoolValue, handleSchoolChange,
+  initStateDropdown, populateCities,
   // AI + PDF entry points
   generateAIReport, cancelReport, renderAIReport, downloadPDF,
   // expose state + engine for debugging / for any inline JS that reads it
@@ -127,6 +127,16 @@ document.addEventListener('DOMContentLoaded', function _initSession() {
 /* Save state when the page is about to unload */
 window.addEventListener('beforeunload', () => {
   try { saveState(); } catch (e) {}
+});
+
+/* Surface silent saveSection failures (state.js) as a visible, non-blocking
+   banner. The assessment flow is NOT interrupted — the student keeps going —
+   but this is no longer invisible the way it was before. */
+document.addEventListener('nm:section-save-failed', (e) => {
+  const mod = (e.detail && e.detail.moduleKey) || 'section';
+  try {
+    showDbStatus('error', 'Progress for "' + mod + '" may not have saved — check your connection.');
+  } catch (_) {}
 });
 
 console.log('[NuMind] modules loaded');

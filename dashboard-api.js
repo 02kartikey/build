@@ -416,10 +416,26 @@ async function _sendReminder(req, res) {
   if (!Array.isArray(students) || !students.length) return _json(res, 400, { error: 'students array required' });
   if (!message) return _json(res, 400, { error: 'message required' });
 
+  // Scope guard: verify each target email belongs to a real student within
+  // the caller's assigned school(s) — prevents using this endpoint to email
+  // arbitrary addresses (including ones with no corresponding student at all).
+  let inScope = students;
+  if (user.role !== 'admin') {
+    const schools = _userSchools(user).map(s => s.toLowerCase());
+    inScope = students.filter(st => {
+      if (!st.email) return false;
+      const stu = _ddb.getStudentByEmail ? _ddb.getStudentByEmail(st.email) : null;
+      return stu && schools.includes((stu.school || '').toLowerCase());
+    });
+    if (!inScope.length) {
+      return _json(res, 403, { error: 'None of the selected students are in your assigned school(s).' });
+    }
+  }
+
   const emailSubject = subject || 'Reminder: Complete your NuMind MAPS Assessment';
   let sent = 0, failed = 0;
 
-  for (const st of students) {
+  for (const st of inScope) {
     if (!st.email) { failed++; continue; }
     try {
       _sendEmail({
@@ -444,8 +460,8 @@ async function _sendReminder(req, res) {
   }
 
   _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'send_reminder',
-                  detail: `sent=${sent} failed=${failed}` });
-  _json(res, 200, { ok: true, sent, failed });
+                  detail: `sent=${sent} failed=${failed} scopeRejected=${students.length - inScope.length}` });
+  _json(res, 200, { ok: true, sent, failed, scopeRejected: students.length - inScope.length });
 }
 
 async function _testEmail(req, res) {
@@ -495,7 +511,9 @@ async function _testEmail(req, res) {
 function _reminderLog(req, res) {
   const user = _requireRole(req, res, 'management', 'admin');
   if (!user) return;
-  _json(res, 200, { log: _ddb.getReminderLog({ limit: 200 }) });
+  const opts = { limit: 200 };
+  if (user.role !== 'admin') opts.schools = _userSchools(user);
+  _json(res, 200, { log: _ddb.getReminderLog(opts) });
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -509,9 +527,10 @@ function _listQueries(req, res) {
   const status = qs.status || '';     // 'pending' | 'in-progress' | 'resolved' | ''
   const limit  = Math.min(parseInt(qs.limit || '200', 10), 500);
   const offset = parseInt(qs.offset || '0', 10);
-  const rows   = _cdb.listQueries({ status: status || undefined, limit, offset });
-  // Count pending for badge
-  const pending = _cdb.listQueries({ status: 'pending', limit: 500 }).length;
+  const scopeOpts = user.role !== 'admin' ? { schools: _userSchools(user) } : {};
+  const rows   = _cdb.listQueries({ status: status || undefined, limit, offset, ...scopeOpts });
+  // Count pending for badge — same scoping applied
+  const pending = _cdb.listQueries({ status: 'pending', limit: 500, ...scopeOpts }).length;
   _json(res, 200, { queries: rows, pending });
 }
 
@@ -603,6 +622,13 @@ async function _createStudent(req, res) {
   const body = await _readBody(req, 16 * 1024);
   const { first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city } = body || {};
   if (!first_name || !school) return _json(res, 400, { error: 'first_name and school required' });
+  // Scope guard: management may only create students under their assigned school(s)
+  if (user.role !== 'admin') {
+    const schools = _userSchools(user).map(s => s.toLowerCase());
+    if (!schools.includes(String(school).toLowerCase())) {
+      return _json(res, 403, { error: 'You can only add students to your assigned school(s).' });
+    }
+  }
   // Always upsert — if the email already exists, update that row in place.
   // If it doesn't, create a new row. No errors, no flags, no 409.
   // The student's session_id is returned so the frontend can reference it.
@@ -616,6 +642,15 @@ async function _updateStudent(req, res) {
   const user = _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const sessionId = _seg(req.url, -1);
+  // IDOR guard: management may only edit students in their assigned schools
+  if (user.role !== 'admin') {
+    const stu = _ddb.getStudentBySessionId(sessionId);
+    if (!stu) return _json(res, 404, { error: 'Student not found' });
+    const schools = _userSchools(user).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) {
+      return _json(res, 403, { error: 'Forbidden' });
+    }
+  }
   const body = await _readBody(req, 16 * 1024);
   _ddb.moveStudent(sessionId, body);
   _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_student', target: sessionId });
@@ -644,8 +679,22 @@ async function _importStudents(req, res) {
   const user = _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const body = await _readBody(req, 2 * 1024 * 1024);
-  const rows = (body && Array.isArray(body.rows)) ? body.rows : [];
+  let rows = (body && Array.isArray(body.rows)) ? body.rows : [];
   if (!rows.length) return _json(res, 400, { error: 'rows array required' });
+
+  // Scope guard: management may only import rows for their assigned school(s).
+  // Filtered here (not per-row inside the transaction) so the rejection count
+  // is visible to the caller via the existing skipped counter.
+  let scopeRejected = 0;
+  if (user.role !== 'admin') {
+    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const before = rows.length;
+    rows = rows.filter(r => schools.includes(String(r.school || '').toLowerCase()));
+    scopeRejected = before - rows.length;
+    if (!rows.length) {
+      return _json(res, 403, { error: 'None of the rows match your assigned school(s).' });
+    }
+  }
 
   // Route through _dbWrite so the entire import runs as a single DB write
   // slot — non-blocking to the event loop, and atomic (all-or-nothing).
@@ -666,8 +715,8 @@ async function _importStudents(req, res) {
   }
 
   _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'import_students',
-                  detail: `imported=${imported} skipped=${skipped}` });
-  _json(res, 200, { ok: true, imported, skipped });
+                  detail: `imported=${imported} skipped=${skipped} scopeRejected=${scopeRejected}` });
+  _json(res, 200, { ok: true, imported, skipped, scopeRejected });
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -678,6 +727,13 @@ function _studentReminders(req, res) {
   if (!user) return;
   const stu = _ddb.getStudentBySessionId(_seg(req.url, -2));
   if (!stu) return _json(res, 404, { error: 'Student not found' });
+  // IDOR guard: verify this student belongs to the requesting user's schools
+  if (user.role !== 'admin') {
+    const schools = _userSchools(user).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) {
+      return _json(res, 403, { error: 'Forbidden' });
+    }
+  }
   _json(res, 200, { log: _ddb.getReminderLog({ studentEmail: stu.email, limit: 50 }) });
 }
 

@@ -1054,6 +1054,12 @@ function renderCareer(report){
   if(!careers.length){document.getElementById('dr-career').innerHTML='<div class="empty"><div class="ei">🎯</div><div class="et">No career data</div></div>';return;}
   let h='';
   if(r.recommended_primary)h+='<div style="background:rgba(15,118,110,.08);border:1px solid rgba(15,118,110,.2);border-radius:9px;padding:12px 14px;margin-bottom:14px"><div style="font-size:10px;color:var(--brand);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">Recommended Primary Path</div><div style="font-size:15px;font-weight:800;color:var(--ink)">'+_esc(r.recommended_primary)+'</div>'+(r.recommended_alternate?'<div style="font-size:12px;color:var(--ink4);margin-top:2px">Alt: '+_esc(r.recommended_alternate)+'</div>':'')+'</div>';
+  const _fitCols=[['Strong Fit',r.strong_fit_pathways,'var(--ok)'],['Emerging Fit',r.emerging_fit_pathways,'var(--brand)'],['Exploratory',r.exploratory_pathways,'var(--ink4)']].filter(([,arr])=>Array.isArray(arr)&&arr.length);
+  if(_fitCols.length){
+    h+='<div style="display:grid;grid-template-columns:repeat('+_fitCols.length+',1fr);gap:10px;margin-bottom:14px">'+_fitCols.map(([label,arr,col])=>
+      '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:9px;padding:10px 12px"><div style="font-size:10px;font-weight:700;color:'+col+';text-transform:uppercase;letter-spacing:.05em;margin-bottom:7px">'+label+'</div>'+arr.map(p=>'<div style="font-size:12px;color:var(--ink);padding:3px 0;border-bottom:1px solid var(--border)">'+_esc(p)+'</div>').join('')+'</div>'
+    ).join('')+'</div>';
+  }
   h+=careers.map(c=>{const pct=c.suitability_pct||0;const col=pct>=80?'var(--ok)':pct>=65?'var(--brand)':'var(--warn)';return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border)"><div style="flex:1"><div style="font-size:13px;font-weight:600;color:var(--ink)">'+_esc(c.career||'—')+'</div>'+(c.rationale?'<div style="font-size:11px;color:var(--ink5);margin-top:2px">'+_esc(c.rationale.slice(0,80))+(c.rationale.length>80?'…':'')+'</div>':'')+'</div><div style="text-align:right;flex-shrink:0"><div style="font-size:18px;font-weight:900;color:'+col+'">'+pct+'%</div><span class="badge b-'+((c.alignment||'').includes('Strong')?'strong':(c.alignment||'').includes('Emerging')?'emerging':'explore')+'" style="font-size:10px">'+_esc(c.alignment||'—')+'</span></div></div>';}).join('');
   document.getElementById('dr-career').innerHTML=h;
 }
