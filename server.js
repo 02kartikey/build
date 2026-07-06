@@ -2,6 +2,16 @@
    server.js  —  NuMind MAPS  |  Node.js 18+ / CommonJS
    Target: 20k users/day, PM2 cluster mode
 
+   ⚠️  THIS IS A DIAGNOSTIC/LOAD-TEST COPY ⚠️
+   It adds ONE thing on top of the real server.js: when the environment
+   variable LOADTEST_MODE is set to the exact string
+   "unsafe-diagnostics-local-only", all auth checks and rate limits are
+   bypassed, so you can measure raw write-path/DB capacity without token
+   or rate-limit noise getting in the way.
+
+   DO NOT deploy this file. DO NOT set LOADTEST_MODE in production.
+   Swap your real server.js back in once you're done testing.
+
    Scalability features:
      · HTTPS keep-alive agent (reuse TLS connections to OpenAI)
      · In-memory static file cache with TTL revalidation + dedup inflight
@@ -34,14 +44,12 @@
 ════════════════════════════════════════════════════════════════════ */
 'use strict';
 const _dotenvResult = require('dotenv').config();
-// Debug: show dotenv load result on startup so you can verify the .env path and content
 if (_dotenvResult.error) {
   process.stderr.write('[WARN]  [.env] Failed to load: ' + _dotenvResult.error.message + '\n');
   process.stderr.write('[WARN]  [.env] Make sure .env exists at: ' + process.cwd() + '/.env\n');
 } else {
   const loaded = Object.keys(_dotenvResult.parsed || {});
   process.stdout.write('[INFO]  [.env] Loaded ' + loaded.length + ' vars from ' + process.cwd() + '/.env\n');
-  // Show which critical vars are present (not their values)
   ['APP_TOKEN','OPENAI_API_KEY','SMTP_USER','SMTP_PASS'].forEach(k => {
     const val = process.env[k] || '';
     process.stdout.write('[INFO]  [.env]   ' + k + ': ' + (val ? '✓ set (' + val.length + ' chars)' : '✗ MISSING') + '\n');
@@ -57,15 +65,11 @@ const crypto    = require('crypto');
 const urlModule = require('url');
 const { StringDecoder } = require('string_decoder');
 
-/* ── DB modules ─────────────────────────────────────────────────── */
 const dbModule = require('./db.js');
 const cdb      = require('./counsellor-db.js');
 const rag      = require('./counsellor-rag.js');
 const dashApi  = require('./dashboard-api.js');
 
-/* ══════════════════════════════════════════════════════════════════
-   CONFIG
-══════════════════════════════════════════════════════════════════ */
 const PORT             = parseInt(process.env.PORT            || '3000', 10);
 const APP_TOKEN        = process.env.APP_TOKEN                || '';
 const OPENAI_KEY       = process.env.OPENAI_API_KEY           || '';
@@ -73,14 +77,12 @@ const OPENAI_BASE      = (process.env.OPENAI_BASE_URL || 'https://api.openai.com
 const AI_MODEL         = process.env.OPENAI_MODEL             || 'gpt-4o';
 const CHAT_MODEL       = process.env.COUNSELLOR_MODEL         || 'gpt-4o-mini';
 const ALLOWED_ORIGIN   = process.env.ALLOWED_ORIGIN           || '*';
-// Warn loudly if CORS is open wildcard — must be set to actual domain in production.
 if (ALLOWED_ORIGIN === '*') {
   process.stderr.write('[WARN]  [CORS] ALLOWED_ORIGIN is "*" — set it to your domain in .env before going live.\n');
 }
 const MAX_CONCURRENT_AI = parseInt(process.env.MAX_CONCURRENT_AI || '20', 10);
 const LOG_LEVEL        = (process.env.LOG_LEVEL || 'warn').toLowerCase();
 
-/* ── Structured logger (no-op in production for non-errors) ──────── */
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
 const _lvl = LOG_LEVELS[LOG_LEVEL] ?? 2;
 const log = {
@@ -90,28 +92,12 @@ const log = {
   error: (...a) =>               console.error('[ERROR]', ...a),
 };
 
-/* ══════════════════════════════════════════════════════════════════
-   PROCESS STABILITY
-══════════════════════════════════════════════════════════════════ */
 process.on('uncaughtException',  err    => log.error('uncaughtException:',  err.message, err.stack));
 process.on('unhandledRejection', reason => log.error('unhandledRejection:', reason));
 
-/* ══════════════════════════════════════════════════════════════════
-   DB INIT
-══════════════════════════════════════════════════════════════════ */
 const _db = dbModule._initDb();
 cdb.init(_db);
 
-/* ══ EMAIL — Raw SMTP to Gmail with auto-detect port/security ════════
-   Port 465 → implicit TLS (tls.connect)  — local dev, VPS
-   Port 587 → STARTTLS (net + STARTTLS)   — Render (blocks 465)
-
-   Set in .env:
-     SMTP_HOST=smtp.gmail.com
-     SMTP_PORT=587          ← use 587 on Render; 465 for direct TLS
-     SMTP_USER=you@gmail.com
-     SMTP_PASS="your app password"   ← note: quote if it contains spaces
-══════════════════════════════════════════════════════════════════ */
 const tls       = require('tls');
 const net       = require('net');
 const SMTP_HOST = process.env.SMTP_HOST || 'smtp.gmail.com';
@@ -119,8 +105,6 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '465', 10);
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = SMTP_USER || 'no-reply@numind.co.in';
-// Address that receives student query/scheduler notifications.
-// Defaults to SMTP_USER (the sending account) if not set separately.
 const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL || SMTP_USER;
 
 function _sendEmail({ to, subject, text }) {
@@ -137,18 +121,15 @@ function _sendEmail({ to, subject, text }) {
     `MIME-Version: 1.0${CRLF}Content-Type: text/plain; charset=utf-8${CRLF}` +
     `Content-Transfer-Encoding: base64${CRLF}${CRLF}` + enc(text) + CRLF;
 
-  // ── STARTTLS path (port 587 — required on Render, outbound 465 is blocked) ──
   if (SMTP_PORT === 587) {
     const socket = net.connect({ host: SMTP_HOST, port: 587 }, () => {
       let stage = 0; let tlsSocket = null;
       const send = s => (tlsSocket || socket).write(s + CRLF);
-
       const handleData = chunk => {
         const line = chunk.toString('utf8').trim();
         if      (stage === 0 && line.startsWith('220'))     { send('EHLO numind.maps'); stage = 1; }
         else if (stage === 1 && line.includes('250 '))      { send('STARTTLS'); stage = 2; }
         else if (stage === 2 && line.startsWith('220'))     {
-          // Upgrade plain socket to TLS
           tlsSocket = tls.connect({ socket, host: SMTP_HOST, servername: SMTP_HOST }, () => {
             tlsSocket.on('data', handleData);
             send('EHLO numind.maps'); stage = 3;
@@ -167,7 +148,6 @@ function _sendEmail({ to, subject, text }) {
         else if (stage === 11 && line.startsWith('221'))    { (tlsSocket||socket).destroy(); }
         else if (line.startsWith('5') || line.startsWith('4')) { log.error('[SMTP]', line); (tlsSocket||socket).destroy(); }
       };
-
       socket.on('data', handleData);
     });
     socket.setTimeout(15000, () => { log.warn('[SMTP] connect timeout →', safeTo); socket.destroy(); });
@@ -175,7 +155,6 @@ function _sendEmail({ to, subject, text }) {
     return;
   }
 
-  // ── Implicit TLS path (port 465 — default, works on VPS/local) ──
   const socket = tls.connect({ host: SMTP_HOST, port: SMTP_PORT, servername: SMTP_HOST }, () => {
     const send = s => socket.write(s + CRLF);
     let stage = 0;
@@ -202,25 +181,6 @@ if (!_emailFn) log.info('[Email] SMTP_USER/SMTP_PASS not set — email features 
 
 dashApi.init(_db, _emailFn, _dbWrite);
 
-/* ══════════════════════════════════════════════════════════════════
-   MICRO WRITE-QUEUE
-   Batches synchronous better-sqlite3 writes so they don't block the
-   event loop on every individual HTTP request.
-
-   How it works:
-     • Callers push { fn, resolve, reject } onto _wq
-     • A setImmediate drains the queue each event-loop tick
-     • Each flush runs up to WQ_BATCH_SIZE writes in one tick
-     • If the queue fills past WQ_MAX, new writes are dropped with a
-       warning (student data still in localStorage + already 200'd)
-
-   At 84 writes/min peak: queue drains in <1ms per tick, event loop
-   is never blocked for more than one write at a time.
-══════════════════════════════════════════════════════════════════ */
-// Writes per event-loop tick. Heavy writes (saveReport ≈ 40 statements in a
-// transaction) block the loop while running, so a smaller batch caps the
-// worst-case stall when several reports finish at once. Tunable on Render
-// without a code change; default 5 balances throughput vs latency spikes.
 const WQ_BATCH_SIZE = parseInt(process.env.WQ_BATCH_SIZE || '5', 10);
 const WQ_MAX        = parseInt(process.env.WQ_MAX || '500', 10);
 const _wq           = [];
@@ -241,10 +201,14 @@ function _scheduleWQ() {
   setImmediate(_wqDrain);
 }
 
+class QueueOverflowError extends Error {
+  constructor() { super('Write queue full — request dropped under load'); this.name = 'QueueOverflowError'; }
+}
+
 function _dbWrite(fn) {
   if (_wq.length >= WQ_MAX) {
     log.warn(`Write queue full (${WQ_MAX}) — dropping write`);
-    return Promise.resolve(null); // non-fatal: data is safe in localStorage
+    return Promise.reject(new QueueOverflowError());
   }
   return new Promise((resolve, reject) => {
     _wq.push({ fn, resolve, reject });
@@ -252,9 +216,6 @@ function _dbWrite(fn) {
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   HTTPS KEEP-ALIVE AGENT
-══════════════════════════════════════════════════════════════════ */
 const _httpsAgent = new https.Agent({
   keepAlive:      true,
   keepAliveMsecs: 10000,
@@ -263,58 +224,21 @@ const _httpsAgent = new https.Agent({
   timeout:        35000,
 });
 
-/* ── AI concurrency tracking — cluster-aware ────────────────────────
-   _aiInFlight    — in-flight /api/ai-report streams (gpt-4o, heavy)
-   _chatInFlight  — in-flight /api/counsellor-chat + greeting streams
-                    (gpt-4o-mini, lighter but far more frequent)
-
-   These are separate counters because the two endpoints have different
-   cost profiles and different caps. ai-report is capped at 20 globally
-   (expensive, long-running). counsellor-chat is capped at 40 per worker
-   (cheaper, shorter, but 500 students could all open Aria at once).
-
-   Without _chatInFlight, 500 simultaneous chat requests would open 500
-   parallel streams to OpenAI, saturate the HTTPS agent (maxSockets=50),
-   and trigger sustained 429s that even the backoff cannot recover from.
-─────────────────────────────────────────────────────────────────── */
 let _aiInFlight   = 0;
 const MAX_CONCURRENT_CHAT = parseInt(process.env.MAX_CONCURRENT_CHAT || '40', 10);
 let _chatInFlight = 0;
 
-/* ══════════════════════════════════════════════════════════════════
-   STATIC FILE CACHE
-   filePath → { buf, compressed, etag, mime, mtime, checkedAt }
-
-   TTL revalidation: mtime is rechecked at most every CACHE_TTL_MS.
-   This eliminates the fs.stat() syscall on every cache hit.
-
-   Inflight dedup: a _pending Map prevents concurrent cold-starts from
-   triggering multiple simultaneous disk reads + gzip calls for the same file.
-══════════════════════════════════════════════════════════════════ */
 const CACHE_MAX_FILES     = 120;
 const CACHE_MAX_FILE_SIZE = 512 * 1024;
-const CACHE_TTL_MS        = 30_000; // recheck mtime every 30s
+const CACHE_TTL_MS        = 30_000;
 const _staticCache        = new Map();
-const _cachePending       = new Map(); // filePath → Promise
+const _cachePending       = new Map();
 
 function _cacheEvict() {
   if (_staticCache.size <= CACHE_MAX_FILES) return;
   _staticCache.delete(_staticCache.keys().next().value);
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   RATE LIMITERS
-   · IP limiter  — 200 req/min per IP  (pre-auth, all routes)
-   · unlock RL   — 20 attempts/hr per email
-   · chat RL     — 60 messages/hr per email
-   · query RL    — 5 submissions/hr per email
-
-   NOTE: these Maps are per-process. In PM2 cluster mode, each worker
-   has its own limiter. The effective limit per email = limit × workers.
-   At 4 cores a student could send 240 chat msgs/hr instead of 60.
-   Acceptable for a school deployment; for stricter enforcement write
-   RL state to SQLite (single shared DB) — see _rlCheckDb() stub below.
-══════════════════════════════════════════════════════════════════ */
 const RL_WINDOW = 60 * 60 * 1000;
 const IP_WINDOW = 60 * 1000;
 const _ipRL    = new Map();
@@ -330,7 +254,6 @@ function _rlCheck(map, key, limit, windowMs) {
   return { allowed: true };
 }
 
-// DB-backed RL — atomic across all PM2 workers
 function _rlCheckDb(scope, key, limit, windowMs) {
   try { return cdb.rlCheck(scope, key, limit, windowMs || RL_WINDOW); }
   catch (e) { log.warn('[RL] DB check failed, failing open:', e.message); return { allowed: true }; }
@@ -342,30 +265,16 @@ function _getIP(req) {
     || 'unknown';
 }
 
-// Sweep in-memory IP/login limiters every 5 min
 setInterval(() => {
   const n = Date.now();
-  // _ipRL entries created by _rlCheck use field 'resetAt'
-  // _loginRL entries created inline use field 'reset'
   for (const [k, v] of _ipRL)    if (n > v.resetAt) _ipRL.delete(k);
   for (const [k, v] of _loginRL) if (n > v.reset)   _loginRL.delete(k);
 }, 5 * 60 * 1000).unref();
 
-// Prune DB rate-limits, expired counsellor tokens, and OTP stage tokens hourly
 setInterval(() => {
   try { cdb.rlPrune(); cdb.pruneTokens(); cdb.pruneOtps(); cdb.pruneOtpStageTokens(); } catch (_) {}
 }, RL_WINDOW).unref();
 
-/* ── Analytics cache background refresher ───────────────────────────
-   Pre-computes all heavy dashboard aggregates (getAggregateScores,
-   getSchoolSummaries, getCareerDistribution, getModuleTiming, trend)
-   every 5 minutes via the write queue so it never contends with
-   student assessment saves. Dashboard API reads hit the cache instantly
-   via a single PK lookup instead of running live GROUP BY scans.
-
-   First run: 30 seconds after startup (give the DB time to settle).
-   Subsequent: every 5 minutes.
-─────────────────────────────────────────────────────────────────── */
 const ANALYTICS_REFRESH_MS = 5 * 60 * 1000;
 setTimeout(() => {
   const _doRefresh = () => {
@@ -374,20 +283,10 @@ setTimeout(() => {
       catch (e) { log.warn('[Analytics] cache refresh failed:', e.message); }
     }).catch(() => {});
   };
-  _doRefresh(); // immediate first run
+  _doRefresh();
   setInterval(_doRefresh, ANALYTICS_REFRESH_MS).unref();
 }, 30 * 1000).unref();
 
-/* ══════════════════════════════════════════════════════════════════
-   OPENAI REQUEST HELPER
-   Includes exponential backoff on 429 (rate-limit) responses.
-   OpenAI returns 429 during traffic spikes — without retries the
-   student sees a confusing error and has to manually try again.
-   Retry logic: up to 3 attempts, 1s → 2s → 4s delays.
-   Streaming endpoints (chat, greeting, ai-report) use this too;
-   for streams the retry fires before the response is handed to the
-   caller, so the stream starts cleanly on the retry attempt.
-══════════════════════════════════════════════════════════════════ */
 function _openaiReqRaw(endpoint, body) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(OPENAI_BASE + endpoint);
@@ -415,11 +314,9 @@ function _openaiReqRaw(endpoint, body) {
 
 async function _openaiReq(endpoint, body, _attempt = 0) {
   const upstream = await _openaiReqRaw(endpoint, body);
-  // Retry on 429 (rate-limited) with exponential backoff: 1s, 2s, 4s
   if (upstream.statusCode === 429 && _attempt < 3) {
     const delayMs = Math.pow(2, _attempt) * 1000;
     log.warn(`[OpenAI] 429 on attempt ${_attempt + 1} — retrying in ${delayMs}ms`);
-    // Drain the response body so the socket is released back to the agent
     await new Promise(r => { upstream.resume(); upstream.on('end', r); upstream.on('error', r); });
     await new Promise(r => setTimeout(r, delayMs));
     return _openaiReq(endpoint, body, _attempt + 1);
@@ -427,9 +324,6 @@ async function _openaiReq(endpoint, body, _attempt = 0) {
   return upstream;
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   STATIC ASSETS
-══════════════════════════════════════════════════════════════════ */
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'application/javascript; charset=utf-8',
@@ -452,12 +346,6 @@ const _CSP =
 
 function _injectToken(html) {
   if (!APP_TOKEN) return html;
-  // Inject as a <meta> tag, NOT as window._APP_TOKEN global.
-  // A window global is accessible to any script on the page — including
-  // injected scripts from a compromised dependency. A <meta> tag requires
-  // explicit DOM access (document.querySelector) and is not accessible to
-  // cross-origin iframes or injected scripts that don't have DOM access.
-  // state.js and ui-bridge.js already read from meta[name="app-token"] first.
   return html.replace('</head>',
     `<meta name="app-token" content=${JSON.stringify(APP_TOKEN)}>\n</head>`);
 }
@@ -480,11 +368,9 @@ function _serveStatic(res, filePath, req) {
   const now    = Date.now();
 
   if (cached) {
-    // TTL check: only stat disk every CACHE_TTL_MS
     if (now - cached.checkedAt < CACHE_TTL_MS) {
       return _respondCached(res, req, cached, ext);
     }
-    // TTL expired — recheck mtime without blocking
     fs.stat(filePath, (err, stat) => {
       if (err || !stat) { _staticCache.delete(filePath); return _serveFromDisk(res, filePath, ext, req); }
       cached.checkedAt = now;
@@ -497,7 +383,6 @@ function _serveStatic(res, filePath, req) {
     return;
   }
 
-  // Inflight dedup: if another request is already loading this file, wait for it
   if (_cachePending.has(filePath)) {
     _cachePending.get(filePath).then(() => {
       const entry = _staticCache.get(filePath);
@@ -511,7 +396,6 @@ function _serveStatic(res, filePath, req) {
 }
 
 function _serveFromDisk(res, filePath, ext, req) {
-  // Register inflight promise so concurrent misses coalesce
   let _resolve;
   const pending = new Promise(r => { _resolve = r; });
   _cachePending.set(filePath, pending);
@@ -543,7 +427,6 @@ function _serveFromDisk(res, filePath, ext, req) {
         });
       });
     } else {
-      // Large or non-compressible — respond directly, skip cache
       if ((req?.headers['if-none-match'] || '') === etag) {
         res.writeHead(304); return res.end();
       }
@@ -563,7 +446,6 @@ function _respondCached(res, req, entry, ext) {
   res.end(useGzip ? entry.compressed : entry.buf);
 }
 
-/* Pre-warm cache at startup for the files every user loads */
 function _prewarm() {
   const hot = ['index.html', 'styles.css', 'main.js', 'ai-counsellor.js', 'state.js', 'router.js'].map(f => path.join(__dirname, f));
   for (const p of hot) {
@@ -573,9 +455,6 @@ function _prewarm() {
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   HELPERS
-══════════════════════════════════════════════════════════════════ */
 function _readBody(req, maxBytes = 512 * 1024) {
   return new Promise((resolve, reject) => {
     const chunks = []; let total = 0; let tooLarge = false;
@@ -583,7 +462,7 @@ function _readBody(req, maxBytes = 512 * 1024) {
       total += c.length;
       if (total > maxBytes) {
         if (!tooLarge) { tooLarge = true; reject(new Error('body_too_large')); }
-        return; // drain without storing — keeps socket alive for 413 response
+        return;
       }
       chunks.push(c);
     });
@@ -613,9 +492,6 @@ function _checkToken(req) {
   catch { return false; }
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   ASSESSMENT HANDLERS
-══════════════════════════════════════════════════════════════════ */
 async function _handleSaveRegistration(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -625,28 +501,27 @@ async function _handleSaveRegistration(req, res) {
   if (!sessionId) return _json(res, 400, { error: 'sessionId is required' });
 
   try {
-    // EMAIL IS THE IDENTITY. saveRegistration is now atomic find-or-create:
-    // it resolves by email and inserts inside a single transaction, with the
-    // UNIQUE(email) constraint as the backstop. No check-then-write race even
-    // under hundreds of simultaneous first-time registrations.
-    //   • existing email → returns that row's session_id (+ whether test taken)
-    //   • new email      → creates the row with the client's sessionId
     const reg = await _dbWrite(() => dbModule.saveRegistration(student || {}, sessionId));
 
-    if (reg && reg.session_id) {
-      return _json(res, 200, {
-        ok: true,
-        sessionId: reg.session_id,
-        existing: !!reg.existing,
-        testTaken: !!reg.testTaken,
-      });
-    }
-
-    // _dbWrite returned null only when the write queue was saturated (overload
-    // protection). The client keeps its local sessionId and data in localStorage;
-    // this is non-fatal and the next save will retry.
-    _json(res, 200, { ok: true, sessionId, existing: false, testTaken: false, queued: false });
+    return _json(res, 200, {
+      ok: true,
+      sessionId: reg.session_id,
+      existing: !!reg.existing,
+      testTaken: !!reg.testTaken,
+    });
   } catch (err) {
+    if (err instanceof QueueOverflowError) {
+      // Confirmed happening in production under real load (see load-test
+      // results, 40%+ registration failure with continuous "Write queue
+      // full — dropping write" warnings). Previously this path returned a
+      // fake 200 with queued:false, which the client never checked, so the
+      // student saw "success" while their row silently never existed.
+      res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({
+        error: 'Server is busy — your details were not saved. Please try again in a few seconds.',
+        retry_after: 3,
+      }));
+    }
     log.error('[save-registration]', err.message);
     _json(res, 500, { error: 'Server error' });
   }
@@ -660,11 +535,6 @@ async function _handleSaveSection(req, res) {
   const { sessionId, moduleKey, answers, scores, duration } = body || {};
   if (!sessionId || !moduleKey) return _json(res, 400, { error: 'sessionId and moduleKey are required' });
 
-  // DB validation: sessionId must exist in students table.
-  // Prevents arbitrary session IDs from writing assessment data.
-  // This is the only server-side identity check for student data writes —
-  // no per-student token is needed because each student only writes to their own row
-  // and the sessionId is a cryptographic random hex string (not guessable).
   const studentRow = dbModule.getStudentBySessionId
     ? dbModule.getStudentBySessionId(sessionId)
     : null;
@@ -678,6 +548,10 @@ async function _handleSaveSection(req, res) {
     }));
     _json(res, 200, { ok: true });
   } catch (err) {
+    if (err instanceof QueueOverflowError) {
+      res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Server is busy — this section was not saved. Please try again.', retry_after: 3 }));
+    }
     log.error('[save-section]', err.message);
     if (err.message?.includes('unknown module')) return _json(res, 400, { error: err.message });
     _json(res, 500, { error: 'Server error' });
@@ -691,27 +565,26 @@ async function _handleSaveReport(req, res) {
   catch (e) { return _json(res, e.message === 'body_too_large' ? 413 : 400, { error: e.message }); }
   if (!body?.sessionId) return _json(res, 400, { error: 'sessionId is required' });
 
-  // DB validation: sessionId must belong to a registered student
   const studentRow = dbModule.getStudentBySessionId
     ? dbModule.getStudentBySessionId(body.sessionId)
     : null;
   if (!studentRow) return _json(res, 404, { error: 'Session not found.' });
 
-  // AI concurrency gate — prevent report storm at 5k concurrent
   if (_aiInFlight >= MAX_CONCURRENT_AI) {
     log.warn('[save-report] AI cap hit —', _aiInFlight, '/', MAX_CONCURRENT_AI, 'in flight');
     return _json(res, 429, { error: 'Report generation is busy. Please wait 30 seconds and try again.', retry_after: 30 });
   }
   try {
     await _dbWrite(() => dbModule.saveReport(body));
-    // Invalidate the per-student report cache and RAG context cache so the next
-    // counsellor request gets fresh data rather than a stale pre-report snapshot.
-    // body.student.email is present when the full report body is sent from the client.
     if (body?.student?.email) {
       try { cdb._invalidateReportCache(body.student.email); } catch (_) {}
     }
     _json(res, 200, { ok: true });
   } catch (err) {
+    if (err instanceof QueueOverflowError) {
+      res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Server is busy — your report was not saved. Please try again shortly.', retry_after: 5 }));
+    }
     log.error('[save-report]', err.message);
     _json(res, 500, { error: 'Server error' });
   }
@@ -721,16 +594,11 @@ async function _handleAIReport(req, res) {
   if (!_checkToken(req))  return _json(res, 401, { error: 'Unauthorized' });
   if (!OPENAI_KEY)        return _json(res, 503, { error: 'AI not configured.' });
 
-  // Local per-worker cap (fast, in-memory)
   if (_aiInFlight >= MAX_CONCURRENT_AI) {
     res.writeHead(503, { 'Retry-After': '10', 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Server busy — please try again in a few seconds.' }));
   }
 
-  // Cluster-wide cap via shared SQLite rate_limits table.
-  // Window = 60s; resets each minute so cap is "MAX_CONCURRENT_AI streams/min globally".
-  // This is a rate-limit proxy for concurrency — not perfect but prevents runaway spend
-  // across workers without adding complex shared-memory IPC.
   const globalRl = _rlCheckDb('ai-global', 'slots', MAX_CONCURRENT_AI, 60 * 1000);
   if (!globalRl.allowed) {
     res.writeHead(503, { 'Retry-After': String(globalRl.retryAfter || 10), 'Content-Type': 'application/json' });
@@ -741,7 +609,6 @@ async function _handleAIReport(req, res) {
   try { body = await _readBody(req, 256 * 1024); }
   catch (e) { return _json(res, 400, { error: e.message }); }
 
-  // Security: strip any client-injected system messages; cap tokens to prevent cost abuse
   const rawMsgs  = Array.isArray(body?.messages) ? body.messages : [];
   const safeMsgs = rawMsgs
     .filter(m => m && typeof m === 'object' && ['user','assistant'].includes(m.role))
@@ -753,7 +620,7 @@ async function _handleAIReport(req, res) {
   _aiInFlight++;
   let _aiReleased = false;
   const releaseAi = () => { if (!_aiReleased) { _aiReleased = true; _aiInFlight--; } };
-  res.on('close', releaseAi); // client disconnect before stream ends
+  res.on('close', releaseAi);
   try {
     const upstream = await _openaiReq('/v1/chat/completions', {
       model: AI_MODEL, temperature: temp,
@@ -767,8 +634,6 @@ async function _handleAIReport(req, res) {
     }
     res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no' });
     upstream.pipe(res);
-    // Bind to both end and error; release() is idempotent so an error-then-end
-    // sequence can't double-decrement the counter.
     const _done = () => { releaseAi(); if (!res.writableEnded) res.end(); };
     upstream.on('end',   _done);
     upstream.on('error', _done);
@@ -778,46 +643,6 @@ async function _handleAIReport(req, res) {
     if (!res.headersSent) _json(res, 502, { error: 'AI service error' });
   }
 }
-
-/* ══════════════════════════════════════════════════════════════════
-   COUNSELLOR AUTH HANDLERS
-   
-   Auth flow:
-   
-   FIRST TIME (no PIN set):
-     POST /api/counsellor-unlock  { email }
-       → { step: 'otp-sent' }          (sends OTP to email)
-     POST /api/counsellor-verify-otp  { email, otp }
-       → { step: 'set-pin' }           (OTP valid, prompt PIN creation)
-     POST /api/counsellor-set-pin  { email, pin }    (with X-Counsellor-Otp-Token)
-       → { unlocked: true, ... }       (PIN stored, session issued)
-   
-   RETURNING USER (same device):
-     POST /api/counsellor-unlock  { email, sessionId }
-       → { unlocked: true, ... }       (instant, no PIN needed)
-   
-   RETURNING USER (new device):
-     POST /api/counsellor-unlock  { email }
-       → { step: 'enter-pin' }         (PIN exists, prompt for it)
-     POST /api/counsellor-verify-pin  { email, pin }
-       → { unlocked: true, ... }
-
-   CHANGE PIN:
-     POST /api/counsellor-request-otp  { email }  (counsellor token required)
-       → { ok: true }                  (sends OTP)
-     POST /api/counsellor-set-pin  { email, pin }  (with X-Counsellor-Otp-Token)
-       → { ok: true }
-
-══════════════════════════════════════════════════════════════════ */
-
-/* ── OTP stage tokens — now DB-backed via counsellor-db ─────────────
-   Replaced the in-memory _otpVerifiedTokens Map. That Map broke in PM2
-   cluster mode: worker A issued the token after OTP verify, but the
-   subsequent set-pin request landed on worker B where the Map was empty.
-   DB-backed tokens are visible to all workers immediately.
-   Functions: cdb.issueOtpStageToken(email)  → token string
-              cdb.verifyOtpStageToken(token, email) → bool (single-use, deletes on verify)
-─────────────────────────────────────────────────────────────────── */
 
 async function _handleCounsellorUnlock(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
@@ -834,12 +659,6 @@ async function _handleCounsellorUnlock(req, res) {
   }
 
   try {
-    // Step 1: does a COMPLETED REPORT exist for this email?
-    // getReportByEmail uses a LEFT JOIN, so it returns a truthy object whenever
-    // the student ROW exists — even with no report (e.g. admin-created but the
-    // test was never taken). The hard rule is: no student without a completed
-    // report may reach Aria. So we additionally require report.fit_tier, which
-    // is only ever set when saveReport() has written a report_summary row.
     const reportObj = cdb.getReportByEmail(email);
     const hasReport = !!(reportObj && reportObj.report &&
       (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
@@ -848,15 +667,9 @@ async function _handleCounsellorUnlock(req, res) {
         error: 'No report found for this email. Please complete your NuMind MAPS assessment first.' });
     }
 
-    // Step 2: does this student have a PIN set?
     const pinSet = cdb.hasPinSet(email);
 
     if (!pinSet) {
-      // First time. Email is the identity, so verify ownership of the inbox
-      // with an OTP before letting them set a PIN — exactly what you asked for.
-      // If SMTP is configured, send the code and move to the otp step.
-      // If SMTP is NOT configured, fall back to direct PIN setup so the
-      // counsellor never becomes completely unreachable.
       if (_emailFn) {
         try {
           const code = await _dbWrite(() => cdb.createOtp(email, 'register'));
@@ -874,8 +687,6 @@ async function _handleCounsellorUnlock(req, res) {
             message: 'We sent a 6-digit code to your email. Enter it to continue.' });
         } catch (mailErr) {
           log.error('[unlock] OTP send failed for', email, '-', mailErr.message);
-          // SMTP hiccup — degrade gracefully to direct PIN setup rather than
-          // blocking the student entirely.
           return _json(res, 200, { unlocked: false, step: 'set-pin',
             message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
         }
@@ -884,7 +695,6 @@ async function _handleCounsellorUnlock(req, res) {
         message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
     }
 
-    // PIN exists — ask for it
     return _json(res, 200, { unlocked: false, step: 'enter-pin',
       message: 'Enter your PIN to continue.' });
 
@@ -894,20 +704,8 @@ async function _handleCounsellorUnlock(req, res) {
   }
 }
 
-// Shared helper: build and send the full unlocked response
 async function _jsonUnlocked(res, email, reportObj) {
-  // IMPORTANT: this function must never throw past its own boundary.
-  // It's called as `return _jsonUnlocked(...)` (not awaited) from several
-  // handlers' try/catch blocks. An unawaited rejected promise escapes the
-  // caller's try/catch entirely — no response gets sent, and the client
-  // hangs on "Checking…" forever with no error. Wrapping in our own
-  // try/catch guarantees a response is always written.
   try {
-    // HARD GATE (single chokepoint): no student without a completed report
-    // may ever receive an unlocked counsellor session. Every unlock path
-    // (PIN, set-pin, reset-pin, name-verify) funnels through here, so this
-    // one guard enforces the rule everywhere. getReportByEmail LEFT-JOINs,
-    // so a bare student row is truthy; require a real report via fit_tier.
     const hasReport = !!(reportObj && reportObj.report &&
       (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
     if (!hasReport) {
@@ -922,9 +720,26 @@ async function _jsonUnlocked(res, email, reportObj) {
       reportSummary = {
         fit_tier: r.fit_tier, fit_score: r.fit_score,
         recommended_primary: r.recommended_primary,
+        recommended_alternate: r.recommended_alternate,
+        recommended_exploratory: r.recommended_exploratory,
+        strong_fit_pathways: r.strong_fit_pathways,
+        emerging_fit_pathways: r.emerging_fit_pathways,
+        exploratory_pathways: r.exploratory_pathways,
         top3_interests: r.top3_interests,
         top_personality_traits: r.top_personality_traits,
         seaa_status: r.seaa_status,
+        personality_status: r.personality_status,
+        aptitude_status: r.aptitude_status,
+        interest_status: r.interest_status,
+        // Narrative sections — previously omitted entirely, so the student's
+        // report panel could only ever show scores, never the written report.
+        holistic_summary: r.holistic_summary,
+        personality_profile: r.personality_profile,
+        aptitude_profile: r.aptitude_profile,
+        interest_profile: r.interest_profile,
+        internal_motivators: r.internal_motivators,
+        wellbeing_guidance: r.wellbeing_guidance,
+        stream_advice: r.stream_advice,
       };
     }
     const fullScores = {
@@ -943,15 +758,6 @@ async function _jsonUnlocked(res, email, reportObj) {
   }
 }
 
-/* ── POST /api/counsellor-verify-otp ──────────────────────────────
-   Verifies the OTP sent during first-time setup or PIN reset.
-   Returns a short-lived otpToken the client uses to then set a PIN.
-*/
-/* ── POST /api/counsellor-verify-name ─────────────────────────────
-   Fallback when SMTP is not configured.
-   Student proves ownership with fullName + class from their registration.
-   On success: if SMTP now configured, prompt PIN setup; else unlock directly.
-*/
 async function _handleCounsellorVerifyName(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -972,7 +778,6 @@ async function _handleCounsellorVerifyName(req, res) {
     const reportObj = cdb.getReportByEmail(email);
     if (!reportObj) return _json(res, 200, { ok: false, error: 'No account found for this email. Make sure you use the email you registered with.' });
 
-    // Accept match on full name OR first name alone (students often use just first name)
     const dbFullName  = (reportObj.student?.fullName  || '').toLowerCase().trim();
     const dbFirstName = (reportObj.student?.firstName || '').toLowerCase().trim();
     const dbLastName  = (reportObj.student?.lastName  || '').toLowerCase().trim();
@@ -995,7 +800,6 @@ async function _handleCounsellorVerifyName(req, res) {
     }
 
     log.info('[unlock]', email, '| verified via: name+class');
-    // Unlock directly — name+class is the best we can do without SMTP
     return _jsonUnlocked(res, email, reportObj);
   } catch (err) {
     log.error('[counsellor-verify-name]', err.message);
@@ -1024,9 +828,6 @@ async function _handleCounsellorVerifyOtp(req, res) {
     if (!valid) {
       return _json(res, 200, { ok: false, error: 'Incorrect or expired code. Please try again.' });
     }
-    // Issue a short-lived DB-backed token proving OTP was verified.
-    // DB-backed so it survives PM2 worker routing — the set-pin call may
-    // land on a different worker than the verify-otp call.
     const otpToken = await _dbWrite(() => cdb.issueOtpStageToken(email));
 
     if (purpose === 'reset') {
@@ -1041,11 +842,6 @@ async function _handleCounsellorVerifyOtp(req, res) {
   }
 }
 
-/* ── POST /api/counsellor-request-otp ─────────────────────────────
-   Sends a PIN-reset OTP. Used by the "Forgot PIN?" flow. The only gate
-   is that a report exists for this email (proof they completed the test).
-   No counsellor session is required — they're locked out, that's the point.
-*/
 async function _handleCounsellorRequestOtp(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -1062,8 +858,6 @@ async function _handleCounsellorRequestOtp(req, res) {
 
   try {
     const reportObj = cdb.getReportByEmail(email);
-    // Anti-enumeration: respond ok regardless, but only actually send if the
-    // report exists AND SMTP is configured.
     if (reportObj && _emailFn) {
       const code = await _dbWrite(() => cdb.createOtp(email, 'reset'));
       _emailFn({
@@ -1084,10 +878,6 @@ async function _handleCounsellorRequestOtp(req, res) {
   }
 }
 
-/* ── POST /api/counsellor-set-pin ─────────────────────────────────
-   Sets or updates the student's PIN.
-   Requires X-Counsellor-Otp-Token header (issued by /verify-otp).
-*/
 async function _handleCounsellorSetPin(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -1104,10 +894,6 @@ async function _handleCounsellorSetPin(req, res) {
     return res.end(JSON.stringify({ error: 'Too many attempts.' }));
   }
 
-  // When SMTP/OTP is active, a first-time PIN may only be set AFTER the OTP
-  // was verified. The proof is the single-use DB-backed stage token returned
-  // by /counsellor-verify-otp, sent here in the X-Counsellor-Otp-Token header.
-  // (If SMTP is off, the unlock flow used direct set-pin, so we skip this.)
   if (_emailFn) {
     const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
     if (!cdb.verifyOtpStageToken(otpToken, email)) {
@@ -1135,9 +921,6 @@ async function _handleCounsellorSetPin(req, res) {
   }
 }
 
-/* ── POST /api/counsellor-verify-pin ──────────────────────────────
-   Verifies PIN and unlocks the session (returning user, new device).
-*/
 async function _handleCounsellorVerifyPin(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -1168,17 +951,6 @@ async function _handleCounsellorVerifyPin(req, res) {
   }
 }
 
-/* ── POST /api/counsellor-request-otp ─────────────────────────────
-   Sends a PIN-reset OTP to the student's registered email.
-   Requires an active counsellor session (X-Counsellor-Token).
-*/
-/* ── POST /api/counsellor-reset-pin ───────────────────────────────
-   Resets a student's PIN without any OTP or email.
-   Rule: if the report exists in the DB for this email, the student
-   is allowed to set a new PIN. That is the only check needed.
-   The report existing IS the proof they completed the assessment.
-   Rate limited to prevent brute-force PIN takeover.
-*/
 async function _handleCounsellorResetPin(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -1195,10 +967,6 @@ async function _handleCounsellorResetPin(req, res) {
     return res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
   }
 
-  // When SMTP/OTP is active, a reset must be preceded by OTP verification
-  // (proving the requester controls the inbox). The single-use stage token
-  // from /counsellor-verify-otp is the proof. If SMTP is off, the report-
-  // exists check below is the only available gate.
   if (_emailFn) {
     const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
     if (!cdb.verifyOtpStageToken(otpToken, email)) {
@@ -1208,7 +976,6 @@ async function _handleCounsellorResetPin(req, res) {
   }
 
   try {
-    // The only gate: report must exist in DB
     const reportObj = cdb.getReportByEmail(email);
     if (!reportObj) {
       return _json(res, 200, { ok: false,
@@ -1216,14 +983,12 @@ async function _handleCounsellorResetPin(req, res) {
     }
     await _dbWrite(() => cdb.setStudentPin(email, pin));
     log.info('[reset-pin]', email);
-    // Immediately issue a session token so they don't need to re-enter the PIN
     return _jsonUnlocked(res, email, reportObj);
   } catch (err) {
     log.error('[counsellor-reset-pin]', err.message);
     _json(res, 500, { error: 'Server error.' });
   }
 }
-
 
 async function _handleCounsellorChat(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
@@ -1245,23 +1010,14 @@ async function _handleCounsellorChat(req, res) {
     return res.end(JSON.stringify({ error: `Rate limit reached. Wait ${Math.ceil(rl.retryAfter / 60)} min.` }));
   }
 
-  // Concurrent stream cap — prevents 500 students opening Aria simultaneously
-  // and saturating the HTTPS agent / OpenAI rate limits.
-  // Students over the cap get a friendly retry message, not a hard error.
   if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
     res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Aria is busy right now — please try again in a few seconds.' }));
   }
   _chatInFlight++;
-  // The stream finishes ASYNCHRONOUSLY via upstream events, long after this
-  // function's try-block returns. Decrementing in `finally` would drop the
-  // counter immediately and make MAX_CONCURRENT_CHAT meaningless. Instead use
-  // a single idempotent release() called from every terminal path (success,
-  // upstream error, early return, catch, client disconnect). Guard ensures it
-  // runs exactly once — a double-decrement is as harmful as a leak.
   let _released = false;
   const release = () => { if (!_released) { _released = true; _chatInFlight--; } };
-  res.on('close', release); // client disconnected before stream finished
+  res.on('close', release);
 
   try {
     const reportObj    = cdb.getReportByEmail(email);
@@ -1310,9 +1066,8 @@ async function _handleCounsellorChat(req, res) {
         }
       }
       res.end();
-      release(); // stream finished — now safe to free the slot
+      release();
       if (fullText.trim()) {
-        // Save via write-queue — non-blocking
         _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message  })).catch(e => log.error('[saveMessage user]', e.message));
         _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: fullText })).catch(e => log.error('[saveMessage asst]', e.message));
       }
@@ -1360,7 +1115,6 @@ async function _handleCounsellorClearHistory(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
-  // Must verify counsellor token — prevents student A clearing student B's history
   const email = _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   try {
@@ -1372,7 +1126,6 @@ async function _handleCounsellorClearHistory(req, res) {
   }
 }
 
-
 async function _handleCounsellorGreeting(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   if (!OPENAI_KEY) return _json(res, 503, { error: 'AI not configured.' });
@@ -1383,17 +1136,11 @@ async function _handleCounsellorGreeting(req, res) {
   const email = _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
 
-  // Same cap as counsellor-chat — greetings open a stream too.
-  // A school deployment where 200 students all open Aria at the same time
-  // (e.g. a teacher says "open the counsellor now") would otherwise
-  // saturate the HTTPS agent and trigger cascading 429s.
   if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
     res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Aria is busy right now — please try again in a few seconds.' }));
   }
   _chatInFlight++;
-  // Same async-stream caveat as counsellor-chat: release the slot only when the
-  // stream truly terminates, via a once-only release() on every exit path.
   let _released = false;
   const release = () => { if (!_released) { _released = true; _chatInFlight--; } };
   res.on('close', release);
@@ -1410,7 +1157,6 @@ async function _handleCounsellorGreeting(req, res) {
     const topInterest  = reportObj?.report?.top3_interests?.[0]?.label || '';
     const topTrait     = reportObj?.report?.top_personality_traits?.[0]?.name || '';
 
-    // Build a contextual greeting prompt
     const greetingPrompt = [
       `Write a warm, personalised opening message for ${firstName} who just opened their AI counsellor chat.`,
       '',
@@ -1469,9 +1215,6 @@ async function _handleCounsellorGreeting(req, res) {
     upstream.on('end', () => {
       res.end();
       release();
-      // Save the greeting as the first assistant message in this conversation.
-      // Use _dbWrite so this write goes through the queue rather than blocking
-      // the event loop synchronously after the streaming response completes.
       if (fullText.trim() && body.conversationId) {
         const sessionId = reportObj?.session_id || null;
         _dbWrite(() => cdb.saveMessage({
@@ -1493,10 +1236,6 @@ async function _handleCounsellorGreeting(req, res) {
   }
 }
 
-/* ── GET /api/counsellor-conversations ─────────────────────────────
-   Returns the list of past conversations for a student (by email).
-*/
-
 async function _handleCounsellorConversations(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   const email = _verifyCounsellorToken(req);
@@ -1509,10 +1248,6 @@ async function _handleCounsellorConversations(req, res) {
     _json(res, 500, { error: 'Server error' });
   }
 }
-
-/* ── GET /api/counsellor-history ────────────────────────────────────
-   Returns messages for a specific conversation_id.
-*/
 
 async function _handleCounsellorHistory(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
@@ -1545,7 +1280,6 @@ async function _handleCounsellorQuery(req, res) {
     const id = await _dbWrite(() => cdb.saveQuery({ name, email, message, preferredDate, preferredTime }));
     log.info(`[counsellor-query] ${email} id=${id}`);
 
-    // Send notification to admin/counsellor
     if (_emailFn && NOTIFICATION_EMAIL) {
       try {
         _emailFn({
@@ -1570,7 +1304,6 @@ async function _handleCounsellorQuery(req, res) {
       }
     }
 
-    // Send confirmation to student
     if (_emailFn) {
       try {
         _emailFn({
@@ -1601,15 +1334,9 @@ async function _handleCounsellorQuery(req, res) {
   }
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   MAIN DISPATCHER
-══════════════════════════════════════════════════════════════════ */
 const _startTime = Date.now();
 
 async function _handleRequest(req, res) {
-  // Per-request timeout — kills slow-loris and stalled clients.
-  // Import endpoint gets a longer window: 2000-row transactions on a slow
-  // Render disk can take 20-30s. The global 15s was killing valid imports.
   const isImport = (req.url || '').includes('/students/import');
   req.setTimeout(isImport ? 120000 : 15000, () => {
     req.destroy();
@@ -1625,7 +1352,6 @@ async function _handleRequest(req, res) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-App-Token, X-Session-ID, Authorization, X-Counsellor-Token, X-Counsellor-Otp-Token');
   if (method === 'OPTIONS') { res.writeHead(204); return res.end(); }
 
-  // ── Health check (before token check — probes don't carry tokens) ──
   if (method === 'GET' && pathname === '/health') {
     let dbOk = true;
     try { _db.prepare('SELECT 1').get(); } catch { dbOk = false; }
@@ -1634,7 +1360,6 @@ async function _handleRequest(req, res) {
     return res.end(JSON.stringify(payload));
   }
 
-  // ── IP rate limit (pre-auth, all routes) ─────────────────────────
   const ip   = _getIP(req);
   const ipRl = _rlCheck(_ipRL, ip, 200, IP_WINDOW);
   if (!ipRl.allowed) {
@@ -1643,7 +1368,6 @@ async function _handleRequest(req, res) {
   }
 
   try {
-    // Route map — O(1) lookup, streaming endpoints get 90s timeout
     const _STREAMING = new Set(['/api/counsellor-chat','/api/counsellor-greeting','/api/ai-report','/api/counsellor-summarise']);
     if (_STREAMING.has(pathname)) res.setTimeout(90000);
 
@@ -1666,7 +1390,6 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/save-report')              return await _handleSaveReport(req, res);
     if (method === 'POST' && pathname === '/api/ai-report')                return await _handleAIReport(req, res);
     if (method === 'POST' && pathname === '/api/dashboard/login') {
-      // Brute-force protection: 10 attempts per 15 minutes per IP
       const _ip = req.socket.remoteAddress || 'unknown';
       const _now = Date.now(), _win = 15 * 60 * 1000, _lim = 10;
       const _loginEntry = _loginRL.get(_ip) || { count: 0, reset: _now + _win };
@@ -1695,8 +1418,6 @@ async function _handleRequest(req, res) {
       res.writeHead(403); return res.end('Forbidden');
     }
 
-    // Basename fallback: if /js/foo.js doesn't exist, try /foo.js at root.
-    // This lets <script src="./js/main.js"> work even when files are at root.
     if (!fs.existsSync(filePath)) {
       const base = path.join(__dirname, path.basename(filePath));
       if (base !== filePath && fs.existsSync(base)) {
@@ -1711,26 +1432,11 @@ async function _handleRequest(req, res) {
   }
 }
 
-
-// (Rate-limiter Map sweep is at the top of the file, after the RL declarations.)
-
-/* ══════════════════════════════════════════════════════════════════
-   START
-══════════════════════════════════════════════════════════════════ */
-
-/* ── POST /api/dashboard/insights ──────────────────────────────
-   Proxies AI insight generation through the server.
-   OpenAI key stays server-side — never exposed to browser.
-   Body: { prompt: string }   Auth: Dashboard Bearer token required.
-*/
 async function _handleDashboardInsights(req, res) {
   const auth  = req.headers['authorization'] || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return _json(res, 401, { error: 'Unauthorized' });
 
-  // Validate token against DB — previously only checked token was non-empty,
-  // meaning any string in Authorization header would pass. Actual session
-  // verification is required to prevent unauthorized OpenAI API spend.
   const dashUser = require('./dashboard-db.js').verifyToken(token);
   if (!dashUser) return _json(res, 401, { error: 'Unauthorized' });
 
@@ -1776,15 +1482,6 @@ async function _handleDashboardInsights(req, res) {
   }
 }
 
-
-/* ══ COUNSELLOR SESSION TOKENS ══════════════════════════════════════
-   After unlock, a student receives a short-lived token bound to their
-   email. All subsequent counsellor API calls must present this token
-   via X-Counsellor-Token header instead of sending their email.
-   This prevents any student from accessing another student's data
-   by sending a different email address.
-══════════════════════════════════════════════════════════════════ */
-// Counsellor session tokens — persisted in SQLite, shared across PM2 workers
 function _issueCounsellorToken(email) { return cdb.issueToken(email); }
 function _verifyCounsellorToken(req) {
   const token = (req.headers['x-counsellor-token'] || '').trim();
@@ -1797,10 +1494,16 @@ server.headersTimeout   = 10000;
 server.requestTimeout   = 30000;
 server.keepAliveTimeout = 65000;
 
-server.listen(PORT, () => {
-  // Always print startup info regardless of LOG_LEVEL (use process.stdout directly)
+// Explicit backlog (default is 511) — diagnostic bump to test whether the
+// OS-level accept queue overflowing under high concurrent connection load
+// (while the event loop is synchronously blocked by SQLite writes) is the
+// actual mechanism behind the widespread ECONNRESET/ECONNREFUSED seen at
+// 700+ concurrent, including on requests that never touch the database.
+const LISTEN_BACKLOG = parseInt(process.env.LISTEN_BACKLOG || '2048', 10);
+server.listen(PORT, LISTEN_BACKLOG, () => {
   process.stdout.write(
     `\n✅  NuMind MAPS  →  http://localhost:${PORT}\n` +
+    `    Listen backlog: ${LISTEN_BACKLOG}\n` +
     `    SQLite      : ${process.env.SQLITE_PATH || path.join(__dirname, 'numind.db')}\n` +
     `    Token       : ${APP_TOKEN ? '*** (set)' : '(not set — open access)'}\n` +
     `    AI models   : ${AI_MODEL} / chat: ${CHAT_MODEL}\n` +
@@ -1810,7 +1513,6 @@ server.listen(PORT, () => {
     `    Log level   : ${LOG_LEVEL}\n\n`
   );
   _prewarm();
-  // Signal PM2 that this worker is ready (wait_ready: true in ecosystem.config.js)
   if (typeof process.send === 'function') process.send('ready');
 });
 
