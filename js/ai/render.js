@@ -149,7 +149,7 @@ function renderAIReport(data) {
 
     // Personality: average stanine
     const nmapAvg = nmap ? (nmap.dims.reduce((s,d)=>s+d.stanine,0)/nmap.dims.length).toFixed(1) : null;
-    const nmapTop = nmap ? nmap.sorted[0].label : null;
+    const nmapTop = nmap ? nmap.sorted[0].abbr : null;
     const nmapLevel = nmapAvg ? (nmapAvg>=7?'Strength':nmapAvg>=4?'Developing':'Needs Attention') : '—';
     const nmapColor = nmapAvg ? (nmapAvg>=7?'#059669':nmapAvg>=4?'#f59e0b':'#dc2626') : '#9ca3af';
     const nmapEmoji = nmapAvg ? (nmapAvg>=7?'🟢':nmapAvg>=4?'🟡':'🔴') : '⚪';
@@ -207,7 +207,7 @@ function renderAIReport(data) {
           <tbody>
             ${row('🧠','Personality (NMAP)', esc(nmapLevel), nmapAvg?`Avg Stanine: ${esc(nmapAvg)}/9 · Top: ${esc(nmapTop||'—')}`:'Complete NMAP test', nmapColor, nmapEmoji)}
             ${row('⚡','Aptitude (DAAB)', esc(daabLevel), daabAvg?`Avg Stanine: ${esc(daabAvg)}/9`:'Complete DAAB test', daabColor, daabEmoji)}
-            ${row('🎯','Career Interests (CPI)', esc(interestLabel), cpi?`Top: ${esc(cpi.top3.slice(0,2).map(a=>a.label).join(', '))}`:'Complete CPI test', interestColor, interestEmoji)}
+            ${row('🎯','Career Interests (CPI)', esc(interestLabel), cpi?`Top: ${esc((cpi.top3||[]).slice(0,2).map(a=>a.label).join(', '))}`:'Complete CPI test', interestColor, interestEmoji)}
             ${row('💚','Wellbeing (SEL)', esc(selLabel), sea?`E:Cat${esc(sea.cls.E.cat)} · S:Cat${esc(sea.cls.S.cat)} · A:Cat${esc(sea.cls.A.cat)}`:'Complete NSEAAS test', selColor, selEmoji)}
           </tbody>
         </table>
@@ -247,20 +247,20 @@ function renderAIReport(data) {
     const available = daabSubs.filter(k => S.daab[k] && S.daab[k].scores);
 
     // STRENGTH (use) = stanine 7+ in NMAP or DAAB
-    const nmapStrengths = nmap ? nmap.dims.filter(d=>d.stanine>=7).map(d=>d.label) : [];
-    const daabStrengths = available.filter(k=>S.daab[k].scores.stanine>=7).map(k=>daabNames[k]);
+    const nmapStrengths = nmap ? (nmap.dims||[]).filter(d=>d.stanine>=7).map(d=>d.abbr) : [];
+    const daabStrengths = available.filter(k=>S.daab[k].scores&&S.daab[k].scores.stanine>=7).map(k=>daabNames[k]);
     const strengths = [...nmapStrengths, ...daabStrengths].slice(0,4);
 
     // GROWTH (fix) = stanine ≤3 in NMAP or DAAB
-    const nmapGrowth = nmap ? nmap.dims.filter(d=>d.stanine<=3).map(d=>d.label) : [];
-    const daabGrowth = available.filter(k=>S.daab[k].scores.stanine<=3).map(k=>daabNames[k]);
+    const nmapGrowth = nmap ? (nmap.dims||[]).filter(d=>d.stanine<=3).map(d=>d.abbr) : [];
+    const daabGrowth = available.filter(k=>S.daab[k].scores&&S.daab[k].scores.stanine<=3).map(k=>daabNames[k]);
     const growthAreas = [...nmapGrowth, ...daabGrowth].slice(0,3);
 
     // EXPLORE (excites) = CPI top 3 interests
-    const topInterests = cpi ? cpi.top3.map(a=>a.label) : [];
+    const topInterests = cpi ? (cpi.top3||[]).map(a=>a.label) : [];
 
     // CONCERN (address) = SEL categories C, D, E
-    const seaConcerns = sea ? Object.entries(sea.cls).filter(([d,cl])=>cl.cat>='C').map(([d,cl])=>{
+    const seaConcerns = sea ? Object.entries(sea.cls||{}).filter(([d,cl])=>cl.cat>='C').map(([d,cl])=>{
       const lbl = {E:'Emotional',S:'Social',A:'Academic'};
       return `${lbl[d]} (Cat.${cl.cat} — ${cl.level})`;
     }) : [];

@@ -12,6 +12,20 @@ import { renderAIReport, showAIError, showAILoading } from './render.js';
 
 var _aiAbortCtrl  = null;
 
+/* ── App token reader ─────────────────────────────────────────────
+   The server injects the token as <meta name="app-token">, NOT as
+   window._APP_TOKEN (which is always empty). Reading the meta tag
+   is the only correct way to get the token from an ES module.
+─────────────────────────────────────────────────────────────────── */
+function _getAppToken() {
+  try {
+    const m = document.querySelector('meta[name="app-token"]');
+    if (m && m.getAttribute('content')) return m.getAttribute('content');
+  } catch (_) {}
+  // Legacy fallback only — will be empty on current server builds
+  return (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
+}
+
 /* ── Save report + assessments to server-side SQLite ────────────────
    Called after window._lastAIReport is set (both AI + fallback paths).
    POSTs registration + per-module raw answers/scores + the report
@@ -35,11 +49,10 @@ function _saveReportToServer(report) {
   const daab = S.daab;
   const st   = S.student;
 
-  const assessments = {
-    cpi:  { raw_answers: cpi.answers,  scores: cpi.scores,  duration: cpi.duration  || 0 },
-    sea:  { raw_answers: sea.answers,  scores: sea.scores,  duration: sea.duration  || 0 },
-    nmap: { raw_answers: nmap.answers, scores: nmap.scores, duration: nmap.duration || 0 },
-  };
+  const assessments = {};
+  if (cpi)  assessments.cpi  = { raw_answers: cpi.answers,  scores: cpi.scores,  duration: cpi.duration  || 0 };
+  if (sea)  assessments.sea  = { raw_answers: sea.answers,  scores: sea.scores,  duration: sea.duration  || 0 };
+  if (nmap) assessments.nmap = { raw_answers: nmap.answers, scores: nmap.scores, duration: nmap.duration || 0 };
   ['va','pa','na','lsa','hma','ar','ma','sa'].forEach(function(k) {
     if (daab[k]) {
       assessments['daab_' + k] = {
@@ -68,7 +81,7 @@ function _saveReportToServer(report) {
     return;
   }
 
-  const APP_TOKEN = (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
+  const APP_TOKEN = _getAppToken();
 
   _fetchWithRetry('/api/save-report', {
     method:  'POST',
@@ -157,10 +170,10 @@ async function generateAIReport() {
 
   _aiState.generating = true;
 
-  const cpi  = S.cpi.scores;
-  const sea  = S.sea.scores;
-  const nmap = S.nmap.scores;
-  const daab = S.daab;
+  const cpi  = S.cpi  ? S.cpi.scores  : null;
+  const sea  = S.sea  ? S.sea.scores  : null;
+  const nmap = S.nmap ? S.nmap.scores : null;
+  const daab = S.daab || {};
   const st   = S.student;
 
   if (!cpi || !sea || !nmap) {
@@ -343,7 +356,7 @@ function _personaliseReport(report, firstName, fullName) {
 async function _callAPIWithStream(prompt, firstName, signal) {
   const systemPrompt = 'You are an expert educational psychologist and career counsellor writing warm, personalised assessment reports for students (Grades 9-12), their parents, and school counsellors. Be specific, data-grounded, and motivational. Return only valid JSON — no markdown, no preamble.';
 
-  const APP_TOKEN = (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
+  const APP_TOKEN = _getAppToken();
 
   const response = await _fetchWithRetry('/api/ai-report', {
     method: 'POST',

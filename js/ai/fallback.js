@@ -20,9 +20,10 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   };
 
   /* ── NMAP summary ── */
-  const nmapTop   = nmap ? nmap.sorted.slice(0, 3) : [];
-  const nmapLow   = nmap ? nmap.dims.filter(function(d){ return d.stanine <= 3; }) : [];
-  const nmapAvg   = nmap ? (nmap.dims.reduce(function(s,d){ return s+d.stanine; }, 0) / nmap.dims.length).toFixed(1) : null;
+  const nmapTop   = nmap ? (nmap.sorted || []).slice(0, 3) : [];
+  const nmapLow   = nmap ? (nmap.dims   || []).filter(function(d){ return d.stanine <= 3; }) : [];
+  const nmapDims  = nmap ? (nmap.dims   || []) : [];
+  const nmapAvg   = nmapDims.length ? (nmapDims.reduce(function(s,d){ return s+d.stanine; }, 0) / nmapDims.length).toFixed(1) : null;
 
   /* ── DAAB summary ── */
   const daabEntries  = Object.entries(daabPayload || {});
@@ -38,8 +39,8 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
 
   /* ── SEL summary ── */
   const seaDoms     = sea ? ['E','S','A'] : [];
-  const selConcerns = seaDoms.filter(function(d){ return sea.cls[d].cat >= 'C'; });
-  const selGood     = seaDoms.filter(function(d){ return sea.cls[d].cat <= 'B'; });
+  const selConcerns = seaDoms.filter(function(d){ return sea.cls && sea.cls[d] && sea.cls[d].cat >= 'C'; });
+  const selGood     = seaDoms.filter(function(d){ return sea.cls && sea.cls[d] && sea.cls[d].cat <= 'B'; });
   const domName     = {E:'Emotional',S:'Social',A:'Academic'};
 
   /* ── Build sections ── */
@@ -47,7 +48,7 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   const holistic_summary =
     firstName + ' has completed all four NuMind MAPS assessment modules, giving us a rich picture of who they are as a learner and a person.\n\n' +
     (nmapTop.length
-      ? 'Personality-wise, ' + firstName + "'s strongest dimensions are " + nmapTop.map(function(d){ return d.label + ' (Stanine ' + d.stanine + ')'; }).join(', ') + '. ' +
+      ? 'Personality-wise, ' + firstName + "'s strongest dimensions are " + nmapTop.map(function(d){ return d.abbr + ' (Stanine ' + d.stanine + ')'; }).join(', ') + '. ' +
         'An average personality stanine of ' + nmapAvg + '/9 indicates ' + (nmapAvg >= 7 ? 'strong overall character traits.' : nmapAvg >= 4 ? 'a well-rounded personality with clear growth areas.' : 'several important personality dimensions to develop.') + '\n\n'
       : '') +
     (top3.length
@@ -82,7 +83,7 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   const internal_motivators =
     (nmapTop.length || top3.length
       ? firstName + ' is internally motivated by a combination of ' +
-        (nmapTop.length ? 'personality strengths like ' + nmapTop.slice(0, 2).map(function(d){ return d.label; }).join(' and ') : '') +
+        (nmapTop.length ? 'personality strengths like ' + nmapTop.slice(0, 2).map(function(d){ return d.abbr; }).join(' and ') : '') +
         (nmapTop.length && top3.length ? ', and ' : '') +
         (top3.length ? 'genuine interest in ' + top3Labels[0] + (top3Labels[1] ? ' and ' + top3Labels[1] : '') : '') + '.\n\n' +
         'These internal drives are the most reliable predictors of long-term career satisfaction. Environments that engage these motivators will bring out the best in ' + firstName + '.'
@@ -91,10 +92,10 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   const personality_profile =
     (nmap
       ? 'Among all personality dimensions assessed, ' + firstName + "'s clearest strengths are " +
-        nmapTop.slice(0, 2).map(function(d){ return d.label + ' (Stanine ' + d.stanine + ')'; }).join(' and ') + '. ' +
+        nmapTop.slice(0, 2).map(function(d){ return d.abbr + ' (Stanine ' + d.stanine + ')'; }).join(' and ') + '. ' +
         'These traits shape how ' + firstName + ' approaches problems, works with others, and handles challenges.\n\n' +
         (nmapLow.length
-          ? 'One growth habit to develop: spend 10 minutes each day on ' + nmapLow[0].label.toLowerCase() + ' — small consistent effort here will compound quickly over a school year.'
+          ? 'One growth habit to develop: spend 10 minutes each day on ' + nmapLow[0].abbr.toLowerCase() + ' — small consistent effort here will compound quickly over a school year.'
           : firstName + ' shows a well-developed personality profile across all dimensions.')
       : 'Personality profile will appear after completing the NMAP assessment.');
 
@@ -102,7 +103,7 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
     (sea
       ? (selGood.length === 3
           ? firstName + "'s social-emotional scores are healthy across Emotional, Social, and Academic domains — all falling in the " +
-            [sea.cls.E.cat, sea.cls.S.cat, sea.cls.A.cat].map(catLabel).join(', ') + ' categories respectively. This is a real asset.\n\n' +
+            [(sea.cls.E||{}).cat, (sea.cls.S||{}).cat, (sea.cls.A||{}).cat].map(catLabel).join(', ') + ' categories respectively. This is a real asset.\n\n' +
             'Continue the habits that support this wellbeing: regular sleep, staying connected with supportive friends, and asking for help early when academic pressure builds.'
           : 'In terms of SEL readiness, ' + firstName + "'s strongest area is " +
             (selGood.length ? selGood.map(function(d){ return domName[d]; }).join(', ') : 'yet to be determined') + '.\n\n' +

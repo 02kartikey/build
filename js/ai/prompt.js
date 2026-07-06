@@ -12,9 +12,9 @@ function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
     ar:'Abstract Reasoning', ma:'Mechanical', sa:'Spatial'
   };
 
-  const top5cpi = cpi.ranked.slice(0, 5)
+  const top5cpi = ((cpi && cpi.ranked) ? cpi.ranked : []).slice(0, 5)
     .map(function(a) { return a.label + ': ' + a.score + '/20 (' + a.level + ')'; }).join('; ');
-  const top3names = cpi.top3.map(function(a) { return a.label; }).join(', ');
+  const top3names = ((cpi && cpi.top3) ? cpi.top3 : []).map(function(a) { return a.label; }).join(', ');
 
   const _cls = (sea && sea.cls) || {};
   const _clsE = _cls.E || { cat: '?', level: '?' };
@@ -26,10 +26,10 @@ function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
     'S ' + (sea && sea.domScores ? sea.domScores.S : '?') + '/20 Cat' + _clsS.cat + '(' + _clsS.level + '), ' +
     'A ' + (sea && sea.domScores ? sea.domScores.A : '?') + '/20 Cat' + _clsA.cat + '(' + _clsA.level + ')';
 
-  const nmap_line = nmap.dims
+  const nmap_line = ((nmap && nmap.dims) ? nmap.dims : [])
     .map(function(d) { return d.abbr + ' stn' + d.stanine; })
     .join(', ');
-  const topP = nmap.sorted.slice(0, 3)
+  const topP = ((nmap && nmap.sorted) ? nmap.sorted : []).slice(0, 3)
     .map(function(d) { return d.abbr + '(' + d.stanine + ')'; }).join(', ');
 
   const daab_entries = Object.entries(daabPayload);
