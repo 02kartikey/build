@@ -1097,7 +1097,7 @@ async function initApp(){
     const file=e.target.files[0];if(!file)return;
     const r=new FileReader();r.onload=ev=>{_parsedRows=parseCsv(ev.target.result);const p=document.getElementById('import-prev');p.style.display='block';p.textContent='✓ '+_parsedRows.length+' rows parsed. Click Import to proceed.';};r.readAsText(file);
   });
-  loadOverview();loadStudents();loadUsers();
+  loadOverview();loadStudents();loadUsers();generateInsights();loadAggregateMetrics();
   // Pre-load school registry names for user-modal suggestions
   _api('GET','/api/dashboard/schools-registry').then(({schools})=>{
     if(schools&&schools.length){
@@ -1980,7 +1980,12 @@ async function loadAggregateMetrics() {
       }
     }
 
-  } catch(e) { console.error('[AggMetrics]', e.message); }
+  } catch(e) {
+    console.error('[AggMetrics]', e.message);
+    const errHtml = '<div class="empty" style="padding:20px"><div class="et">⚠ Could not load</div><div class="es">'+_esc(e.message||'Unknown error')+'</div></div>';
+    const ids = ['psych-agg-wrap','career-dist-wrap','wellbeing-wrap','module-timing-wrap'];
+    ids.forEach(id => { const el = document.getElementById(id); if (el && el.querySelector('.spinner')) el.innerHTML = errHtml; });
+  }
 }
 
 function _aggBars(rows) {
