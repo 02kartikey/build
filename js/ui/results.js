@@ -27,9 +27,9 @@ function buildResults() {
     return;
   }
 
-  // Safe accessor for sea.cls domain cat (defaults to 'A' if missing)
-  const seaCat = function(d) { return (sea.cls && sea.cls[d]) ? (sea.cls&&sea.cls[d]?sea.cls[d].cat:'A') : 'A'; };
-  const seaLvl = function(d) { return (sea.cls && sea.cls[d]) ? (sea.cls&&sea.cls[d]?sea.cls[d].level:'Excellent') : 'Excellent'; };
+  // Safe accessors for sea.cls domain fields (defaults if missing)
+  const seaCat = d => (sea.cls && sea.cls[d] && sea.cls[d].cat)   || 'A';
+  const seaLvl = d => (sea.cls && sea.cls[d] && sea.cls[d].level) || 'Excellent';
 
   document.getElementById('res-name').textContent = st.fullName;
   document.getElementById('res-meta').textContent = st.class+(st.section?' '+st.section:'')+' · '+st.school+(st.schoolLocation?' · '+st.schoolLocation:'');

@@ -86,7 +86,7 @@ function _makeLockInput(id, type, placeholder, inputmode, onEnter) {
   el.id = id; el.type = type; el.placeholder = placeholder;
   if (inputmode) el.setAttribute('inputmode', inputmode);
   el.maxLength = 6;
-  el.style.cssText = 'width:100%;padding:12px 14px;background:#faf9fc;border:1.5px solid var(--bdr2, #ccc8bf);border-radius:10px;color:#3c3454;font-size:20px;letter-spacing:0.3em;text-align:center;box-sizing:border-box;outline:none;margin-bottom:10px';
+  el.style.cssText = 'width:100%;padding:12px 14px;background:#f4f8f9;border:1.5px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:20px;letter-spacing:0.3em;text-align:center;box-sizing:border-box;outline:none;margin-bottom:10px';
   if (onEnter) el.addEventListener('keydown', function(e){ if (e.key === 'Enter') onEnter(); });
   return el;
 }
@@ -99,7 +99,7 @@ function _makeLockBtn(id, text, color, onClick) {
 }
 function _makeLockErr(id) {
   var el = document.createElement('div');
-  el.id = id; el.style.cssText = 'display:none;color:#f87171;font-size:12px;margin-bottom:8px';
+  el.id = id; el.style.cssText = 'display:none;color:#dc2626;font-size:12px;margin-bottom:8px';
   return el;
 }
 
@@ -116,15 +116,15 @@ function _lockStep(step, opts) {
   // Email attribution line
   if (opts && opts.email) {
     var p = document.createElement('p');
-    p.style.cssText = 'font-size:12px;color:rgba(255,255,255,0.4);margin:0 0 14px';
+    p.style.cssText = 'font-size:12.5px;color:#5d7a83;margin:0 0 14px';
     var strong = document.createElement('strong');
-    strong.style.color = 'rgba(255,255,255,0.7)';
+    strong.style.color = '#0c3540';
     strong.textContent = opts.email;
     p.textContent = 'Signing in as ';
     p.appendChild(strong);
     p.appendChild(document.createTextNode(' \xb7 '));
     var a = document.createElement('a'); a.href = 'javascript:void(0)';
-    a.textContent = 'Change'; a.style.color = '#a78bfa';
+    a.textContent = 'Change'; a.style.color = '#5c4fb5'; a.style.fontWeight = '600';
     a.addEventListener('click', _lockReset);
     p.appendChild(a);
     wrap.appendChild(p);
@@ -134,16 +134,16 @@ function _lockStep(step, opts) {
     wrap.id = 'acp-step-otp';
     var descOtp = document.createElement('p');
     descOtp.textContent = 'We sent a 6-digit code to your email. Enter it below to continue.';
-    descOtp.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px;line-height:1.5';
+    descOtp.style.cssText = 'font-size:13px;color:#29505c;margin:0 0 14px;line-height:1.5';
     wrap.appendChild(descOtp);
     wrap.appendChild(_makeLockInput('acp-otp-input', 'text', '\u2022\u2022\u2022\u2022\u2022\u2022', 'numeric', _acSubmitOtp));
     wrap.appendChild(_makeLockErr('acp-otp-err'));
-    wrap.appendChild(_makeLockBtn('acp-otp-btn', 'Verify Code', 'linear-gradient(135deg,#6d28d9,#7c3aed)', _acSubmitOtp));
+    wrap.appendChild(_makeLockBtn('acp-otp-btn', 'Verify Code', 'linear-gradient(135deg,#4a3f9e,#5c4fb5)', _acSubmitOtp));
     var p3 = document.createElement('p');
-    p3.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
+    p3.style.cssText = 'font-size:11.5px;color:#93aab1;text-align:center;margin:0';
     p3.appendChild(document.createTextNode("Didn't get a code? "));
     var resend = document.createElement('a'); resend.href = 'javascript:void(0)';
-    resend.textContent = 'Resend'; resend.style.color = '#a78bfa';
+    resend.textContent = 'Resend'; resend.style.color = '#5c4fb5'; resend.style.fontWeight = '600';
     resend.addEventListener('click', _acResendOtp);
     p3.appendChild(resend);
     wrap.appendChild(p3);
@@ -155,16 +155,16 @@ function _lockStep(step, opts) {
     wrap.id = 'acp-step-pin';
     var desc = document.createElement('p');
     desc.textContent = 'Enter your PIN to access your AI Counsellor.';
-    desc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px';
+    desc.style.cssText = 'font-size:13px;color:#29505c;margin:0 0 14px';
     wrap.appendChild(desc);
     wrap.appendChild(_makeLockInput('acp-pin-input', 'password', '\u2022\u2022\u2022\u2022\u2022\u2022', 'numeric', _acSubmitPin));
     wrap.appendChild(_makeLockErr('acp-pin-err'));
-    wrap.appendChild(_makeLockBtn('acp-pin-btn', 'Unlock', 'linear-gradient(135deg,#6d28d9,#7c3aed)', _acSubmitPin));
+    wrap.appendChild(_makeLockBtn('acp-pin-btn', 'Unlock', 'linear-gradient(135deg,#4a3f9e,#5c4fb5)', _acSubmitPin));
     var p2 = document.createElement('p');
-    p2.style.cssText = 'font-size:11.5px;color:rgba(255,255,255,0.3);text-align:center;margin:0';
+    p2.style.cssText = 'font-size:11.5px;color:#93aab1;text-align:center;margin:0';
     p2.appendChild(document.createTextNode('Forgot PIN? '));
     var forgot = document.createElement('a'); forgot.href = 'javascript:void(0)';
-    forgot.textContent = 'Reset'; forgot.style.color = '#a78bfa';
+    forgot.textContent = 'Reset'; forgot.style.color = '#5c4fb5'; forgot.style.fontWeight = '600';
     forgot.addEventListener('click', _acForgotPin);
     p2.appendChild(forgot);
     wrap.appendChild(p2);
@@ -172,11 +172,35 @@ function _lockStep(step, opts) {
     setTimeout(function(){ var i = document.getElementById('acp-pin-input'); if (i) i.focus(); }, 100);
   }
 
+  if (step === 'verify-identity') {
+    wrap.id = 'acp-step-pin'; /* reuse slot id so step cleanup removes it */
+    var descV = document.createElement('p');
+    descV.textContent = (opts && opts.purpose === 'reset')
+      ? 'To reset your PIN, confirm two details from your registration.'
+      : 'Confirm two details from your registration to set up your PIN.';
+    descV.style.cssText = 'font-size:13px;color:#29505c;margin:0 0 14px;line-height:1.5';
+    wrap.appendChild(descV);
+    var nameIn = document.createElement('input');
+    nameIn.id = 'acp-vid-name'; nameIn.type = 'text'; nameIn.placeholder = 'Full name (as registered)';
+    nameIn.style.cssText = 'width:100%;padding:12px 14px;background:#f4f8f9;border:1.5px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:14px;box-sizing:border-box;outline:none;margin-bottom:10px';
+    wrap.appendChild(nameIn);
+    var classIn = document.createElement('input');
+    classIn.id = 'acp-vid-class'; classIn.type = 'text'; classIn.placeholder = 'Class (e.g. 10)';
+    classIn.setAttribute('inputmode', 'numeric');
+    classIn.style.cssText = nameIn.style.cssText;
+    classIn.addEventListener('keydown', function(e){ if (e.key === 'Enter') _acVerifyIdentity(); });
+    wrap.appendChild(classIn);
+    wrap.appendChild(_makeLockErr('acp-vid-err'));
+    wrap.appendChild(_makeLockBtn('acp-vid-btn', 'Verify & Continue', 'linear-gradient(135deg,#4a3f9e,#5c4fb5)', _acVerifyIdentity));
+    container.appendChild(wrap);
+    setTimeout(function(){ nameIn.focus(); }, 100);
+  }
+
   if (step === 'set-pin') {
     wrap.id = 'acp-step-set-pin';
     var desc = document.createElement('p');
     desc.textContent = 'Create a 4-6 digit PIN. You will use it to log in from any device.';
-    desc.style.cssText = 'font-size:13px;color:rgba(255,255,255,0.55);margin:0 0 14px;line-height:1.5';
+    desc.style.cssText = 'font-size:13px;color:#29505c;margin:0 0 14px;line-height:1.5';
     wrap.appendChild(desc);
     wrap.appendChild(_makeLockInput('acp-newpin-input', 'password', 'Create PIN', 'numeric', function(){
       var c = document.getElementById('acp-newpin-confirm'); if (c) c.focus();
@@ -247,6 +271,9 @@ async function acUnlock() {
     } else if (data.step === 'otp-sent') {
       _LOCK.purpose = data.purpose || 'register';
       _lockStep('otp', { email: email });
+    } else if (data.step === 'verify-identity') {
+      _LOCK.purpose = data.purpose || 'register';
+      _lockStep('verify-identity', { email: email, purpose: _LOCK.purpose });
     } else {
       if (errEl) { errEl.textContent = data.error || 'Something went wrong.'; errEl.style.display = 'block'; }
       emailEl.disabled = false;
@@ -270,10 +297,15 @@ async function _acResendOtp() {
   try {
     if (resendLink) { resendLink.textContent = 'Sending\u2026'; resendLink.style.pointerEvents = 'none'; }
     if (_LOCK.purpose === 'reset') {
-      await fetch('/api/counsellor-request-otp', {
+      var rr = await fetch('/api/counsellor-request-otp', {
         method: 'POST', headers: _acHeaders(),
         body: JSON.stringify({ email: _LOCK.email }),
       });
+      var rd = await rr.json();
+      if (rd.step === 'verify-identity') {
+        _lockStep('verify-identity', { email: _LOCK.email, purpose: 'reset' });
+        return;
+      }
     } else {
       // Register-purpose OTPs are sent as a side effect of counsellor-unlock —
       // re-calling it with the same email resends a fresh code.
@@ -282,7 +314,7 @@ async function _acResendOtp() {
         body: JSON.stringify({ email: _LOCK.email }),
       });
     }
-    if (errEl) { errEl.textContent = 'A new code has been sent.'; errEl.style.color = '#34d399'; errEl.style.display = 'block'; }
+    if (errEl) { errEl.textContent = 'A new code has been sent.'; errEl.style.color = '#059669'; errEl.style.display = 'block'; }
   } catch (_) {
     if (errEl) { errEl.textContent = 'Could not resend — check your connection.'; errEl.style.color = ''; errEl.style.display = 'block'; }
   } finally {
@@ -394,21 +426,52 @@ async function _acSetPin() {
   }
 }
 
+async function _acVerifyIdentity() {
+  var name  = (document.getElementById('acp-vid-name')  || {value:''}).value.trim();
+  var cls   = (document.getElementById('acp-vid-class') || {value:''}).value.trim();
+  var errEl = document.getElementById('acp-vid-err');
+  var btn   = document.getElementById('acp-vid-btn');
+  if (!name || !cls) {
+    if (errEl) { errEl.textContent = 'Please enter your full name and class.'; errEl.style.display = 'block'; }
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Verifying\u2026'; }
+  if (errEl) errEl.style.display = 'none';
+  try {
+    var resp = await fetch('/api/counsellor-verify-identity', {
+      method: 'POST', headers: _acHeaders(),
+      body: JSON.stringify({ email: _LOCK.email, fullName: name, class: cls }),
+    });
+    var data = await resp.json();
+    if (!data.ok) {
+      if (errEl) { errEl.textContent = data.error || 'Those details do not match our records.'; errEl.style.display = 'block'; }
+      if (btn) { btn.disabled = false; btn.textContent = 'Verify & Continue'; }
+      return;
+    }
+    _LOCK.otpToken = data.otpToken;
+    _lockStep('set-pin', { email: _LOCK.email, isReset: _LOCK.purpose === 'reset' });
+  } catch (_) {
+    if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Verify & Continue'; }
+  }
+}
+window._acVerifyIdentity = _acVerifyIdentity;
+
 async function _acForgotPin() {
   if (!_LOCK.email) return;
   _LOCK._isReset = true;
   _LOCK.purpose  = 'reset';
-  var errEl = document.getElementById('acp-pin-err');
   try {
-    await fetch('/api/counsellor-request-otp', {
+    var resp = await fetch('/api/counsellor-request-otp', {
       method: 'POST', headers: _acHeaders(),
       body: JSON.stringify({ email: _LOCK.email }),
     });
-  } catch (_) {
-    // Fall through regardless — request-otp responds ok:true even on most
-    // failures (anti-enumeration), so a network hiccup here is rare; the
-    // OTP step's own "Resend" link covers the case where no email arrives.
-  }
+    var data = await resp.json();
+    if (data.step === 'verify-identity') {
+      _lockStep('verify-identity', { email: _LOCK.email, purpose: 'reset' });
+      return;
+    }
+  } catch (_) { /* fall through to OTP step; its Resend link retries */ }
   _lockStep('otp', { email: _LOCK.email });
 }
 
@@ -441,10 +504,15 @@ async function acChangePinRequest() {
   // configured — even for an already-authenticated student. Request the
   // code, then show the OTP step (not set-pin directly, which would 401).
   try {
-    await fetch('/api/counsellor-request-otp', {
+    var resp = await fetch('/api/counsellor-request-otp', {
       method: 'POST', headers: _acHeaders(),
       body: JSON.stringify({ email: _AC.email }),
     });
+    var data = await resp.json();
+    if (data.step === 'verify-identity') {
+      _lockStep('verify-identity', { email: _AC.email, purpose: 'reset' });
+      return;
+    }
   } catch (_) {}
   _lockStep('otp', { email: _AC.email });
 }
@@ -773,23 +841,23 @@ function _acShowVerificationForm(email) {
   if (!document.getElementById('acp-verify-section')) {
     const div = document.createElement('div');
     div.id = 'acp-verify-section';
-    div.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid rgba(255,255,255,0.08)';
+    div.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid rgba(12,53,64,0.1)';
     div.innerHTML = `
-      <p style="font-size:12.5px;color:rgba(255,255,255,0.55);margin:0 0 12px;line-height:1.5">
-        <strong style="color:rgba(255,255,255,0.75)">New device detected.</strong><br>
+      <p style="font-size:12.5px;color:#29505c;margin:0 0 12px;line-height:1.5">
+        <strong style="color:#0c3540">New device detected.</strong><br>
         Please confirm two details from your registration to access your report.
       </p>
       <div style="margin-bottom:10px">
         <input id="acp-verify-name" type="text" placeholder="Full name (as you registered)"
-          style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#fff;font-size:13px;box-sizing:border-box;outline:none">
+          style="width:100%;padding:10px 12px;background:#f4f8f9;border:1px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:13px;box-sizing:border-box;outline:none">
       </div>
       <div style="margin-bottom:14px">
         <input id="acp-verify-class" type="text" placeholder="Class (e.g. 10, 11, 12)"
-          style="width:100%;padding:10px 12px;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:10px;color:#fff;font-size:13px;box-sizing:border-box;outline:none">
+          style="width:100%;padding:10px 12px;background:#f4f8f9;border:1px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:13px;box-sizing:border-box;outline:none">
       </div>
-      <div id="acp-verify-err" style="display:none;color:#f87171;font-size:12px;margin-bottom:8px"></div>
+      <div id="acp-verify-err" style="display:none;color:#dc2626;font-size:12px;margin-bottom:8px"></div>
       <button onclick="acUnlockVerify()" id="acp-verify-btn"
-        style="width:100%;padding:11px;background:linear-gradient(135deg,#6d28d9,#7c3aed);border:none;border-radius:10px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
+        style="width:100%;padding:11px;background:linear-gradient(135deg,#4a3f9e,#5c4fb5);border:none;border-radius:10px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
         Verify & Unlock
       </button>`;
     lockCard.appendChild(div);

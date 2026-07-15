@@ -44,8 +44,8 @@ const _CLIENT_RL = {
     if (s.count >= this.MAX_PER_SESSION) {
       return { allowed: false, reason: 'session_cap',
                waitMs: 0,
-               // Message no longer tells user to refresh — refreshing now
-               // correctly resets the counter (new page-load key).
+               // The RL key is per-page-load, so refreshing genuinely resets
+               // the counter — telling the user to refresh is correct here.
                message: `You've generated ${this.MAX_PER_SESSION} reports in this session. Refresh the page to start fresh.` };
     }
 

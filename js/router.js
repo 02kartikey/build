@@ -171,7 +171,14 @@ async function doRegister() {
   if (_registering) return;
 
   const fn=document.getElementById('r-fn').value.trim(), ln=document.getElementById('r-ln').value.trim();
-  const cls=document.getElementById('r-cls').value, sch=document.getElementById('r-sch').value.trim();
+  const cls=document.getElementById('r-cls').value;
+  // School: r-sch is a <select> whose "Other (type below)" option reveals a
+  // free-text input (r-sch-other). getSchoolValue() (global, index.html)
+  // resolves the real name; never persist the placeholder string itself.
+  let sch = (typeof getSchoolValue === 'function')
+    ? getSchoolValue()
+    : document.getElementById('r-sch').value.trim();
+  if (sch === 'Other (type below)') sch = '';
   const gen=document.getElementById('r-gen').value, con=document.getElementById('r-con').checked;
   const state=document.getElementById('r-state').value, city=document.getElementById('r-city').value;
   const email=document.getElementById('r-email').value.trim();
@@ -232,17 +239,9 @@ async function doRegister() {
 
     showDbStatus('saved', '✓ Details saved!');
 
-    // ── Test-already-taken gate ───────────────────────────────────────
-    // testTaken === true means a report already exists in the backend for
-    // this email (the only definition of "taken"). Don't silently let them
-    // redo it and waste a slot — ask first.
-    //
-    // IMPORTANT: the results page renders from LOCAL session state only and
-    // calls _clearSession() on entry. A returning user has no local scores
-    // (their data lives in the DB), so sending them to 'results' would show a
-    // blank/broken report. Their existing report is reachable through the AI
-    // counsellor, which loads from the DB. So the choice is: open the
-    // counsellor (view existing) OR retake (regenerate into the same row).
+    // Test-already-taken gate: testTaken means a report exists in the backend.
+    // The results page renders from LOCAL state only, so a returning user must
+    // go to the AI counsellor (DB-backed) to view it — or explicitly retake.
     if (data && data.testTaken) {
       const retake = window.confirm(
         'Our records show you have already completed this assessment.\n\n' +

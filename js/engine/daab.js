@@ -161,7 +161,7 @@ function getStanine(key, raw, gender) {
   // Gender-based norms for VA, PA, NA
   const norms = {
     va: {
-      F: [[0,0],[2,2],[3,3],[4,5],[6,6],[7,8],[9,9],[10,11],[12,20]],
+      F: [[0,1],[2,2],[3,3],[4,5],[6,6],[7,8],[9,9],[10,11],[12,20]],
       M: [[0,0],[1,2],[3,3],[4,4],[5,6],[7,7],[8,8],[9,10],[11,20]],
     },
     pa: {
@@ -177,13 +177,23 @@ function getStanine(key, raw, gender) {
       M: [[0,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,20]],
     },
   };
-  const g = (gender === 'F' || gender === 'female') ? 'F' : 'M';
+  // Registration stores "Male"/"Female"/"Other" (see index.html r-gen).
+  // Normalise case-insensitively on the first letter so "Female"/"female"/"F"
+  // all map to the F norm tables; everything else (incl. "Other") uses M.
+  const g = String(gender || '').trim().charAt(0).toUpperCase() === 'F' ? 'F' : 'M';
   const table = norms[key]?.[g];
   if (!table) return 5;
   for (let i = 0; i < table.length; i++) {
     if (raw >= table[i][0] && raw <= table[i][1]) return i + 1;
   }
-  return 9;
+  // Defensive fallback for any residual gap in a norm table: clamp to the
+  // highest band whose lower bound <= raw. Never award stanine 9 for an
+  // uncovered low score (that bug inflated VA raw=1 to stanine 9 for girls).
+  if (raw < table[0][0]) return 1;
+  for (let i = table.length - 1; i >= 0; i--) {
+    if (raw >= table[i][0]) return i + 1;
+  }
+  return 1;
 }
 
 function stanineLabel(s) {

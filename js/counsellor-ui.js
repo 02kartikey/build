@@ -429,19 +429,10 @@ function _acWhenReady(cb){
 }
 _acWhenReady(function(){
 
-  /* ── Post-unlock UI handler ──────────────────────────────────────
-     _acApplySession() (in ai-counsellor.js) is the single function that
-     finalizes ANY successful unlock — email same-device, PIN entry,
-     OTP verify, and first-time PIN set all funnel through it. It sets
-     window._AC fields and then dispatches a 'ac:unlocked' DOM event.
-
-     Previously, only window.acUnlock was patched to react to this —
-     it awaited itself, then directly inspected window._AC afterward. That meant the PIN/OTP/set-pin flows — which call
-     _acApplySession() directly and never call window.acUnlock() — got
-     a fully successful server response but the lock screen never went
-     away, because nothing ever called _applyUnlocked() for those paths.
-     Listening for the event itself fixes this for every unlock path,
-     present and future, in one place. */
+  /* Post-unlock UI: _acApplySession() (ai-counsellor.js) finalizes every
+     successful unlock path (email, PIN, OTP, first-time set-pin) and
+     dispatches 'ac:unlocked'. Listening for that event here dismisses the
+     lock screen for all paths in one place — do not hook individual flows. */
   var _unlockUiHandled = false; // guards against double-fire (e.g. same event re-dispatched)
 
   document.addEventListener('ac:unlocked', async function(){
@@ -557,9 +548,9 @@ _acWhenReady(function(){
           if(document.getElementById('ac-resume-chip')) return;
           var cp=document.getElementById('page-counsellor'); if(cp&&cp.classList.contains('active')) return;
           var chip=document.createElement('div'); chip.id='ac-resume-chip';
-          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:#111018;color:rgba(255,255,255,0.88);border:1px solid rgba(139,92,246,0.3);border-radius:12px;padding:11px 14px 11px 15px;font-family:DM Sans,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(0,0,0,0.38);cursor:pointer';
+          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:linear-gradient(135deg,#0b4650,#157d8c);color:rgba(255,255,255,0.94);border:1px solid rgba(255,255,255,0.18);border-radius:12px;padding:11px 14px 11px 15px;font-family:Inter,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(0,0,0,0.38);cursor:pointer';
           var inner=document.createElement('div'); inner.style.cssText='display:flex;align-items:center;gap:8px;flex:1';
-          inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#a78bfa"/></svg> Resume AI Counsellor';
+          inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#fbbf4d"/></svg> Resume AI Counsellor';
           inner.addEventListener('click',function(){chip.remove();if(typeof window.goPage==='function')window.goPage('counsellor');});
           var close=document.createElement('button'); close.innerHTML='&times;';
           close.style.cssText='background:rgba(255,255,255,.07);border:none;color:rgba(255,255,255,.45);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;padding:0;transition:background .12s';

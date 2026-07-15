@@ -120,6 +120,11 @@ function renderDAABSub(idx, skipTimer) {
   if (!skipTimer) {
     mod.startTime = Date.now();
     mod.timerStartedAt = Date.now(); // wall-clock anchor for refresh-resume
+  } else {
+    // Refresh-resume: startTime is not persisted in the session snapshot,
+    // so without this stopDaabTimer() would record duration = 0. Anchor to
+    // the persisted timerStartedAt (wall clock) when available.
+    mod.startTime = mod.startTime || mod.timerStartedAt || Date.now();
   }
 
   const area = document.getElementById('daab-subtest-area');

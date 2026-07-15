@@ -1,33 +1,13 @@
 /* ════════════════════════════════════════════════════════════════════
-   state.js
-   Application state, server save helpers, and persistence helpers.
+   state.js — application state, server save helpers, persistence.
 
-   SECURITY ARCHITECTURE — why localStorage is used here:
-   ─────────────────────────────────────────────────────────────────
-   localStorage stores three things in this app:
-
-   1. Assessment progress (nm_state_*, nm_last_session):
-      Saves the student's in-progress answers so they can resume
-      if the page is closed. This is NOT auth — it is convenience.
-      The student's canonical identity is their session_id in the DB,
-      returned by the server on registration. All writes require
-      APP_TOKEN and a valid session_id that exists in the students table.
-
-   2. Session snapshot (numind_session_v1):
-      Name, email, class — pre-fills the registration form on resume.
-      Not sensitive. If cleared, student re-registers (idempotent).
-
-   3. Counsellor token (nmind_ac_ctok in ai-counsellor.js):
-      Persists the session token across page refreshes so the student
-      doesn't have to re-enter their PIN every time.
-      SECURITY: the token is ALWAYS verified against the counsellor_sessions
-      DB table on every server request. localStorage is convenience only.
-      The token expires in 8 hours regardless of what is in localStorage.
-      An attacker with the token still cannot access anything beyond
-      what the legitimate student can access — and only for 8 hours.
-
-   The security boundary is the SERVER, not the browser.
-   The server validates every write against the DB before persisting it.
+   localStorage here is UX convenience only, never auth:
+   · nm_state_* / nm_last_session — resume in-progress answers
+   · numind_session_v1            — pre-fill registration on resume
+   · nmind_ac_ctok                — counsellor token (verified against the
+     counsellor_sessions DB table on every request; 8h server-side TTL)
+   The security boundary is the SERVER: every write is validated against
+   the DB (APP_TOKEN + existing session_id) before persisting.
 ════════════════════════════════════════════════════════════════════ */
 
 // Always "configured" now — the server owns the DB. Kept as a function
@@ -101,13 +81,9 @@ const DB = {
     }
   },
 
-  // Called after each module completes — saves raw answers + scores
-  // immediately so data is never lost even if report generation fails.
-  // Fire-and-forget: a save failure must never block the assessment flow.
-  // Retries once on a real 503 (write queue busy) before giving up and
-  // surfacing the failure event — a permanent give-up on the very first
-  // busy signal was needlessly pessimistic given this condition is
-  // typically momentary.
+  // Called after each module completes — saves raw answers + scores so data
+  // survives a failed report generation. Fire-and-forget: never blocks the
+  // assessment flow. Retries once on 503 (write queue busy) before giving up.
   saveSection(sessionId, moduleKey, answers, scores, duration, _attempt = 0) {
     const MAX_RETRIES = 2;
     const fail = (reason) => {
@@ -311,17 +287,9 @@ function clearState() {
   }
 }
 
-/* ── Sweep stale nm_state_* keys ─────────────────────────────────────
-   Each saveState() call writes to a key namespaced by sessionId.
-   clearState() only removes the *most recent* one, so on a shared/kiosk
-   device, every restart leaves an orphaned snapshot behind. Without
-   sweeping, localStorage fills its 5-10 MB quota over time and
-   silently breaks new sessions (the next saveState throws QuotaExceeded).
-
-   Strategy: at module load, iterate all keys matching nm_state_* and
-   drop any whose embedded _savedAt is older than 4 hours, OR whose
-   payload is unparseable. This runs once per page load — cheap.
-─────────────────────────────────────────────────────────────────────*/
+/* Sweep stale nm_state_* keys on load: shared/kiosk devices accumulate
+   orphaned per-session snapshots until localStorage hits quota. Drop keys
+   older than 4h or with unparseable payloads. */
 (function _sweepStaleNmStateKeys() {
   try {
     const cutoff = Date.now() - 4 * 60 * 60 * 1000;
