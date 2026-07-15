@@ -1,46 +1,15 @@
 /* ════════════════════════════════════════════════════════════════════
-   server.js  —  NuMind MAPS  |  Node.js 18+ / CommonJS
-   Target: 20k users/day, PM2 cluster mode
+   server.js — NuMind MAPS  |  Node.js 18+ / CommonJS / PM2 cluster
 
-   ⚠️  THIS IS A DIAGNOSTIC/LOAD-TEST COPY ⚠️
-   It adds ONE thing on top of the real server.js: when the environment
-   variable LOADTEST_MODE is set to the exact string
-   "unsafe-diagnostics-local-only", all auth checks and rate limits are
-   bypassed, so you can measure raw write-path/DB capacity without token
-   or rate-limit noise getting in the way.
+   HTTP server: static files (gzip + ETag + in-memory cache), student
+   assessment APIs, OpenAI streaming proxy, AI counsellor auth + chat,
+   and /api/dashboard/* (delegated to dashboard-api.js).
 
-   DO NOT deploy this file. DO NOT set LOADTEST_MODE in production.
-   Swap your real server.js back in once you're done testing.
-
-   Scalability features:
-     · HTTPS keep-alive agent (reuse TLS connections to OpenAI)
-     · In-memory static file cache with TTL revalidation + dedup inflight
-     · Gzip compression + ETag/304 for all text assets
-     · IP-level rate limiter (pre-auth) + per-email limiters (post-auth)
-     · AI report concurrency cap with back-pressure (503 + Retry-After)
-     · Micro write-queue: DB writes batched every 50ms, non-blocking
-     · /health endpoint for PM2 / nginx / Docker probes
-     · Structured logging gated on LOG_LEVEL env var
-     · Graceful shutdown with forced exit after 10s
-
-   Routes:
-     GET  /health                  — liveness probe
-     POST /api/save-registration
-     POST /api/save-section
-     POST /api/save-report
-     POST /api/ai-report           — OpenAI streaming proxy
-     POST /api/counsellor-unlock
-     POST /api/counsellor-chat     — RAG streaming chat
-     POST /api/counsellor-clear-history
-     POST /api/counsellor-query
-     *    /api/dashboard/*
-     GET  /*                       — static files
-
-   Env vars:
-     PORT, SQLITE_PATH, APP_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL,
-     OPENAI_MODEL, COUNSELLOR_MODEL, ALLOWED_ORIGIN,
-     LOG_LEVEL          — 'debug'|'info'|'warn'|'error' (default 'warn')
-     MAX_CONCURRENT_AI  — max parallel ai-report streams (default 20)
+   Env vars: PORT, SQLITE_PATH, APP_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL,
+   OPENAI_MODEL, COUNSELLOR_MODEL, ALLOWED_ORIGIN, LOG_LEVEL,
+   MAX_CONCURRENT_AI, MAX_CONCURRENT_CHAT, SMTP_HOST/PORT/USER/PASS,
+   NOTIFICATION_EMAIL, LISTEN_BACKLOG,
+   DATABASE_URL / PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE, PG_POOL_MAX, PGSSL
 ════════════════════════════════════════════════════════════════════ */
 'use strict';
 const _dotenvResult = require('dotenv').config();
@@ -95,8 +64,8 @@ const log = {
 process.on('uncaughtException',  err    => log.error('uncaughtException:',  err.message, err.stack));
 process.on('unhandledRejection', reason => log.error('unhandledRejection:', reason));
 
-const _db = dbModule._initDb();
-cdb.init(_db);
+// DB schema init + module wiring happens in _bootstrap() below (async).
+let _db = null;
 
 const tls       = require('tls');
 const net       = require('net');
@@ -179,42 +148,27 @@ function _sendEmail({ to, subject, text }) {
 const _emailFn = (SMTP_USER && SMTP_PASS) ? _sendEmail : null;
 if (!_emailFn) log.info('[Email] SMTP_USER/SMTP_PASS not set — email features disabled. Set them in .env to enable OTP and reminders.');
 
-dashApi.init(_db, _emailFn, _dbWrite);
+// dashApi.init(...) moved into _bootstrap() (needs async DB ready first).
 
-const WQ_BATCH_SIZE = parseInt(process.env.WQ_BATCH_SIZE || '5', 10);
-const WQ_MAX        = parseInt(process.env.WQ_MAX || '500', 10);
-const _wq           = [];
-let   _wqScheduled  = false;
-
-function _wqDrain() {
-  _wqScheduled = false;
-  const batch = _wq.splice(0, WQ_BATCH_SIZE);
-  for (const { fn, resolve, reject } of batch) {
-    try { resolve(fn()); } catch (e) { reject(e); }
-  }
-  if (_wq.length > 0) _scheduleWQ();
-}
-
-function _scheduleWQ() {
-  if (_wqScheduled) return;
-  _wqScheduled = true;
-  setImmediate(_wqDrain);
-}
-
+/* Write queue removed in the PostgreSQL migration: the pg Pool provides real
+   concurrent writers, so serialising through a single-writer queue is no longer
+   needed. _dbWrite is kept as a thin async passthrough so the ~40 existing
+   `await _dbWrite(() => ...)` call sites need no change. QueueOverflowError is
+   retained (no longer thrown) so lingering `instanceof` checks stay harmless. */
 class QueueOverflowError extends Error {
-  constructor() { super('Write queue full — request dropped under load'); this.name = 'QueueOverflowError'; }
+  constructor() { super('Write queue full'); this.name = 'QueueOverflowError'; }
 }
 
-function _dbWrite(fn) {
-  if (_wq.length >= WQ_MAX) {
-    log.warn(`Write queue full (${WQ_MAX}) — dropping write`);
-    return Promise.reject(new QueueOverflowError());
-  }
-  return new Promise((resolve, reject) => {
-    _wq.push({ fn, resolve, reject });
-    _scheduleWQ();
-  });
+function _dbWrite(fn) { return Promise.resolve().then(fn); }
+
+/* Postgres pool saturation (all connections busy, acquire timed out) should
+   surface as a retryable 503 — same contract the old write-queue overflow had —
+   not a raw 500. Fires only under extreme load or a mis-sized PG_POOL_MAX. */
+function _isDbBusy(err) {
+  return !!err && typeof err.message === 'string' &&
+         err.message.includes('timeout exceeded when trying to connect');
 }
+
 
 const _httpsAgent = new https.Agent({
   keepAlive:      true,
@@ -241,6 +195,10 @@ function _cacheEvict() {
 
 const RL_WINDOW = 60 * 60 * 1000;
 const IP_WINDOW = 60 * 1000;
+// Per-IP request ceiling per minute. 200 suits real traffic (each school/NAT IP
+// serves a handful of students); raise via env for single-IP load testing
+// (IP_RL_MAX=1000000) or if a large school NATs hundreds of students to one IP.
+const IP_RL_MAX = parseInt(process.env.IP_RL_MAX || '200', 10);
 const _ipRL    = new Map();
 const _loginRL = new Map();
 
@@ -254,8 +212,8 @@ function _rlCheck(map, key, limit, windowMs) {
   return { allowed: true };
 }
 
-function _rlCheckDb(scope, key, limit, windowMs) {
-  try { return cdb.rlCheck(scope, key, limit, windowMs || RL_WINDOW); }
+async function _rlCheckDb(scope, key, limit, windowMs) {
+  try { return await cdb.rlCheck(scope, key, limit, windowMs || RL_WINDOW); }
   catch (e) { log.warn('[RL] DB check failed, failing open:', e.message); return { allowed: true }; }
 }
 
@@ -272,16 +230,16 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 setInterval(() => {
-  try { cdb.rlPrune(); cdb.pruneTokens(); cdb.pruneOtps(); cdb.pruneOtpStageTokens(); } catch (_) {}
+  Promise.allSettled([
+    cdb.rlPrune(), cdb.pruneTokens(), cdb.pruneOtps(), cdb.pruneOtpStageTokens(),
+  ]).catch(() => {});
 }, RL_WINDOW).unref();
 
 const ANALYTICS_REFRESH_MS = 5 * 60 * 1000;
 setTimeout(() => {
   const _doRefresh = () => {
-    _dbWrite(() => {
-      try { require('./dashboard-db.js').refreshAnalyticsCache(); }
-      catch (e) { log.warn('[Analytics] cache refresh failed:', e.message); }
-    }).catch(() => {});
+    _dbWrite(() => require('./dashboard-db.js').refreshAnalyticsCache())
+      .catch((e) => log.warn('[Analytics] cache refresh failed:', e.message));
   };
   _doRefresh();
   setInterval(_doRefresh, ANALYTICS_REFRESH_MS).unref();
@@ -510,12 +468,8 @@ async function _handleSaveRegistration(req, res) {
       testTaken: !!reg.testTaken,
     });
   } catch (err) {
-    if (err instanceof QueueOverflowError) {
-      // Confirmed happening in production under real load (see load-test
-      // results, 40%+ registration failure with continuous "Write queue
-      // full — dropping write" warnings). Previously this path returned a
-      // fake 200 with queued:false, which the client never checked, so the
-      // student saw "success" while their row silently never existed.
+    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
+      // Real 503, never a fake 200 — the write did not happen.
       res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
         error: 'Server is busy — your details were not saved. Please try again in a few seconds.',
@@ -536,7 +490,7 @@ async function _handleSaveSection(req, res) {
   if (!sessionId || !moduleKey) return _json(res, 400, { error: 'sessionId and moduleKey are required' });
 
   const studentRow = dbModule.getStudentBySessionId
-    ? dbModule.getStudentBySessionId(sessionId)
+    ? await dbModule.getStudentBySessionId(sessionId)
     : null;
   if (!studentRow) {
     return _json(res, 404, { error: 'Session not found. Please register first.' });
@@ -548,7 +502,7 @@ async function _handleSaveSection(req, res) {
     }));
     _json(res, 200, { ok: true });
   } catch (err) {
-    if (err instanceof QueueOverflowError) {
+    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
       res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Server is busy — this section was not saved. Please try again.', retry_after: 3 }));
     }
@@ -566,7 +520,7 @@ async function _handleSaveReport(req, res) {
   if (!body?.sessionId) return _json(res, 400, { error: 'sessionId is required' });
 
   const studentRow = dbModule.getStudentBySessionId
-    ? dbModule.getStudentBySessionId(body.sessionId)
+    ? await dbModule.getStudentBySessionId(body.sessionId)
     : null;
   if (!studentRow) return _json(res, 404, { error: 'Session not found.' });
 
@@ -581,7 +535,7 @@ async function _handleSaveReport(req, res) {
     }
     _json(res, 200, { ok: true });
   } catch (err) {
-    if (err instanceof QueueOverflowError) {
+    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
       res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Server is busy — your report was not saved. Please try again shortly.', retry_after: 5 }));
     }
@@ -599,7 +553,7 @@ async function _handleAIReport(req, res) {
     return res.end(JSON.stringify({ error: 'Server busy — please try again in a few seconds.' }));
   }
 
-  const globalRl = _rlCheckDb('ai-global', 'slots', MAX_CONCURRENT_AI, 60 * 1000);
+  const globalRl = await _rlCheckDb('ai-global', 'slots', MAX_CONCURRENT_AI, 60 * 1000);
   if (!globalRl.allowed) {
     res.writeHead(503, { 'Retry-After': String(globalRl.retryAfter || 10), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Server busy — please try again in a few seconds.' }));
@@ -614,8 +568,9 @@ async function _handleAIReport(req, res) {
     .filter(m => m && typeof m === 'object' && ['user','assistant'].includes(m.role))
     .map(m => ({ role: m.role, content: String(m.content || '').slice(0, 32000) }));
   if (!safeMsgs.length) return _json(res, 400, { error: 'messages required (user/assistant roles only)' });
-  const maxTok = Math.min(Number(body.max_tokens) || 6000, 8000);
-  const temp   = Math.max(0, Math.min(1, Number(body.temperature) ?? 0.65));
+  const maxTok  = Math.min(Number(body.max_tokens) || 6000, 8000);
+  const rawTemp = Number(body.temperature);
+  const temp    = Number.isFinite(rawTemp) ? Math.max(0, Math.min(1, rawTemp)) : 0.65;
 
   _aiInFlight++;
   let _aiReleased = false;
@@ -644,6 +599,20 @@ async function _handleAIReport(req, res) {
   }
 }
 
+/* Send a counsellor OTP email and report whether it was actually delivered
+   to SMTP. Awaited so async transport failures can't masquerade as success. */
+async function _sendCounsellorOtp(email, purpose, subject, text) {
+  if (!_emailFn) return false;
+  try {
+    const code = await _dbWrite(() => cdb.createOtp(email, purpose));
+    await _emailFn({ to: email, subject, text: text.replace('{CODE}', code) });
+    return true;
+  } catch (err) {
+    log.error('[otp-email]', email, purpose, '-', err.message);
+    return false;
+  }
+}
+
 async function _handleCounsellorUnlock(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
@@ -652,14 +621,14 @@ async function _handleCounsellorUnlock(req, res) {
   const email = String(body?.email || '').toLowerCase().trim();
   if (!email) return _json(res, 400, { error: 'Email is required.' });
 
-  const rl = _rlCheckDb('unlock', email, 20, RL_WINDOW);
+  const rl = await _rlCheckDb('unlock', email, 20, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts. Please wait before trying again.' }));
   }
 
   try {
-    const reportObj = cdb.getReportByEmail(email);
+    const reportObj = await cdb.getReportByEmail(email);
     const hasReport = !!(reportObj && reportObj.report &&
       (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
     if (!reportObj || !hasReport) {
@@ -667,32 +636,23 @@ async function _handleCounsellorUnlock(req, res) {
         error: 'No report found for this email. Please complete your NuMind MAPS assessment first.' });
     }
 
-    const pinSet = cdb.hasPinSet(email);
+    const pinSet = await cdb.hasPinSet(email);
 
     if (!pinSet) {
-      if (_emailFn) {
-        try {
-          const code = await _dbWrite(() => cdb.createOtp(email, 'register'));
-          _emailFn({
-            to: email,
-            subject: 'Your NuMind MAPS verification code',
-            text: 'Welcome to NuMind MAPS!\n\n' +
-                  'Your verification code is: ' + code + '\n\n' +
-                  'Enter this code to set up your AI Counsellor PIN. ' +
-                  'It expires in 10 minutes.\n\n' +
-                  'If you did not request this, you can ignore this email.',
-          });
-          log.info('[unlock]', email, '| OTP sent (first-time setup)');
-          return _json(res, 200, { unlocked: false, step: 'otp-sent', purpose: 'register',
-            message: 'We sent a 6-digit code to your email. Enter it to continue.' });
-        } catch (mailErr) {
-          log.error('[unlock] OTP send failed for', email, '-', mailErr.message);
-          return _json(res, 200, { unlocked: false, step: 'set-pin',
-            message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
-        }
+      const sent = await _sendCounsellorOtp(email, 'register',
+        'Your NuMind MAPS verification code',
+        'Welcome to NuMind MAPS!\n\nYour verification code is: {CODE}\n\n' +
+        'Enter this code to set up your AI Counsellor PIN. It expires in 10 minutes.\n\n' +
+        'If you did not request this, you can ignore this email.');
+      if (sent) {
+        log.info('[unlock]', email, '| OTP sent (first-time setup)');
+        return _json(res, 200, { unlocked: false, step: 'otp-sent', purpose: 'register',
+          message: 'We sent a 6-digit code to your email. Enter it to continue.' });
       }
-      return _json(res, 200, { unlocked: false, step: 'set-pin',
-        message: 'Set a 4-6 digit PIN to secure your AI Counsellor.' });
+      // Email unavailable — prove identity with registration details instead.
+      log.warn('[unlock]', email, '| OTP unavailable — falling back to identity verification');
+      return _json(res, 200, { unlocked: false, step: 'verify-identity', purpose: 'register',
+        message: 'Confirm your registration details to set up your PIN.' });
     }
 
     return _json(res, 200, { unlocked: false, step: 'enter-pin',
@@ -713,7 +673,7 @@ async function _jsonUnlocked(res, email, reportObj) {
         error: 'No report found for this email. Please complete your NuMind MAPS assessment first.' });
     }
     const name    = reportObj.student?.firstName || reportObj.student?.fullName || 'Student';
-    const history = cdb.getHistory(email, { limit: 40 });
+    const history = await cdb.getHistory(email, { limit: 40 });
     let reportSummary = null;
     if (reportObj?.report) {
       const r = reportObj.report;
@@ -731,8 +691,6 @@ async function _jsonUnlocked(res, email, reportObj) {
         personality_status: r.personality_status,
         aptitude_status: r.aptitude_status,
         interest_status: r.interest_status,
-        // Narrative sections — previously omitted entirely, so the student's
-        // report panel could only ever show scores, never the written report.
         holistic_summary: r.holistic_summary,
         personality_profile: r.personality_profile,
         aptitude_profile: r.aptitude_profile,
@@ -749,8 +707,8 @@ async function _jsonUnlocked(res, email, reportObj) {
       seaa:        reportObj.seaa        || [],
       careers:     reportObj.careers     || [],
     };
-    const conversations   = cdb.getConversations(email);
-    const counsellorToken = _issueCounsellorToken(email);
+    const conversations   = await cdb.getConversations(email);
+    const counsellorToken = await _issueCounsellorToken(email);
     _json(res, 200, { unlocked: true, name, email, history, reportSummary, fullScores, conversations, counsellorToken });
   } catch (err) {
     log.error('[_jsonUnlocked]', err.message);
@@ -768,14 +726,14 @@ async function _handleCounsellorVerifyName(req, res) {
   const cls      = String(body?.class    || '').toLowerCase().trim();
   if (!email || !fullName || !cls) return _json(res, 400, { error: 'email, fullName and class are required.' });
 
-  const rl = _rlCheckDb('verify-name', email, 10, RL_WINDOW);
+  const rl = await _rlCheckDb('verify-name', email, 10, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
   }
 
   try {
-    const reportObj = cdb.getReportByEmail(email);
+    const reportObj = await cdb.getReportByEmail(email);
     if (!reportObj) return _json(res, 200, { ok: false, error: 'No account found for this email. Make sure you use the email you registered with.' });
 
     const dbFullName  = (reportObj.student?.fullName  || '').toLowerCase().trim();
@@ -817,14 +775,14 @@ async function _handleCounsellorVerifyOtp(req, res) {
   const purpose = String(body?.purpose || 'register');
   if (!email || !otp) return _json(res, 400, { error: 'email and otp are required.' });
 
-  const rl = _rlCheckDb('otp-verify', email, 10, RL_WINDOW);
+  const rl = await _rlCheckDb('otp-verify', email, 10, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts.' }));
   }
 
   try {
-    const valid = cdb.verifyOtp(email, otp, purpose);
+    const valid = await cdb.verifyOtp(email, otp, purpose);
     if (!valid) {
       return _json(res, 200, { ok: false, error: 'Incorrect or expired code. Please try again.' });
     }
@@ -850,30 +808,70 @@ async function _handleCounsellorRequestOtp(req, res) {
   const email = String(body?.email || '').toLowerCase().trim();
   if (!email) return _json(res, 400, { error: 'Email is required.' });
 
-  const rl = _rlCheckDb('request-otp', email, 5, RL_WINDOW);
+  const rl = await _rlCheckDb('request-otp', email, 5, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts. Please wait before trying again.' }));
   }
 
   try {
-    const reportObj = cdb.getReportByEmail(email);
-    if (reportObj && _emailFn) {
-      const code = await _dbWrite(() => cdb.createOtp(email, 'reset'));
-      _emailFn({
-        to: email,
-        subject: 'Reset your NuMind MAPS PIN',
-        text: 'You asked to reset your AI Counsellor PIN.\n\n' +
-              'Your verification code is: ' + code + '\n\n' +
-              'Enter this code to set a new PIN. It expires in 10 minutes.\n\n' +
-              'If you did not request this, you can safely ignore this email.',
-      });
-      log.info('[request-otp]', email, '| reset OTP sent');
+    const reportObj = await cdb.getReportByEmail(email);
+    let sent = false;
+    if (reportObj) {
+      sent = await _sendCounsellorOtp(email, 'reset',
+        'Reset your NuMind MAPS PIN',
+        'You asked to reset your AI Counsellor PIN.\n\nYour verification code is: {CODE}\n\n' +
+        'Enter this code to set a new PIN. It expires in 10 minutes.\n\n' +
+        'If you did not request this, you can safely ignore this email.');
+      if (sent) log.info('[request-otp]', email, '| reset OTP sent');
     }
-    return _json(res, 200, { ok: true, step: 'otp-sent', purpose: 'reset',
-      message: 'If an account exists for that email, a reset code has been sent.' });
+    if (sent) {
+      return _json(res, 200, { ok: true, step: 'otp-sent', purpose: 'reset',
+        message: 'If an account exists for that email, a reset code has been sent.' });
+    }
+    // Email unavailable (or unknown account — response is identical either way
+    // to avoid enumeration; verification simply fails for unknown emails).
+    return _json(res, 200, { ok: true, step: 'verify-identity', purpose: 'reset',
+      message: 'Confirm your registration details to reset your PIN.' });
   } catch (err) {
     log.error('[counsellor-request-otp]', err.message);
+    _json(res, 500, { error: 'Server error.' });
+  }
+}
+
+async function _handleCounsellorVerifyIdentity(req, res) {
+  if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
+  let body;
+  try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
+
+  const email    = String(body?.email    || '').toLowerCase().trim();
+  const fullName = String(body?.fullName || '').trim();
+  const cls      = String(body?.class    || '').trim();
+  if (!email || !fullName || !cls) return _json(res, 400, { error: 'email, fullName and class are required.' });
+
+  // Tight limit — this is a knowledge-based proof, keep guessing expensive.
+  const rl = await _rlCheckDb('verify-identity', email, 5, RL_WINDOW);
+  if (!rl.allowed) {
+    res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ error: 'Too many attempts. Please wait before trying again.' }));
+  }
+
+  try {
+    const reportObj = await cdb.getReportByEmail(email);
+    const stu = reportObj && reportObj.student;
+    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    const nameOk  = stu && norm(stu.fullName) === norm(fullName);
+    const classOk = stu && String(stu.class || '').trim() === cls;
+    if (!nameOk || !classOk) {
+      log.warn('[verify-identity] failed for', email);
+      return _json(res, 200, { ok: false, error: 'Those details do not match our records.' });
+    }
+    const otpToken = await _dbWrite(() => cdb.issueOtpStageToken(email));
+    log.info('[verify-identity]', email, '| verified via registration details');
+    return _json(res, 200, { ok: true, step: 'set-pin', otpToken,
+      message: 'Identity confirmed. Set your PIN.' });
+  } catch (err) {
+    log.error('[counsellor-verify-identity]', err.message);
     _json(res, 500, { error: 'Server error.' });
   }
 }
@@ -888,25 +886,26 @@ async function _handleCounsellorSetPin(req, res) {
   if (!email || !pin) return _json(res, 400, { error: 'email and pin are required.' });
   if (!/^\d{4,6}$/.test(pin)) return _json(res, 400, { error: 'PIN must be 4–6 digits.' });
 
-  const rl = _rlCheckDb('set-pin', email, 5, RL_WINDOW);
+  const rl = await _rlCheckDb('set-pin', email, 5, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts.' }));
   }
 
-  if (_emailFn) {
+  {
+    // Proof always required: an OTP or identity-verification stage token.
     const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
-    if (!cdb.verifyOtpStageToken(otpToken, email)) {
-      return _json(res, 401, { unlocked: false, step: 'otp-sent',
-        error: 'Please verify the code sent to your email first.' });
+    if (!(await cdb.verifyOtpStageToken(otpToken, email))) {
+      return _json(res, 401, { unlocked: false, step: 'verify-required',
+        error: 'Please verify your identity first.' });
     }
   }
 
   try {
-    const reportObj = cdb.getReportByEmail(email);
+    const reportObj = await cdb.getReportByEmail(email);
     if (!reportObj) return _json(res, 200, { unlocked: false, error: 'No report found for this email.' });
 
-    if (cdb.hasPinSet(email) && !body?.changeOnly) {
+    if ((await cdb.hasPinSet(email)) && !body?.changeOnly) {
       return _json(res, 200, { unlocked: false, step: 'enter-pin',
         error: 'PIN already set. Please enter your existing PIN.' });
     }
@@ -930,18 +929,18 @@ async function _handleCounsellorVerifyPin(req, res) {
   const pin   = String(body?.pin   || '').trim();
   if (!email || !pin) return _json(res, 400, { error: 'email and pin are required.' });
 
-  const rl = _rlCheckDb('pin-verify', email, 10, RL_WINDOW);
+  const rl = await _rlCheckDb('pin-verify', email, 10, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many PIN attempts. Try again later.' }));
   }
 
   try {
-    const valid = cdb.verifyStudentPin(email, pin);
+    const valid = await cdb.verifyStudentPin(email, pin);
     if (!valid) {
       return _json(res, 200, { unlocked: false, error: 'Incorrect PIN. Please try again.' });
     }
-    const reportObj = cdb.getReportByEmail(email);
+    const reportObj = await cdb.getReportByEmail(email);
     if (!reportObj) return _json(res, 200, { unlocked: false, error: 'Report not found.' });
     log.info('[unlock]', email, '| verified via: PIN');
     return _jsonUnlocked(res, email, reportObj);
@@ -961,22 +960,23 @@ async function _handleCounsellorResetPin(req, res) {
   if (!email || !pin) return _json(res, 400, { error: 'email and pin are required.' });
   if (!/^\d{4,6}$/.test(pin)) return _json(res, 400, { error: 'PIN must be 4–6 digits.' });
 
-  const rl = _rlCheckDb('reset-pin', email, 5, RL_WINDOW);
+  const rl = await _rlCheckDb('reset-pin', email, 5, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
   }
 
-  if (_emailFn) {
+  {
+    // Proof always required: an OTP or identity-verification stage token.
     const otpToken = req.headers['x-counsellor-otp-token'] || (body && body.otpToken) || '';
-    if (!cdb.verifyOtpStageToken(otpToken, email)) {
-      return _json(res, 401, { ok: false, step: 'otp-sent',
-        error: 'Please verify the code sent to your email before resetting your PIN.' });
+    if (!(await cdb.verifyOtpStageToken(otpToken, email))) {
+      return _json(res, 401, { ok: false, step: 'verify-required',
+        error: 'Please verify your identity before resetting your PIN.' });
     }
   }
 
   try {
-    const reportObj = cdb.getReportByEmail(email);
+    const reportObj = await cdb.getReportByEmail(email);
     if (!reportObj) {
       return _json(res, 200, { ok: false,
         error: 'No report found for this email. Complete your assessment first.' });
@@ -997,14 +997,14 @@ async function _handleCounsellorChat(req, res) {
   let body;
   try { body = await _readBody(req, 128 * 1024); } catch { return _json(res, 400, { error: 'Bad request' }); }
 
-  const email = _verifyCounsellorToken(req);
+  const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email to continue.' });
   const message        = String(body.message        || '').trim();
   const conversationId = String(body.conversationId || '').trim() || null;
   if (!message) return _json(res, 400, { error: 'message is required.' });
   if (message.length > 2000) return _json(res, 400, { error: 'Message too long (max 2000 chars).' });
 
-  const rl = _rlCheckDb('chat', email, 60, RL_WINDOW);
+  const rl = await _rlCheckDb('chat', email, 60, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: `Rate limit reached. Wait ${Math.ceil(rl.retryAfter / 60)} min.` }));
@@ -1020,8 +1020,8 @@ async function _handleCounsellorChat(req, res) {
   res.on('close', release);
 
   try {
-    const reportObj    = cdb.getReportByEmail(email);
-    const summaryRow   = conversationId ? cdb.getConversationSummary(email, conversationId) : null;
+    const reportObj    = await cdb.getReportByEmail(email);
+    const summaryRow   = conversationId ? await cdb.getConversationSummary(email, conversationId) : null;
     const systemPrompt = rag.buildRagContext(reportObj, summaryRow ? summaryRow.summary : null);
     const sessionId    = reportObj?.session_id || null;
     const clientHistory = Array.isArray(body.history) ? body.history.slice(-20) : [];
@@ -1087,7 +1087,7 @@ async function _handleCounsellorSummarise(req, res) {
   if (!OPENAI_KEY)       return _json(res, 503, { error: 'AI not configured.' });
   let body;
   try { body = await _readBody(req, 64 * 1024); } catch { return _json(res, 400, { error: 'Bad request' }); }
-  const email = _verifyCounsellorToken(req);
+  const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   const conversationId = String(body.conversationId || '').trim();
   const messages       = Array.isArray(body.messages) ? body.messages : [];
@@ -1115,7 +1115,7 @@ async function _handleCounsellorClearHistory(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   let body;
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
-  const email = _verifyCounsellorToken(req);
+  const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   try {
     await _dbWrite(() => cdb.clearHistory(email));
@@ -1133,7 +1133,7 @@ async function _handleCounsellorGreeting(req, res) {
   let body;
   try { body = await _readBody(req, 8 * 1024); } catch { return _json(res, 400, { error: 'Bad request' }); }
 
-  const email = _verifyCounsellorToken(req);
+  const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
 
   if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
@@ -1146,7 +1146,7 @@ async function _handleCounsellorGreeting(req, res) {
   res.on('close', release);
 
   try {
-    const reportObj    = cdb.getReportByEmail(email);
+    const reportObj    = await cdb.getReportByEmail(email);
     const systemPrompt = rag.buildRagContext(reportObj);
     const firstName    = reportObj?.student?.firstName
                          || (reportObj?.student?.fullName || '').split(' ')[0]
@@ -1238,10 +1238,10 @@ async function _handleCounsellorGreeting(req, res) {
 
 async function _handleCounsellorConversations(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
-  const email = _verifyCounsellorToken(req);
+  const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   try {
-    const convs = cdb.getConversations(email);
+    const convs = await cdb.getConversations(email);
     _json(res, 200, { conversations: convs });
   } catch (err) {
     log.error('[/api/counsellor-conversations]', err.message);
@@ -1252,12 +1252,12 @@ async function _handleCounsellorConversations(req, res) {
 async function _handleCounsellorHistory(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
   const qs             = urlModule.parse(req.url, true).query;
-  const email          = _verifyCounsellorToken(req);
+  const email          = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   const conversationId = String(qs.conversationId || '').trim();
   if (!conversationId) return _json(res, 400, { error: 'conversationId required' });
   try {
-    const messages = cdb.getHistory(email, { conversationId, limit: 100 });
+    const messages = await cdb.getHistory(email, { conversationId, limit: 100 });
     _json(res, 200, { messages });
   } catch (err) {
     log.error('[counsellor-history]', err.message);
@@ -1271,7 +1271,7 @@ async function _handleCounsellorQuery(req, res) {
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
   const { name, email, message, preferredDate, preferredTime } = body || {};
   if (!name || !email || !message) return _json(res, 400, { error: 'name, email, and message are required.' });
-  const rl = _rlCheckDb('query', String(email).toLowerCase().trim(), 5, RL_WINDOW);
+  const rl = await _rlCheckDb('query', String(email).toLowerCase().trim(), 5, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many submissions. Please try again later.' }));
@@ -1354,14 +1354,14 @@ async function _handleRequest(req, res) {
 
   if (method === 'GET' && pathname === '/health') {
     let dbOk = true;
-    try { _db.prepare('SELECT 1').get(); } catch { dbOk = false; }
-    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight, wqLength: _wq.length };
+    try { dbOk = await require('./pg-core.js').ping(); } catch { dbOk = false; }
+    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight, wqLength: 0 };
     res.writeHead(dbOk ? 200 : 503, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(payload));
   }
 
   const ip   = _getIP(req);
-  const ipRl = _rlCheck(_ipRL, ip, 200, IP_WINDOW);
+  const ipRl = _rlCheck(_ipRL, ip, IP_RL_MAX, IP_WINDOW);
   if (!ipRl.allowed) {
     res.writeHead(429, { 'Retry-After': String(ipRl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many requests. Please slow down.' }));
@@ -1378,6 +1378,7 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/counsellor-verify-otp')    return await _handleCounsellorVerifyOtp(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-name')   return await _handleCounsellorVerifyName(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-request-otp')   return await _handleCounsellorRequestOtp(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-verify-identity') return await _handleCounsellorVerifyIdentity(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-pin')   return await _handleCounsellorVerifyPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-set-pin')      return await _handleCounsellorSetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-reset-pin')    return await _handleCounsellorResetPin(req, res);
@@ -1427,6 +1428,14 @@ async function _handleRequest(req, res) {
     return _serveStatic(res, filePath, req);
 
   } catch (err) {
+    if (_isDbBusy(err)) {
+      log.warn('[Server] DB pool saturated — replying 503:', err.message);
+      if (!res.headersSent) {
+        res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Server is busy. Please try again in a few seconds.', retry_after: 3 }));
+      }
+      return;
+    }
     log.error('[Server] Unhandled:', err.message, err.stack);
     if (!res.headersSent) _json(res, 500, { error: 'Internal server error' });
   }
@@ -1437,7 +1446,7 @@ async function _handleDashboardInsights(req, res) {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
   if (!token) return _json(res, 401, { error: 'Unauthorized' });
 
-  const dashUser = require('./dashboard-db.js').verifyToken(token);
+  const dashUser = await require('./dashboard-db.js').verifyToken(token);
   if (!dashUser) return _json(res, 401, { error: 'Unauthorized' });
 
   if (!OPENAI_KEY) return _json(res, 503, { error: 'OpenAI not configured on this server.' });
@@ -1482,8 +1491,8 @@ async function _handleDashboardInsights(req, res) {
   }
 }
 
-function _issueCounsellorToken(email) { return cdb.issueToken(email); }
-function _verifyCounsellorToken(req) {
+async function _issueCounsellorToken(email) { return cdb.issueToken(email); }
+async function _verifyCounsellorToken(req) {
   const token = (req.headers['x-counsellor-token'] || '').trim();
   return token ? cdb.verifyToken(token) : null;
 }
@@ -1494,17 +1503,26 @@ server.headersTimeout   = 10000;
 server.requestTimeout   = 30000;
 server.keepAliveTimeout = 65000;
 
-// Explicit backlog (default is 511) — diagnostic bump to test whether the
-// OS-level accept queue overflowing under high concurrent connection load
-// (while the event loop is synchronously blocked by SQLite writes) is the
-// actual mechanism behind the widespread ECONNRESET/ECONNREFUSED seen at
-// 700+ concurrent, including on requests that never touch the database.
+// Raised accept-queue backlog (Node default 511) — avoids ECONNRESET bursts
+// when the event loop is briefly blocked by synchronous SQLite writes.
 const LISTEN_BACKLOG = parseInt(process.env.LISTEN_BACKLOG || '2048', 10);
+
+/* Async bootstrap: create the PostgreSQL schema and wire the DB modules
+   BEFORE accepting connections. _db is the shared pg-core module handle
+   (kept named "_db" so dashApi.init's signature is unchanged). */
+async function _bootstrap() {
+  _db = await dbModule._initDb();      // runs pg-core.initSchema() once
+  await cdb.init(_db);                 // idempotent; ensures schema ready
+  await require('./dashboard-db.js').init(_db); // seeds first-boot accounts
+  dashApi.init(_db, _emailFn, _dbWrite);
+}
+
+_bootstrap().then(() => {
 server.listen(PORT, LISTEN_BACKLOG, () => {
   process.stdout.write(
     `\n✅  NuMind MAPS  →  http://localhost:${PORT}\n` +
     `    Listen backlog: ${LISTEN_BACKLOG}\n` +
-    `    SQLite      : ${process.env.SQLITE_PATH || path.join(__dirname, 'numind.db')}\n` +
+    `    PostgreSQL  : ${process.env.DATABASE_URL ? '*** (DATABASE_URL)' : (process.env.PGHOST || '127.0.0.1') + ':' + (process.env.PGPORT || '5432') + '/' + (process.env.PGDATABASE || 'numind')}\n` +
     `    Token       : ${APP_TOKEN ? '*** (set)' : '(not set — open access)'}\n` +
     `    AI models   : ${AI_MODEL} / chat: ${CHAT_MODEL}\n` +
     `    OpenAI      : ${OPENAI_KEY ? '*** (set)' : '(not set — AI disabled)'}\n` +
@@ -1515,15 +1533,18 @@ server.listen(PORT, LISTEN_BACKLOG, () => {
   _prewarm();
   if (typeof process.send === 'function') process.send('ready');
 });
+}).catch(err => { log.error('[Server] Bootstrap failed:', err.message, err.stack); process.exit(1); });
 
 server.on('error', err => { log.error('[Server] Fatal:', err.message); process.exit(1); });
 
 function _gracefulShutdown() {
   log.error('[Server] Shutting down…');
   server.close(() => {
-    try { dbModule.close(); } catch (_) {}
-    if (typeof cdb.close === 'function') { try { cdb.close(); } catch (_) {} }
-    process.exit(0);
+    Promise.resolve()
+      .then(() => dbModule.close && dbModule.close())
+      .then(() => cdb.close && cdb.close())
+      .catch(() => {})
+      .finally(() => process.exit(0));
   });
   setTimeout(() => process.exit(1), 10000).unref();
 }

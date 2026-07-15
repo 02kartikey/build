@@ -1,31 +1,33 @@
 {
   "name": "numind-maps",
   "version": "1.0.0",
-  "description": "NuMind MAPS — Multi-dimensional Assessment & Profiling System",
+  "description": "NuMind MAPS \u2014 Multi-dimensional Assessment & Profiling System",
   "main": "server.js",
   "engines": {
-    "node": "22.x"
+    "node": ">=18.0.0"
   },
   "scripts": {
     "start": "node server.js",
     "start:pm2": "pm2 start ecosystem.config.js --no-daemon",
     "dev": "node -r dotenv/config server.js",
-
     "test": "npm run test:syntax && npm run test:smoke",
     "test:syntax": "node scripts/check-syntax.js",
     "test:smoke": "node test/smoke-test.js",
     "test:dashboard": "node test/check-dashboard.js",
     "test:load:smoke": "k6 run --env MODE=smoke test/load-test.js",
     "test:load": "k6 run test/load-test.js",
-
     "db:seed": "node test/seed-db.js",
     "db:seed:clear": "node test/seed-db.js --clear",
-    "db:seed:large": "node test/seed-db.js --students 500"
+    "db:seed:large": "node test/seed-db.js --students 500",
+    "db:migrate": "node migrate-sqlite-to-pg.js",
+    "db:migrate:dry": "node migrate-sqlite-to-pg.js --dry-run"
   },
   "dependencies": {
-    "better-sqlite3": "^9.4.3",
-    "dotenv": "^16.4.5"
+    "better-sqlite3": "^11.10.0",
+    "dotenv": "^16.4.5",
+    "pg": "^8.13.1"
   },
-  "private": true,
-  "license": "UNLICENSED"
+  "devDependencies": {},
+  "license": "UNLICENSED",
+  "private": true
 }

@@ -51,12 +51,9 @@ function _readBody(req, maxBytes = 64 * 1024) {
     req.on('data', c => {
       total += c.length;
       if (total > maxBytes) {
-        // Drain remaining data without storing it — lets the connection stay
-        // open so the server can still send a proper 413 response.
-        // req.destroy() here causes ERR_CONNECTION_RESET client-side because
-        // the socket dies before the response headers are written.
+        // Keep draining (don't destroy the socket) so a clean 413 can be sent.
         if (!tooLarge) { tooLarge = true; reject(new Error('body_too_large')); }
-        return; // keep draining but don't push to chunks
+        return;
       }
       chunks.push(c);
     });
@@ -75,23 +72,30 @@ function _json(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-function _auth(req) {
+async function _auth(req) {
   const auth  = req.headers['authorization'] || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  return token ? _ddb.verifyToken(token) : null;
+  return token ? await _ddb.verifyToken(token) : null;
 }
 
-function _requireRole(req, res, ...roles) {
-  const user = _auth(req);
+async function _requireRole(req, res, ...roles) {
+  const user = await _auth(req);
   if (!user) { _json(res, 401, { error: 'Unauthorized' }); return null; }
   if (roles.length && !roles.includes(user.role)) { _json(res, 403, { error: 'Forbidden' }); return null; }
   return user;
 }
 
 /* Derive scoped school list for the requesting user */
-function _userSchools(user, overrideSchool = '') {
+async function _userSchools(user, overrideSchool = '') {
   if (user.role === 'admin') {
-    return overrideSchool ? [overrideSchool] : _ddb.getAllSchools().map(r => r.school);
+    return overrideSchool ? [overrideSchool] : (await _ddb.getAllSchools()).map(r => r.school);
+  }
+  if (overrideSchool) {
+    // Non-admins may narrow to one school, but only within their own scope.
+    const match = (user.schools || []).find(
+      s => String(s).toLowerCase() === String(overrideSchool).toLowerCase()
+    );
+    return match ? [match] : [];
   }
   return user.schools;
 }
@@ -132,6 +136,7 @@ async function handle(req, res) {
     if (method === 'PUT'    && url.match(/^\/api\/dashboard\/students\/[^/]+$/))         return await _updateStudent(req, res);
     if (method === 'DELETE' && url.match(/^\/api\/dashboard\/students\/[^/]+$/))         return _delStudent(req, res);
     if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/reset$/))  return _resetAssessment(req, res);
+    if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/reset-pin$/)) return await _resetStudentPin(req, res);
 
     // ── Per-student detail ───────────────────────────────────────
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/reminders$/)) return _studentReminders(req, res);
@@ -140,6 +145,12 @@ async function handle(req, res) {
     if (method === 'DELETE' && url.match(/^\/api\/dashboard\/students\/[^/]+\/notes\/[^/]+$/)) return _delNote(req, res);
     if (method === 'PUT'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/tags$/))      return await _setTags(req, res);
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/report$/))    return _studentReport(req, res);
+
+    // ── At-risk (all roles, school-scoped) ───────────────────────
+    if (method === 'GET' && url === '/api/dashboard/at-risk')      return _atRisk(req, res);
+
+    // ── Counsellor directory (management | admin) ────────────────
+    if (method === 'GET' && url === '/api/dashboard/counsellors')  return _counsellors(req, res);
 
     // ── Schools + reminder log (management | admin) ──────────────
     if (method === 'GET' && url === '/api/dashboard/schools')      return _schools(req, res);
@@ -182,7 +193,7 @@ async function _login(req, res) {
   const body = await _readBody(req, 4 * 1024);
   const { email, password } = body || {};
   if (!email || !password) return _json(res, 400, { error: 'Email and password required' });
-  const result = _ddb.login(email, password);
+  const result = await _ddb.login(email, password);
   if (!result) return _json(res, 401, { error: 'Invalid email or password' });
   _json(res, 200, result);
 }
@@ -190,12 +201,12 @@ async function _login(req, res) {
 async function _logout(req, res) {
   const auth  = req.headers['authorization'] || '';
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (token) _ddb.logout(token);
+  if (token) await _ddb.logout(token);
   _json(res, 200, { ok: true });
 }
 
-function _me(req, res) {
-  const user = _requireRole(req, res);
+async function _me(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   _json(res, 200, { user });
 }
@@ -204,10 +215,10 @@ async function _forgotPassword(req, res) {
   const body = await _readBody(req, 4 * 1024);
   const { email } = body || {};
   if (!email) return _json(res, 400, { error: 'email required' });
-  const u = _ddb.getUserByEmail(email);
+  const u = await _ddb.getUserByEmail(email);
   // Always return 200 — anti-enumeration (don't reveal whether email exists)
   if (!u) return _json(res, 200, { ok: true });
-  const token = _ddb.createPasswordResetToken(u.id);
+  const token = await _ddb.createPasswordResetToken(u.id);
   if (_sendEmail) {
     try {
       _sendEmail({
@@ -240,13 +251,13 @@ async function _resetPassword(req, res) {
   const { token, password } = body || {};
   if (!token || !password) return _json(res, 400, { error: 'token and password required' });
   if (String(password).length < 8) return _json(res, 400, { error: 'Password must be at least 8 characters' });
-  const ok = _ddb.consumePasswordResetToken(token, password);
+  const ok = await _ddb.consumePasswordResetToken(token, password);
   if (!ok) return _json(res, 400, { error: 'Token invalid or expired' });
   _json(res, 200, { ok: true });
 }
 
 async function _changePassword(req, res) {
-  const user = _requireRole(req, res);
+  const user = await _requireRole(req, res);
   if (!user) return;
   const body = await _readBody(req, 4 * 1024);
   // Accept both 'current_password' and 'old_password' for compatibility with all dashboard UIs
@@ -254,48 +265,48 @@ async function _changePassword(req, res) {
   const new_password     = (body || {}).new_password;
   if (!current_password || !new_password) return _json(res, 400, { error: 'current_password and new_password required' });
   if (String(new_password).length < 8) return _json(res, 400, { error: 'Password must be at least 8 characters' });
-  const check = _ddb.login(user.email, current_password);
+  const check = await _ddb.login(user.email, current_password);
   if (!check) return _json(res, 401, { error: 'Current password is incorrect' });
-  _ddb.updateUser({ id: user.id, password: new_password });
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'change_password' });
+  await _ddb.updateUser({ id: user.id, password: new_password });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'change_password' });
   _json(res, 200, { ok: true });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    AGGREGATE ANALYTICS
 ══════════════════════════════════════════════════════════════════ */
-function _aggregateScores(req, res) {
-  const user = _requireRole(req, res);
+async function _aggregateScores(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const agg = _ddb.getAggregateScores(_userSchools(user));
+    const agg = await _ddb.getAggregateScores(await _userSchools(user));
     _json(res, 200, { aggregates: agg });
   } catch (e) { process.stderr.write('[ERROR] [aggregate-scores] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
-function _wellbeingAlerts(req, res) {
-  const user = _requireRole(req, res);
+async function _wellbeingAlerts(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const alerts = _ddb.getWellbeingAlerts(_userSchools(user));
+    const alerts = await _ddb.getWellbeingAlerts(await _userSchools(user));
     _json(res, 200, { alerts });
   } catch (e) { process.stderr.write('[ERROR] [wellbeing-alerts] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
-function _careerDistribution(req, res) {
-  const user = _requireRole(req, res);
+async function _careerDistribution(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const distribution = _ddb.getCareerDistribution(_userSchools(user));
+    const distribution = await _ddb.getCareerDistribution(await _userSchools(user));
     _json(res, 200, { distribution });
   } catch (e) { process.stderr.write('[ERROR] [career-distribution] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
-function _moduleTiming(req, res) {
-  const user = _requireRole(req, res);
+async function _moduleTiming(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const timing = _ddb.getModuleTiming(_userSchools(user));
+    const timing = await _ddb.getModuleTiming(await _userSchools(user));
     _json(res, 200, { timing });
   } catch (e) { process.stderr.write('[ERROR] [module-timing] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
@@ -303,18 +314,19 @@ function _moduleTiming(req, res) {
 /* ══════════════════════════════════════════════════════════════════
    STUDENT DATA
 ══════════════════════════════════════════════════════════════════ */
-function _students(req, res) {
-  const user = _requireRole(req, res);
+async function _students(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const qs      = new URLSearchParams(req.url.split('?')[1] || '');
   const cls     = qs.get('class')   || '';
   const section = qs.get('section') || '';
   const search  = qs.get('search')  || '';
   const school  = qs.get('school')  || '';
-  const offset  = parseInt(qs.get('offset') || '0', 10);
+  const status  = qs.get('status')  || '';
+  const offset  = Math.max(parseInt(qs.get('offset') || '0', 10), 0);
   const limit   = Math.min(parseInt(qs.get('limit') || '100', 10), 2000);
 
-  let schools = _userSchools(user, school);
+  let schools = await _userSchools(user, school);
 
   // Fine-grained permission scoping
   const p = user.permissions || {};
@@ -324,7 +336,7 @@ function _students(req, res) {
       if (!cls) {
         const rows = [];
         for (const ac of p.allowedClasses)
-          rows.push(..._ddb.getStudentsBySchool(schools, { class: ac, section, search, limit, offset }));
+          rows.push(...await _ddb.getStudentsBySchool(schools, { class: ac, section, search, limit, offset }));
         return _json(res, 200, { students: rows, count: rows.length });
       }
     }
@@ -333,58 +345,79 @@ function _students(req, res) {
       if (!section) {
         const rows = [];
         for (const as of p.allowedSections)
-          rows.push(..._ddb.getStudentsBySchool(schools, { class: cls, section: as, search, limit, offset }));
+          rows.push(...await _ddb.getStudentsBySchool(schools, { class: cls, section: as, search, limit, offset }));
         return _json(res, 200, { students: rows, count: rows.length });
       }
     }
   }
 
-  const students = _ddb.getStudentsBySchool(schools, { class: cls, section, search, limit, offset });
-  _json(res, 200, { students, count: students.length });
+  const filters  = { class: cls, section, search, status };
+  const students = await _ddb.getStudentsBySchool(schools, { ...filters, limit, offset });
+  const total    = await _ddb.countStudentsFiltered(schools, filters);
+  _json(res, 200, { students, count: students.length, total, limit, offset });
 }
 
-function _stats(req, res) {
-  const user = _requireRole(req, res);
+async function _stats(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const qs     = new URLSearchParams(req.url.split('?')[1] || '');
   const school = qs.get('school') || '';
-  const stats  = _ddb.countStudentsBySchool(_userSchools(user, school));
-  _json(res, 200, { stats });
+  const schools = await _userSchools(user, school);
+  const stats   = await _ddb.countStudentsBySchool(schools);
+  const gender  = await _ddb.getGenderStats(schools);
+  _json(res, 200, { stats, gender });
 }
 
-function _trend(req, res) {
-  const user = _requireRole(req, res);
+async function _trend(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const qs   = new URLSearchParams(req.url.split('?')[1] || '');
   const days = Math.min(parseInt(qs.get('days') || '14', 10), 90);
   // getCompletionTrend is now cache-backed — instant on hit, live on miss
-  const trend = _ddb.getCompletionTrend(_userSchools(user, qs.get('school') || ''), days);
+  const trend = await _ddb.getCompletionTrend(await _userSchools(user, qs.get('school') || ''), days);
   _json(res, 200, { trend });
 }
 
-function _schools(req, res) {
-  const user = _requireRole(req, res, 'management', 'admin');
+async function _atRisk(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
-  const summaries = _ddb.getSchoolSummaries(_userSchools(user));
+  const qs   = new URLSearchParams(req.url.split('?')[1] || '');
+  const days = Math.min(Math.max(parseInt(qs.get('days') || '3', 10), 1), 60);
+  const students = await _ddb.getAtRiskStudents(await _userSchools(user, qs.get('school') || ''), { days });
+  _json(res, 200, { students, days });
+}
+
+async function _counsellors(req, res) {
+  const user = await _requireRole(req, res, 'management', 'admin');
+  if (!user) return;
+  const counsellors = await _ddb.listCounsellorsForSchools(await _userSchools(user));
+  _json(res, 200, { counsellors });
+}
+
+async function _schools(req, res) {
+  const user = await _requireRole(req, res, 'management', 'admin');
+  if (!user) return;
+  const summaries = await _ddb.getSchoolSummaries(await _userSchools(user));
   _json(res, 200, { schools: summaries });
 }
 
-function _exportStudentsCsv(req, res) {
-  const user = _requireRole(req, res);
+async function _exportStudentsCsv(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const qs     = new URLSearchParams(req.url.split('?')[1] || '');
   const school = qs.get('school') || '';
   const cls    = qs.get('class')  || '';
   const status = qs.get('status') || '';
-  const all      = _ddb.getStudentsBySchool(_userSchools(user, school), { class: cls, limit: 5000 });
-  const filtered = status ? all.filter(s => s.status === status) : all;
+  const filtered = await _ddb.getStudentsBySchool(await _userSchools(user, school), { class: cls, status, limit: 50000 });
   const esc = v => `"${String(v||'').replace(/"/g,'""')}"`;
+  // pg returns TIMESTAMPTZ as Date objects (SQLite returned ISO strings) — normalise.
+  const day = v => v ? new Date(v).toISOString().slice(0,10) : '';
   const header = ['Name','Email','School','Class','Section','Gender','Age','Status','Modules Done','Registered At','Completed At'];
   const rows = filtered.map(s => [
     esc(s.full_name), esc(s.email), esc(s.school), esc(s.class), esc(s.section),
     esc(s.gender), esc(s.age), esc(s.status), s.modules_done,
-    esc(s.registered_at ? s.registered_at.slice(0,10) : ''),
-    esc(s.completed_at  ? s.completed_at.slice(0,10)  : ''),
+    esc(day(s.registered_at)),
+    esc(day(s.completed_at)),
   ]);
   const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\r\n');
   res.writeHead(200, {
@@ -398,7 +431,7 @@ function _exportStudentsCsv(req, res) {
    EMAIL — both routes guard against null _sendEmail
 ══════════════════════════════════════════════════════════════════ */
 async function _sendReminder(req, res) {
-  const user = _requireRole(req, res, 'counsellor', 'management', 'admin');
+  const user = await _requireRole(req, res, 'counsellor', 'management', 'admin');
   if (!user) return;
   if (user.role !== 'admin' && user.permissions && user.permissions.can_send_reminders === false) {
     return _json(res, 403, { error: 'You do not have permission to send reminders.' });
@@ -421,12 +454,14 @@ async function _sendReminder(req, res) {
   // arbitrary addresses (including ones with no corresponding student at all).
   let inScope = students;
   if (user.role !== 'admin') {
-    const schools = _userSchools(user).map(s => s.toLowerCase());
-    inScope = students.filter(st => {
-      if (!st.email) return false;
-      const stu = _ddb.getStudentByEmail ? _ddb.getStudentByEmail(st.email) : null;
-      return stu && schools.includes((stu.school || '').toLowerCase());
-    });
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    // Resolve each student's school first (async), then filter synchronously.
+    const checked = await Promise.all(students.map(async (st) => {
+      if (!st.email) return null;
+      const stu = _ddb.getStudentByEmail ? await _ddb.getStudentByEmail(st.email) : null;
+      return (stu && schools.includes((stu.school || '').toLowerCase())) ? st : null;
+    }));
+    inScope = checked.filter(Boolean);
     if (!inScope.length) {
       return _json(res, 403, { error: 'None of the selected students are in your assigned school(s).' });
     }
@@ -451,7 +486,7 @@ async function _sendReminder(req, res) {
           '— NuMind MAPS Team',
         ].join('\n'),
       });
-      _ddb.logReminder({ studentEmail: st.email, sentBy: user.id, subject: emailSubject, message });
+      await _ddb.logReminder({ studentEmail: st.email, sentBy: user.id, subject: emailSubject, message });
       sent++;
     } catch (e) {
       process.stderr.write('[ERROR] [Dashboard] reminder error for ' + st.email + ': ' + e.message + '\n');
@@ -459,13 +494,13 @@ async function _sendReminder(req, res) {
     }
   }
 
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'send_reminder',
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'send_reminder',
                   detail: `sent=${sent} failed=${failed} scopeRejected=${students.length - inScope.length}` });
   _json(res, 200, { ok: true, sent, failed, scopeRejected: students.length - inScope.length });
 }
 
 async function _testEmail(req, res) {
-  const user = _requireRole(req, res, 'counsellor', 'management', 'admin');
+  const user = await _requireRole(req, res, 'counsellor', 'management', 'admin');
   if (!user) return;
 
   // ── Critical null-check ──
@@ -508,34 +543,34 @@ async function _testEmail(req, res) {
 /* ══════════════════════════════════════════════════════════════════
    REMINDER LOG
 ══════════════════════════════════════════════════════════════════ */
-function _reminderLog(req, res) {
-  const user = _requireRole(req, res, 'management', 'admin');
+async function _reminderLog(req, res) {
+  const user = await _requireRole(req, res, 'management', 'admin');
   if (!user) return;
   const opts = { limit: 200 };
-  if (user.role !== 'admin') opts.schools = _userSchools(user);
-  _json(res, 200, { log: _ddb.getReminderLog(opts) });
+  if (user.role !== 'admin') opts.schools = await _userSchools(user);
+  _json(res, 200, { log: await _ddb.getReminderLog(opts) });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    COUNSELLOR QUERIES — student contact/schedule form submissions
    Accessible by: admin, management, counsellor (own school scoped)
 ══════════════════════════════════════════════════════════════════ */
-function _listQueries(req, res) {
-  const user = _requireRole(req, res, 'admin', 'management', 'counsellor');
+async function _listQueries(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
   if (!user) return;
   const qs     = Object.fromEntries(new URL('http://x' + req.url).searchParams);
   const status = qs.status || '';     // 'pending' | 'in-progress' | 'resolved' | ''
   const limit  = Math.min(parseInt(qs.limit || '200', 10), 500);
   const offset = parseInt(qs.offset || '0', 10);
-  const scopeOpts = user.role !== 'admin' ? { schools: _userSchools(user) } : {};
-  const rows   = _cdb.listQueries({ status: status || undefined, limit, offset, ...scopeOpts });
+  const scopeOpts = user.role !== 'admin' ? { schools: await _userSchools(user) } : {};
+  const rows   = await _cdb.listQueries({ status: status || undefined, limit, offset, ...scopeOpts });
   // Count pending for badge — same scoping applied
-  const pending = _cdb.listQueries({ status: 'pending', limit: 500, ...scopeOpts }).length;
+  const pending = (await _cdb.listQueries({ status: 'pending', limit: 500, ...scopeOpts })).length;
   _json(res, 200, { queries: rows, pending });
 }
 
 async function _updateQuery(req, res) {
-  const user = _requireRole(req, res, 'admin', 'management', 'counsellor');
+  const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
   if (!user) return;
   const id   = parseInt(req.url.split('/').pop(), 10);
   if (!id) return _json(res, 400, { error: 'Invalid query id' });
@@ -545,8 +580,8 @@ async function _updateQuery(req, res) {
   if (status && !allowed.includes(status)) {
     return _json(res, 400, { error: 'status must be pending | in-progress | resolved' });
   }
-  _cdb.updateQuery(id, { status, adminNote });
-  _ddb.auditLog({
+  await _cdb.updateQuery(id, { status, adminNote });
+  await _ddb.auditLog({
     userId: user.id, userEmail: user.email,
     action: 'update_query', target: String(id),
     detail: status ? `status=${status}` : 'note updated',
@@ -557,14 +592,14 @@ async function _updateQuery(req, res) {
 /* ══════════════════════════════════════════════════════════════════
    USER MANAGEMENT (admin only)
 ══════════════════════════════════════════════════════════════════ */
-function _listUsers(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _listUsers(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
-  _json(res, 200, { users: _ddb.listUsers() });
+  _json(res, 200, { users: await _ddb.listUsers() });
 }
 
 async function _createUser(req, res) {
-  const user = _requireRole(req, res, 'admin');
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const body = await _readBody(req);
   const { name, email, password, role, schools, permissions } = body || {};
@@ -573,8 +608,8 @@ async function _createUser(req, res) {
     return _json(res, 400, { error: 'role must be counsellor | management | admin' });
   }
   try {
-    const id = _ddb.createUser({ name, email, password, role, schools: schools || [], permissions: permissions || {} });
-    _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_user', target: email, detail: `role=${role}` });
+    const id = await _ddb.createUser({ name, email, password, role, schools: schools || [], permissions: permissions || {} });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_user', target: email, detail: `role=${role}` });
     _json(res, 201, { ok: true, id });
   } catch (e) {
     if (e.message.includes('UNIQUE')) return _json(res, 409, { error: 'Email already exists' });
@@ -583,100 +618,98 @@ async function _createUser(req, res) {
 }
 
 async function _updateUser(req, res) {
-  const user = _requireRole(req, res, 'admin');
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const id = parseInt(req.url.split('/').pop(), 10);
   if (!id) return _json(res, 400, { error: 'Invalid user id' });
   const body = await _readBody(req);
   if (body.permissions === null || body.permissions === undefined) delete body.permissions;
-  _ddb.updateUser({ id, ...body });
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_user', target: String(id) });
+  await _ddb.updateUser({ id, ...body });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_user', target: String(id) });
   _json(res, 200, { ok: true });
 }
 
-function _deleteUser(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _deleteUser(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const id = parseInt(req.url.split('/').pop(), 10);
   if (!id) return _json(res, 400, { error: 'Invalid user id' });
-  _ddb.deleteUser(id);
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_user', target: String(id) });
+  await _ddb.deleteUser(id);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_user', target: String(id) });
   _json(res, 200, { ok: true });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    AUDIT LOG (admin only)
 ══════════════════════════════════════════════════════════════════ */
-function _auditLog(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _auditLog(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
-  _json(res, 200, { log: _ddb.getAuditLog({ limit: 500 }) });
+  _json(res, 200, { log: await _ddb.getAuditLog({ limit: 500 }) });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    STUDENT CRUD
 ══════════════════════════════════════════════════════════════════ */
 async function _createStudent(req, res) {
-  const user = _requireRole(req, res, 'admin', 'management');
+  const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const body = await _readBody(req, 16 * 1024);
   const { first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city } = body || {};
   if (!first_name || !school) return _json(res, 400, { error: 'first_name and school required' });
   // Scope guard: management may only create students under their assigned school(s)
   if (user.role !== 'admin') {
-    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!schools.includes(String(school).toLowerCase())) {
       return _json(res, 403, { error: 'You can only add students to your assigned school(s).' });
     }
   }
-  // Always upsert — if the email already exists, update that row in place.
-  // If it doesn't, create a new row. No errors, no flags, no 409.
-  // The student's session_id is returned so the frontend can reference it.
-  const sid = _ddb.upsertStudent({ first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city });
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_student', target: sid,
+  // Upsert: existing email → update that row in place; otherwise create.
+  const sid = await _ddb.upsertStudent({ first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_student', target: sid,
                   detail: `${first_name} ${last_name || ''} @ ${school}` });
   _json(res, 201, { ok: true, session_id: sid });
 }
 
 async function _updateStudent(req, res) {
-  const user = _requireRole(req, res, 'admin', 'management');
+  const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const sessionId = _seg(req.url, -1);
   // IDOR guard: management may only edit students in their assigned schools
   if (user.role !== 'admin') {
-    const stu = _ddb.getStudentBySessionId(sessionId);
+    const stu = await _ddb.getStudentBySessionId(sessionId);
     if (!stu) return _json(res, 404, { error: 'Student not found' });
-    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!schools.includes((stu.school || '').toLowerCase())) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
   const body = await _readBody(req, 16 * 1024);
-  _ddb.moveStudent(sessionId, body);
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_student', target: sessionId });
+  await _ddb.moveStudent(sessionId, body);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_student', target: sessionId });
   _json(res, 200, { ok: true });
 }
 
-function _delStudent(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _delStudent(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const sessionId = _seg(req.url, -1);
-  _ddb.deleteStudent(sessionId);
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_student', target: sessionId });
+  await _ddb.deleteStudent(sessionId);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_student', target: sessionId });
   _json(res, 200, { ok: true });
 }
 
-function _resetAssessment(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _resetAssessment(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const sessionId = _seg(req.url, -2);
-  _ddb.resetStudentAssessment(sessionId);
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'reset_assessment', target: sessionId });
+  await _ddb.resetStudentAssessment(sessionId);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'reset_assessment', target: sessionId });
   _json(res, 200, { ok: true });
 }
 
 async function _importStudents(req, res) {
-  const user = _requireRole(req, res, 'admin', 'management');
+  const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const body = await _readBody(req, 2 * 1024 * 1024);
   let rows = (body && Array.isArray(body.rows)) ? body.rows : [];
@@ -687,7 +720,7 @@ async function _importStudents(req, res) {
   // is visible to the caller via the existing skipped counter.
   let scopeRejected = 0;
   if (user.role !== 'admin') {
-    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
     const before = rows.length;
     rows = rows.filter(r => schools.includes(String(r.school || '').toLowerCase()));
     scopeRejected = before - rows.length;
@@ -696,16 +729,12 @@ async function _importStudents(req, res) {
     }
   }
 
-  // Route through _dbWrite so the entire import runs as a single DB write
-  // slot — non-blocking to the event loop, and atomic (all-or-nothing).
-  // Without this, 2000 synchronous upserts on the main thread block every
-  // concurrent request for hundreds of milliseconds.
+  // One _dbWrite slot + one SQLite transaction: atomic, and never blocks
+  // the event loop with thousands of individual auto-transactions.
   let imported = 0, skipped = 0;
   try {
-    await _dbWrite(() => {
-      // Single SQLite transaction: all 2000 rows or nothing. Much faster than
-      // 2000 individual auto-transactions, and safe from partial-import corruption.
-      const doImport = _ddb.runImportTransaction(rows.slice(0, 2000));
+    await _dbWrite(async () => {
+      const doImport = await _ddb.runImportTransaction(rows.slice(0, 2000));
       imported = doImport.imported;
       skipped  = doImport.skipped;
     });
@@ -714,7 +743,7 @@ async function _importStudents(req, res) {
     return _json(res, 500, { error: 'Import failed: ' + e.message });
   }
 
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'import_students',
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'import_students',
                   detail: `imported=${imported} skipped=${skipped} scopeRejected=${scopeRejected}` });
   _json(res, 200, { ok: true, imported, skipped, scopeRejected });
 }
@@ -722,132 +751,159 @@ async function _importStudents(req, res) {
 /* ══════════════════════════════════════════════════════════════════
    PER-STUDENT DETAIL
 ══════════════════════════════════════════════════════════════════ */
-function _studentReminders(req, res) {
-  const user = _requireRole(req, res);
+async function _studentReminders(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
-  const stu = _ddb.getStudentBySessionId(_seg(req.url, -2));
+  const stu = await _ddb.getStudentBySessionId(_seg(req.url, -2));
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   // IDOR guard: verify this student belongs to the requesting user's schools
   if (user.role !== 'admin') {
-    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!schools.includes((stu.school || '').toLowerCase())) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
-  _json(res, 200, { log: _ddb.getReminderLog({ studentEmail: stu.email, limit: 50 }) });
+  _json(res, 200, { log: await _ddb.getReminderLog({ studentEmail: stu.email, limit: 50 }) });
 }
 
-function _getNotes(req, res) {
-  const user = _requireRole(req, res);
+async function _getNotes(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
   // IDOR guard: verify this student belongs to the requesting user's schools
-  const stu = _ddb.getStudentBySessionId(sessionId);
+  const stu = await _ddb.getStudentBySessionId(sessionId);
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   if (user.role !== 'admin') {
-    const schools = _userSchools(user).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!schools.includes((stu.school || '').toLowerCase())) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
   _json(res, 200, {
-    notes: _ddb.getStudentNotes(sessionId),
-    tags:  _ddb.getStudentTags(sessionId),
+    notes: await _ddb.getStudentNotes(sessionId),
+    tags:  await _ddb.getStudentTags(sessionId),
   });
 }
 
 async function _addNote(req, res) {
-  const user = _requireRole(req, res);
+  const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
   // IDOR guard: verify this student belongs to requesting user's schools
   if (user.role !== 'admin') {
-    const _stu = _ddb.getStudentBySessionId(sessionId);
+    const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = _userSchools(user).map(s => s.toLowerCase());
+    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
   }
   const body = await _readBody(req, 8 * 1024);
   const { note } = body || {};
   if (!note || !String(note).trim()) return _json(res, 400, { error: 'note required' });
-  const id = _ddb.addStudentNote({ sessionId, authorId: user.id, note: String(note).trim() });
+  const id = await _ddb.addStudentNote({ sessionId, authorId: user.id, note: String(note).trim() });
   _json(res, 201, { ok: true, id });
 }
 
-function _delNote(req, res) {
-  const user = _requireRole(req, res);
+async function _delNote(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const parts  = req.url.split('/');
   const noteId = parseInt(parts[parts.length - 1], 10);
   if (!noteId) return _json(res, 400, { error: 'Invalid note id' });
-  _ddb.deleteStudentNote(noteId, user.id);
+  await _ddb.deleteStudentNote(noteId, user.id);
   _json(res, 200, { ok: true });
 }
 
 async function _setTags(req, res) {
-  const user = _requireRole(req, res);
+  const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
   // IDOR guard: verify this student belongs to requesting user's schools
   if (user.role !== 'admin') {
-    const _stu = _ddb.getStudentBySessionId(sessionId);
+    const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = _userSchools(user).map(s => s.toLowerCase());
+    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
   }
   const body = await _readBody(req, 4 * 1024);
-  _ddb.setStudentTags(sessionId, Array.isArray((body||{}).tags) ? body.tags : [], user.id);
+  await _ddb.setStudentTags(sessionId, Array.isArray((body||{}).tags) ? body.tags : [], user.id);
   _json(res, 200, { ok: true });
 }
 
-function _studentReport(req, res) {
-  const user = _requireRole(req, res);
+/* Staff support path: clear a student's AI-counsellor PIN so they can go
+   through first-time setup again. School-scoped; revokes active sessions. */
+async function _resetStudentPin(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const sessionId = _seg(req.url, -2);
+  const stu = await _ddb.getStudentBySessionId(sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found' });
+  if (user.role !== 'admin') {
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+  }
+  if (!stu.email) return _json(res, 400, { error: 'Student has no email on record.' });
+  try {
+    const cleared = await _dbWrite(() => _cdb.clearStudentPin(stu.email));
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'reset_student_pin', target: sessionId });
+    _json(res, 200, { ok: true, cleared,
+      message: cleared ? 'PIN cleared. The student will set a new PIN on next login.'
+                       : 'No PIN was set for this student.' });
+  } catch (e) {
+    process.stderr.write('[ERROR] [reset-pin] ' + e.message + '\n');
+    _json(res, 500, { error: 'Server error' });
+  }
+}
+
+async function _studentReport(req, res) {
+  const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
   // IDOR guard: verify this student belongs to requesting user's schools
   if (user.role !== 'admin') {
-    const _stu = _ddb.getStudentBySessionId(sessionId);
+    const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = _userSchools(user).map(s => s.toLowerCase());
+    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
     if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
   }
-  const stu = _ddb.getStudentBySessionId(sessionId);
-  if (!stu)        return _json(res, 404, { error: 'Student not found' });
-  if (!stu.email)  return _json(res, 404, { error: 'Student has no email — cannot look up report' });
+  // Look up by session_id directly — email indirection broke on duplicate
+  // or whitespace-padded emails and 404'd on students without reports.
   let report = null;
-  try { report = _cdb.getReportByEmail(stu.email); } catch (_) {}
-  if (!report) return _json(res, 404, { error: 'No completed report found for this student' });
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_report', target: sessionId });
-  _json(res, 200, { report });
+  try { report = await _cdb.getReportBySessionId(sessionId); } catch (_) {}
+  if (!report) return _json(res, 404, { error: 'Student not found' });
+  // No report yet (registered / in progress): 200 with has_report:false so
+  // the drawer can show the student's profile instead of a raw error.
+  const hasReport = !!(report.report && (report.report.fit_tier != null || report.report.generated_at));
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_report', target: sessionId });
+  _json(res, 200, { report, has_report: hasReport });
 }
 
 /* ══════════════════════════════════════════════════════════════════
    SCHOOLS REGISTRY (admin only)
 ══════════════════════════════════════════════════════════════════ */
-function _listSchoolsReg(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _listSchoolsReg(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
-  _json(res, 200, { schools: _ddb.listRegisteredSchools() });
+  _json(res, 200, { schools: await _ddb.listRegisteredSchools() });
 }
 
 async function _upsertSchoolReg(req, res) {
-  const user = _requireRole(req, res, 'admin');
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const body = await _readBody(req, 4 * 1024);
   const { id, name, city, state, active } = body || {};
   if (!name && !id) return _json(res, 400, { error: 'name required' });
-  const newId = _ddb.upsertRegisteredSchool({ id, name, city, state, active });
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: id ? 'update_school' : 'create_school', target: name });
+  const newId = await _ddb.upsertRegisteredSchool({ id, name, city, state, active });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: id ? 'update_school' : 'create_school', target: name });
   _json(res, 200, { ok: true, id: newId });
 }
 
-function _delSchoolReg(req, res) {
-  const user = _requireRole(req, res, 'admin');
+async function _delSchoolReg(req, res) {
+  const user = await _requireRole(req, res, 'admin');
   if (!user) return;
   const id = parseInt(_seg(req.url, -1), 10);
   if (!id) return _json(res, 400, { error: 'Invalid id' });
-  _ddb.deleteRegisteredSchool(id);
-  _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_school', target: String(id) });
+  await _ddb.deleteRegisteredSchool(id);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_school', target: String(id) });
   _json(res, 200, { ok: true });
 }
 

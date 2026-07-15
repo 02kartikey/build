@@ -24,46 +24,32 @@
   </div>
 
 
-  <!-- Staff Login button - always visible in nav -->
+  <!-- Staff Login -->
   <div style="position:relative;margin-left:12px;flex-shrink:0" id="staff-menu-wrap">
-    <button
-      id="staff-login-btn"
-      onclick="toggleStaffMenu()"
-      style="display:flex;align-items:center;gap:7px;padding:7px 14px;border-radius:20px;border:1.5px solid rgba(14,79,92,.2);background:rgba(14,79,92,.05);color:var(--brand);font-family:'Poppins',sans-serif;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;white-space:nowrap"
-      onmouseover="this.style.background='rgba(14,79,92,.1)';this.style.borderColor='rgba(14,79,92,.4)'"
-      onmouseout="this.style.background='rgba(14,79,92,.05)';this.style.borderColor='rgba(14,79,92,.2)'"
-    >
+    <button id="staff-login-btn" class="staff-btn" onclick="toggleStaffMenu()">
       <span>🔑</span> Staff Login <span id="staff-chevron" style="font-size:10px;transition:transform .15s">▾</span>
     </button>
-
-    <!-- Dropdown -->
-    <div id="staff-dropdown" style="display:none;position:absolute;top:calc(100% + 8px);right:0;background:#fff;border:1.5px solid #e2e8f0;border-radius:14px;box-shadow:0 8px 32px rgba(0,0,0,.12);min-width:210px;overflow:hidden;z-index:500">
-      <div style="padding:10px 14px 8px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#94a3b8;border-bottom:1px solid #f1f5f9">Select your role</div>
-      <a href="/dashboard-counsellor.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;transition:background .12s"
-        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
-      >
-        <span style="font-size:22px">🎓</span>
+    <div id="staff-dropdown" class="staff-dropdown">
+      <div class="staff-dropdown-label">Select your role</div>
+      <a href="/dashboard-counsellor.html" class="staff-item">
+        <span class="staff-item-emoji">🎓</span>
         <div>
-          <div style="font-size:13px;font-weight:700;color:#0f172a">Counsellor</div>
-          <div style="font-size:11px;color:#64748b">View your school's students</div>
+          <div class="staff-item-name">Counsellor</div>
+          <div class="staff-item-desc">View your school's students</div>
         </div>
       </a>
-      <a href="/dashboard-management.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;border-top:1px solid #f1f5f9;transition:background .12s"
-        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
-      >
-        <span style="font-size:22px">🏫</span>
+      <a href="/dashboard-management.html" class="staff-item">
+        <span class="staff-item-emoji">🏫</span>
         <div>
-          <div style="font-size:13px;font-weight:700;color:#0f172a">Management</div>
-          <div style="font-size:11px;color:#64748b">Multi-school overview</div>
+          <div class="staff-item-name">Management</div>
+          <div class="staff-item-desc">Multi-school overview</div>
         </div>
       </a>
-      <a href="/dashboard-admin.html" style="display:flex;align-items:center;gap:12px;padding:12px 16px;text-decoration:none;border-top:1px solid #f1f5f9;transition:background .12s"
-        onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''"
-      >
-        <span style="font-size:22px">⚡</span>
+      <a href="/dashboard-admin.html" class="staff-item">
+        <span class="staff-item-emoji">⚡</span>
         <div>
-          <div style="font-size:13px;font-weight:700;color:#0f172a">Admin</div>
-          <div style="font-size:11px;color:#64748b">Full system access</div>
+          <div class="staff-item-name">Admin Console</div>
+          <div class="staff-item-desc">Full system access</div>
         </div>
       </a>
     </div>
@@ -302,48 +288,48 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="landing-hero-inner">
       <div class="hero-eyebrow">
         <span class="hero-eyebrow-dot"></span>
-        Multi-dimensional Assessments for Personalized Success
+        You are here — your career map starts now
       </div>
-      <h1>NuMind <em>MAPS</em></h1>
-      <p>A comprehensive psychometric assessment that maps your career interests, SEL readiness, personality and aptitude — giving you a personalised insight report.</p>
-      <div class="hero-badges">
-        <span class="hero-badge">⏱ ~65 minutes</span>
-        <span class="hero-badge">📊 4 Modules</span>
-        <span class="hero-badge">🎯 Personalised Report</span>
-        <span class="hero-badge">🔒 Confidential</span>
+      <h1>Find your direction with <em>NuMind MAPS</em></h1>
+      <p>A complete psychometric assessment that maps your interests, personality, aptitude and SEL readiness into one personalised career insight report.</p>
+      <div class="hero-meta">
+        <span>About 65 minutes</span>
+        <span>4 research-backed modules</span>
+        <span>Personalised report</span>
+        <span>Confidential</span>
       </div>
       <div class="hero-ctas">
-        <button class="btn btn-lg" style="background:#fff;color:var(--brand3);font-family:'Poppins',sans-serif;font-weight:700;box-shadow:0 4px 20px rgba(0,0,0,.2)" onclick="goPage('register')">Begin Your Assessment 🚀</button>
-        <button class="btn btn-lg btn-outline" style="border-color:rgba(255,255,255,.4);color:#fff;font-family:'Poppins',sans-serif" onclick="document.getElementById('msec').scrollIntoView({behavior:'smooth'})">See What's Inside</button>
+        <button class="btn btn-lg hero-btn-primary" onclick="goPage('register')">Begin your assessment</button>
+        <button class="btn btn-lg hero-btn-ghost" onclick="document.getElementById('msec').scrollIntoView({behavior:'smooth'})">See what's inside</button>
       </div>
     </div>
   </div>
 
-  <!-- Stats Strip -->
+  <!-- Stats card -->
   <div class="stats-strip">
     <div class="stats-strip-inner">
       <div class="stat-item">
         <div class="stat-num">4</div>
-        <div class="stat-lbl">Assessment Modules</div>
+        <div class="stat-lbl">Assessment modules</div>
       </div>
       <div class="stat-item">
         <div class="stat-num">190+</div>
-        <div class="stat-lbl">Psychometric Questions</div>
+        <div class="stat-lbl">Psychometric questions</div>
       </div>
       <div class="stat-item">
         <div class="stat-num">9</div>
-        <div class="stat-lbl">Personality Dimensions</div>
+        <div class="stat-lbl">Personality dimensions</div>
       </div>
       <div class="stat-item">
         <div class="stat-num">10</div>
-        <div class="stat-lbl">Career Domains Mapped</div>
+        <div class="stat-lbl">Career domains mapped</div>
       </div>
     </div>
   </div>
 
   <div class="wrap">
 
-    <!-- How It Works -->
+  <!-- How It Works -->
     <div class="journey-section">
       <div class="section-eyebrow">How It Works</div>
       <div class="section-title">Your Assessment Journey</div>
@@ -352,39 +338,39 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="journey-row">
         <div class="journey-step">
           <div class="j-num">1</div>
-          <div class="j-icon" style="background:#e8faf5">📋</div>
-          <div class="j-title">Sign Up</div>
-          <div class="j-desc">Name, class & school. Done in 60 sec.</div>
+          <div class="j-icon">📋</div>
+          <div class="j-title">Sign up</div>
+          <div class="j-desc">Name, class &amp; school — done in 60 seconds.</div>
         </div>
         <div class="journey-step">
           <div class="j-num">2</div>
-          <div class="j-icon" style="background:#eef2ff">🧠</div>
+          <div class="j-icon">🧠</div>
           <div class="j-title">Personality</div>
-          <div class="j-desc">63 statements · 9 dimensions.</div>
+          <div class="j-desc">63 statements across 9 dimensions.</div>
         </div>
         <div class="journey-step">
           <div class="j-num">3</div>
-          <div class="j-icon" style="background:var(--branddl)">💬</div>
+          <div class="j-icon">⚡</div>
           <div class="j-title">Aptitude</div>
-          <div class="j-desc">8 timed sub-tests · verbal & numerical</div>
+          <div class="j-desc">8 timed sub-tests, verbal to spatial.</div>
         </div>
         <div class="journey-step">
           <div class="j-num">4</div>
-          <div class="j-icon" style="background:#f5f3ff">🌟</div>
+          <div class="j-icon">🌟</div>
           <div class="j-title">Interests</div>
-          <div class="j-desc">20 questions — 10 career areas.</div>
+          <div class="j-desc">20 questions across 10 career worlds.</div>
         </div>
         <div class="journey-step">
           <div class="j-num">5</div>
-          <div class="j-icon" style="background:#ede9fe">🔬</div>
-          <div class="j-title">SEL Readiness</div>
-          <div class="j-desc">60 YES/NO school life statements.</div>
+          <div class="j-icon">💬</div>
+          <div class="j-title">SEL readiness</div>
+          <div class="j-desc">60 quick yes/no school-life statements.</div>
         </div>
         <div class="journey-step">
           <div class="j-num">6</div>
-          <div class="j-icon" style="background:#fef3c7">✨</div>
-          <div class="j-title">Your Report</div>
-          <div class="j-desc">Full personalised career insight report.</div>
+          <div class="j-icon">🗺️</div>
+          <div class="j-title">Your report</div>
+          <div class="j-desc">A full personalised career insight map.</div>
         </div>
       </div>
     </div>
@@ -397,70 +383,86 @@ document.addEventListener('DOMContentLoaded', function() {
 
       <div class="mod-cards" style="margin-top:2rem">
         <div class="mod-card m3">
-          <div class="mod-card-icon" style="background:#f5f3ff">🌟</div>
-          <div class="pill-badge" style="background:#f5f3ff;color:#7c3aed;margin-bottom:10px">Module 1 · NMAP</div>
-          <h3>Your Personality Profile</h3>
+          <div class="mod-card-head">
+            <div class="mod-card-icon">🌟</div>
+            <div>
+              <div class="mod-card-tag">Module 1 · NMAP</div>
+              <h3>Your personality profile</h3>
+            </div>
+          </div>
           <p>Discover your personality across 9 dimensions — from leadership and creativity to resilience and ethical awareness.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
-            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">9 Dimensions</span>
-            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Leadership Traits</span>
-            <span style="background:#f5f3ff;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Stanine Scoring</span>
+          <div class="mod-chips">
+            <span class="mod-chip">9 dimensions</span>
+            <span class="mod-chip">Leadership traits</span>
+            <span class="mod-chip">Stanine scoring</span>
           </div>
           <div class="mod-stats">
             <div class="mod-stat"><strong>63</strong>Statements</div>
             <div class="mod-stat"><strong>9</strong>Dimensions</div>
-            <div class="mod-stat"><strong>~20 min</strong></div>
+            <div class="mod-stat"><strong>~20</strong>Minutes</div>
           </div>
         </div>
 
         <div class="mod-card m4">
-          <div class="mod-card-icon" style="background:#ede9fe">🔬</div>
-          <div class="pill-badge" style="background:#ede9fe;color:#7c3aed;margin-bottom:10px">Module 2 · DAAB</div>
-          <h3>Aptitude Battery</h3>
-          <p>8 timed sub-tests covering Verbal Ability, Perceptual Ability, Numerical Ability, Legal Studies Aptitude, Spatial Ability, Mechanical Ability, Abstract Reasoning and Health & Medical ability. Auto-advances when time is up.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
-            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Verbal Ability</span>
-            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Numerical Aptitude</span>
-            <span style="background:#ede9fe;color:#7c3aed;font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Timed Sub-tests</span>
+          <div class="mod-card-head">
+            <div class="mod-card-icon">⚡</div>
+            <div>
+              <div class="mod-card-tag">Module 2 · DAAB</div>
+              <h3>Aptitude battery</h3>
+            </div>
+          </div>
+          <p>8 timed sub-tests covering verbal, numerical, spatial, mechanical, abstract, perceptual, legal and health &amp; medical ability — each auto-advances when time is up.</p>
+          <div class="mod-chips">
+            <span class="mod-chip">Verbal ability</span>
+            <span class="mod-chip">Numerical aptitude</span>
+            <span class="mod-chip">Timed sub-tests</span>
           </div>
           <div class="mod-stats">
             <div class="mod-stat"><strong>190</strong>Questions</div>
             <div class="mod-stat"><strong>8</strong>Sub-tests</div>
-            <div class="mod-stat"><strong>~29 min</strong></div>
+            <div class="mod-stat"><strong>~29</strong>Minutes</div>
           </div>
         </div>
 
         <div class="mod-card m1">
-          <div class="mod-card-icon" style="background:var(--m1l)">🧠</div>
-          <div class="pill-badge pb-m1" style="margin-bottom:10px">Module 3 · CPI</div>
-          <h3>Discover Your Interests</h3>
-          <p>Find out which of 10 career worlds — from Science & Technology to Arts, Law, Business and Sports — naturally excites you most.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
-            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Career Mapping</span>
-            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">10 Domains</span>
-            <span style="background:var(--m1l);color:var(--m1);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Rank-Based Insights</span>
+          <div class="mod-card-head">
+            <div class="mod-card-icon">🧭</div>
+            <div>
+              <div class="mod-card-tag">Module 3 · CPI</div>
+              <h3>Discover your interests</h3>
+            </div>
+          </div>
+          <p>Find out which of 10 career worlds — from Science &amp; Technology to Arts, Law, Business and Sports — naturally excites you most.</p>
+          <div class="mod-chips">
+            <span class="mod-chip">Career mapping</span>
+            <span class="mod-chip">10 domains</span>
+            <span class="mod-chip">Rank-based insights</span>
           </div>
           <div class="mod-stats">
             <div class="mod-stat"><strong>20</strong>Questions</div>
             <div class="mod-stat"><strong>10</strong>Career domains</div>
-            <div class="mod-stat"><strong>~8 min</strong></div>
+            <div class="mod-stat"><strong>~8</strong>Minutes</div>
           </div>
         </div>
 
         <div class="mod-card m2">
-          <div class="mod-card-icon" style="background:var(--branddl)">💚</div>
-          <div class="pill-badge" style="background:var(--branddl);color:var(--brand2);margin-bottom:10px">Module 4 · NSEAAS</div>
-          <h3>SEL Readiness Check</h3>
+          <div class="mod-card-head">
+            <div class="mod-card-icon">💚</div>
+            <div>
+              <div class="mod-card-tag">Module 4 · NSEAAS</div>
+              <h3>SEL readiness check</h3>
+            </div>
+          </div>
           <p>Measure Social &amp; Emotional Learning readiness across three dimensions — emotional regulation, social connection, and academic engagement.</p>
-          <div style="display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 4px">
-            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Emotional Awareness</span>
-            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">Social Bonds</span>
-            <span style="background:var(--brandl);color:var(--brand2);font-size:10px;font-weight:700;padding:3px 10px;border-radius:20px;letter-spacing:.04em">School Engagement</span>
+          <div class="mod-chips">
+            <span class="mod-chip">Emotional awareness</span>
+            <span class="mod-chip">Social bonds</span>
+            <span class="mod-chip">School engagement</span>
           </div>
           <div class="mod-stats">
             <div class="mod-stat"><strong>60</strong>Statements</div>
-            <div class="mod-stat"><strong>6 rounds</strong>of 10</div>
-            <div class="mod-stat"><strong>~12 min</strong></div>
+            <div class="mod-stat"><strong>6</strong>Rounds of 10</div>
+            <div class="mod-stat"><strong>~12</strong>Minutes</div>
           </div>
         </div>
       </div>
@@ -525,34 +527,34 @@ document.addEventListener('DOMContentLoaded', function() {
     <div id="counsellor-section" style="margin:3rem 0">
       <div style="text-align:center;margin-bottom:2rem">
         <div class="section-eyebrow">Human Support</div>
-        <div class="section-title">Connect with a Counsellor 🤝</div>
+        <div class="section-title">Connect with a counsellor</div>
         <div class="section-sub">Have questions about your results, career choices, or need personalised guidance? Our trained counsellors are here to help.</div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:start" class="cq-grid">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:2rem;align-items:stretch" class="cq-grid">
 
-        <!-- Left: info cards -->
+        <!-- Left: info cards (equal height, stretch to match the form) -->
         <div style="display:flex;flex-direction:column;gap:1rem">
-          <div style="background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1px solid #bbf7d0;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
-            <div style="font-size:28px;flex-shrink:0">💬</div>
+          <div style="flex:1;background:var(--branddl);border:1px solid rgba(21,125,140,.18);border-radius:16px;padding:1.4rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="width:44px;height:44px;border-radius:12px;background:var(--brandl);display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0">💬</div>
             <div>
-              <div style="font-weight:700;color:#166534;font-size:15px;margin-bottom:4px">1-on-1 Counselling Session</div>
-              <div style="color:#15803d;font-size:13px;line-height:1.6">Personalised video or in-person sessions with trained career counsellors who understand your NuMind MAPS report.</div>
+              <div style="font-family:'Poppins',sans-serif;font-weight:700;color:var(--brand3);font-size:15px;margin-bottom:4px">1-on-1 counselling session</div>
+              <div style="color:var(--ink3);font-size:13px;line-height:1.65">Personalised video or in-person sessions with trained career counsellors who understand your NuMind MAPS report.</div>
             </div>
           </div>
-          <div style="background:linear-gradient(135deg,#eff6ff,#dbeafe);border:1px solid #bfdbfe;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
-            <div style="font-size:28px;flex-shrink:0">🎯</div>
+          <div style="flex:1;background:var(--lavenderx);border:1px solid rgba(124,111,205,.2);border-radius:16px;padding:1.4rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="width:44px;height:44px;border-radius:12px;background:var(--lavenderl);display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0">🎯</div>
             <div>
-              <div style="font-weight:700;color:#1e40af;font-size:15px;margin-bottom:4px">Report Walk-through</div>
-              <div style="color:#1d4ed8;font-size:13px;line-height:1.6">Not sure what your scores mean? A counsellor will walk through your entire report with you and your parents.</div>
+              <div style="font-family:'Poppins',sans-serif;font-weight:700;color:var(--lavender2);font-size:15px;margin-bottom:4px">Report walk-through</div>
+              <div style="color:var(--ink3);font-size:13px;line-height:1.65">Not sure what your scores mean? A counsellor will walk through your entire report with you and your parents.</div>
             </div>
           </div>
-          <div style="background:linear-gradient(135deg,#fdf4ff,#f3e8ff);border:1px solid #e9d5ff;border-radius:16px;padding:1.25rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
-            <div style="font-size:28px;flex-shrink:0">🤖</div>
+          <div style="flex:1;background:var(--grad-soft);border:1px solid rgba(21,125,140,.18);border-radius:16px;padding:1.4rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
+            <div style="width:44px;height:44px;border-radius:12px;background:var(--brandl);display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0">🤖</div>
             <div>
-              <div style="font-weight:700;color:#6b21a8;font-size:15px;margin-bottom:4px">AI Counsellor Available 24/7</div>
-              <div style="color:#7c3aed;font-size:13px;line-height:1.6">After completing your assessment, unlock your personal AI Counsellor — powered by your actual report data.</div>
-              <button onclick="goToCounsellor()" style="margin-top:8px;padding:6px 14px;border-radius:8px;background:#7c3aed;color:#fff;border:none;cursor:pointer;font-size:12px;font-weight:600">Open AI Counsellor →</button>
+              <div style="font-family:'Poppins',sans-serif;font-weight:700;color:var(--brand3);font-size:15px;margin-bottom:4px">AI counsellor, available 24/7</div>
+              <div style="color:var(--ink3);font-size:13px;line-height:1.65">After completing your assessment, unlock your personal AI Counsellor — powered by your actual report data.</div>
+              <button onclick="goToCounsellor()" class="btn btn-sm btn-primary" style="margin-top:12px">Open AI Counsellor →</button>
             </div>
           </div>
         </div>
@@ -591,7 +593,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 </select>
               </div>
             </div>
-            <button id="cq-submit-btn" onclick="submitCounsellorQuery()" style="width:100%;padding:12px;border-radius:12px;background:linear-gradient(135deg,#0e4f5c,#1a7f8e);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:15px;font-weight:700;letter-spacing:.02em;transition:opacity .2s">
+            <button id="cq-submit-btn" onclick="submitCounsellorQuery()" style="width:100%;padding:12px;border-radius:12px;background:linear-gradient(135deg,#0b4650,#157d8c);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:15px;font-weight:700;letter-spacing:.02em;transition:opacity .2s">
               Send My Query 📩
             </button>
           </div>
@@ -607,26 +609,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
   <div class="wrap">
     <div class="cta-strip" style="margin-top:3rem">
-      <h3>Ready to Discover Your Future? 🌟</h3>
-      <p>No right or wrong answers — just be honest and have fun with it! Takes about 45 minutes.</p>
-      <button class="btn-cta" onclick="goPage('register')">Begin Your Assessment 🚀</button>
+      <h3>Ready to map your future?</h3>
+      <p>There are no right or wrong answers — just be honest and enjoy it. Done in about an hour.</p>
+      <button class="btn-cta" onclick="goPage('register')">Begin your assessment</button>
     </div>
 
     <!-- Staff Portal Links -->
-    <div style="text-align:center;padding:1rem 0 0.5rem;border-top:1px solid rgba(255,255,255,.08);margin:0 1rem">
-      <div style="font-size:11px;color:rgba(255,255,255,.35);margin-bottom:10px;text-transform:uppercase;letter-spacing:.08em;font-weight:600">Staff Portals</div>
-      <div style="display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap">
-        <a href="/dashboard-counsellor.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">🎓 Counsellor Portal</a>
-        <a href="/dashboard-management.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">🏫 Management Portal</a>
-        <a href="/dashboard-admin.html" style="font-size:12px;color:rgba(255,255,255,.45);text-decoration:none;padding:5px 12px;border:1px solid rgba(255,255,255,.12);border-radius:20px;transition:all .15s" onmouseover="this.style.color='rgba(255,255,255,.8)';this.style.borderColor='rgba(255,255,255,.3)'" onmouseout="this.style.color='rgba(255,255,255,.45)';this.style.borderColor='rgba(255,255,255,.12)'">⚡ Admin Console</a>
+    <div class="foot">
+      <div class="foot-label">Staff portals</div>
+      <div class="foot-links">
+        <a href="/dashboard-counsellor.html" class="foot-link">🎓 Counsellor portal</a>
+        <a href="/dashboard-management.html" class="foot-link">🏫 Management portal</a>
+        <a href="/dashboard-admin.html" class="foot-link">⚡ Admin console</a>
       </div>
     </div>
 
     <!-- Powered by NuMind footer note -->
     <div style="text-align:center;padding:1.5rem 0 2.5rem;display:flex;align-items:center;justify-content:center;gap:10px">
       <span style="font-size:12px;color:var(--ink4)">Powered by</span>
-      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 36" height="20" style="opacity:.7" aria-label="NuMind"><rect x="0" y="4" width="28" height="28" rx="7" fill="#0e4f5c"/><text x="5.5" y="23" font-family="Arial Black,sans-serif" font-size="17" font-weight="900" fill="#fff">N</text><circle cx="22" cy="10" r="3.5" fill="#64e4f0" opacity=".9"/><text x="33" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#0e4f5c">Nu</text><text x="54" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#1a7f8e">Mind</text></svg
-           onerror="this.outerHTML='<span style=\'font-size:12px;font-weight:700;color:var(--brand)\'>NuMind</span>'">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 140 36" height="20" style="opacity:.75" aria-label="NuMind"><rect x="0" y="4" width="28" height="28" rx="7" fill="#0b4650"/><text x="5.5" y="23" font-family="Arial Black,sans-serif" font-size="17" font-weight="900" fill="#fff">N</text><circle cx="22" cy="10" r="3.5" fill="#64e4f0" opacity=".9"/><text x="33" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#0b4650">Nu</text><text x="54" y="24" font-family="Poppins,Arial,sans-serif" font-size="15" font-weight="800" fill="#157d8c">Mind</text></svg>
     </div>
   </div>
 </div>
@@ -722,8 +723,9 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="quiz-shell">
     <aside class="sidebar">
       <div class="timer-box">
-        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-lbl">⏱ Time elapsed</div>
         <div class="timer-val" id="cpi-timer">00:00</div>
+        <div class="timer-note">No time limit — take your time</div>
       </div>
       <div class="sidebar-sec">
         <div class="prog-bar-wrap">
@@ -764,7 +766,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="eyebrow">Next up — Module 2 · DAAB</div>
       <p>8 timed sub-tests covering <strong>Verbal, Perceptual, Numerical, Legal, Abstract, Mechanical, Spatial &amp; Health</strong> abilities. Each sub-test advances automatically when time is up.</p>
     </div>
-    <button class="btn btn-lg" style="background:var(--m4);color:#fff;box-shadow:0 4px 14px rgba(124,58,237,.3)" onclick="startDAAB()">Begin Aptitude Battery →</button>
+    <button class="btn btn-lg" style="background:var(--m4);color:#fff;box-shadow:0 4px 14px rgba(92,79,181,.3)" onclick="startDAAB()">Begin Aptitude Battery →</button>
     <div class="affirm">You're doing amazing! Keep going 👇</div>
   </div>
 </div>
@@ -776,8 +778,9 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="sea-shell">
     <aside class="sea-sidebar">
       <div class="timer-box">
-        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-lbl">⏱ Time elapsed</div>
         <div class="timer-val" id="sea-timer">00:00</div>
+        <div class="timer-note">No time limit — take your time</div>
       </div>
       <div class="sidebar-sec">
         <div class="prog-bar-wrap">
@@ -830,8 +833,9 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="nmap-shell">
     <aside class="nmap-sidebar">
       <div class="timer-box">
-        <div class="timer-lbl">Time elapsed</div>
+        <div class="timer-lbl">⏱ Time elapsed</div>
         <div class="timer-val" id="nmap-timer">00:00</div>
+        <div class="timer-note">No time limit — take your time</div>
       </div>
       <div class="sidebar-sec">
         <div class="prog-bar-wrap">
@@ -888,8 +892,9 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="daab-shell">
     <aside class="daab-sidebar">
       <div class="timer-box">
-        <div class="timer-lbl">Time remaining</div>
+        <div class="timer-lbl">⏳ Time remaining</div>
         <div class="timer-val daab-timer-val" id="daab-timer-display">—:——</div>
+        <div class="timer-note">Timed sub-test — auto-advances at 0</div>
       </div>
       <div class="sidebar-sec">
         <div class="prog-bar-wrap">
@@ -963,7 +968,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <!-- ═══════════ INTERACTIVE CHARTS DASHBOARD ═══════════ -->
       <div class="card cp span2" id="charts-dashboard-card">
         <div class="res-card-header" style="margin-bottom:1.25rem">
-          <div class="res-mod-icon" style="background:linear-gradient(135deg,#0e4f5c,#1a7f8e);color:#fff;font-size:18px">📊</div>
+          <div class="res-mod-icon" style="background:linear-gradient(135deg,#0b4650,#157d8c);color:#fff;font-size:18px">📊</div>
           <div>
             <div class="res-mod-title">Interactive Score Visualisations</div>
             <div class="res-mod-sub">Charts auto-generated from your assessment data — tap tabs to explore</div>
@@ -1115,16 +1120,16 @@ document.addEventListener('DOMContentLoaded', function() {
       <!-- AI-Generated Final Report -->
       <div class="card cp span2" id="ai-report-card">
         <div class="res-card-header">
-          <div class="res-mod-icon rmi-dk" style="background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;font-size:18px">✦</div>
+          <div class="res-mod-icon rmi-dk" style="background:linear-gradient(135deg,#5c4fb5,#5c4fb5);color:#fff;font-size:18px">✦</div>
           <div style="flex:1">
             <div class="res-mod-title">Your AI-Generated Insight Report</div>
             <div class="res-mod-sub">Powered by AI · synthesising all 4 modules together</div>
           </div>
           <button id="ai-report-btn" onclick="generateAIReport()"
             style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:12px;
-            background:linear-gradient(135deg,#4f46e5,#7c3aed);color:#fff;border:none;cursor:pointer;
+            background:linear-gradient(135deg,#5c4fb5,#5c4fb5);color:#fff;border:none;cursor:pointer;
             font-family:'Poppins',sans-serif;font-size:14px;font-weight:600;white-space:nowrap;
-            box-shadow:0 4px 14px rgba(79,70,229,.3);transition:all .2s">
+            box-shadow:0 4px 14px rgba(92,79,181,.3);transition:all .2s">
             ✦ Generate Report
           </button>
           <button id="ai-cancel-btn" onclick="cancelReport()"
@@ -1173,7 +1178,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span class="pdf-spinner"></span>
         Download Full Report as PDF
       </button>
-      <button onclick="goToCounsellor()" style="margin-left:1rem;padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,#6d28d9,#7c3aed);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 14px rgba(109,40,217,.3)">
+      <button onclick="goToCounsellor()" style="margin-left:1rem;padding:14px 24px;border-radius:14px;background:linear-gradient(135deg,#4a3f9e,#5c4fb5);color:#fff;border:none;cursor:pointer;font-family:'Poppins',sans-serif;font-size:14px;font-weight:700;display:inline-flex;align-items:center;gap:8px;box-shadow:0 4px 14px rgba(109,40,217,.3)">
         🤖 Talk to AI Counsellor
       </button>
     </div>
@@ -1184,13 +1189,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- ══════════════════════════════════════════════════════════════
      AI COUNSELLOR — NuMind MAPS  ·  v4  ·  11/10 Edition
-     ─ Dark sidebar · Parchment canvas · Lora + DM Sans + Fira Code
+     ─ Brand-aligned: Poppins + Inter + Fira Code
      ─ Animated AI orb · Waveform typing · Empty-state illustration
      ─ Staggered welcome reveal · Context topbar chip · Mobile chips
      ─ Self-contained markdown · Reactions · Scroll pin · Particles
 ══════════════════════════════════════════════════════════════ -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;0,700;1,400;1,600&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
 
 <div id="page-counsellor" class="page">
 <div class="nc-shell">
@@ -1310,7 +1315,7 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         <div class="nc-lock-caps">
           <div class="nc-cap"><span class="nc-cap-dot" style="background:#2dd4bf"></span>Explains every score in plain language</div>
-          <div class="nc-cap"><span class="nc-cap-dot" style="background:#a78bfa"></span>Recommends careers matched to your profile</div>
+          <div class="nc-cap"><span class="nc-cap-dot" style="background:#9c8fe8"></span>Recommends careers matched to your profile</div>
           <div class="nc-cap"><span class="nc-cap-dot" style="background:#fbbf24"></span>Advises on streams, colleges &amp; exams</div>
           <div class="nc-cap"><span class="nc-cap-dot" style="background:#fb7185"></span>Answers wellbeing &amp; growth questions honestly</div>
         </div>
@@ -1339,15 +1344,15 @@ document.addEventListener('DOMContentLoaded', function() {
         <!-- Empty-state watermark illustration -->
         <div class="nc-empty-mark" aria-hidden="true">
           <svg width="220" height="220" viewBox="0 0 220 220" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <circle cx="110" cy="110" r="90" stroke="#7c3aed" stroke-width="1" stroke-dasharray="4 6" opacity="0.12"/>
-            <circle cx="110" cy="110" r="62" stroke="#7c3aed" stroke-width="1" opacity="0.07"/>
-            <path d="M110 38L121.8 74.2L160 75.6L130.4 97.6L141.2 134L110 112.8L78.8 134L89.6 97.6L60 75.6L98.2 74.2L110 38Z" fill="#7c3aed" opacity="0.08"/>
-            <circle cx="110" cy="110" r="18" fill="#7c3aed" opacity="0.06"/>
+            <circle cx="110" cy="110" r="90" stroke="#5c4fb5" stroke-width="1" stroke-dasharray="4 6" opacity="0.12"/>
+            <circle cx="110" cy="110" r="62" stroke="#5c4fb5" stroke-width="1" opacity="0.07"/>
+            <path d="M110 38L121.8 74.2L160 75.6L130.4 97.6L141.2 134L110 112.8L78.8 134L89.6 97.6L60 75.6L98.2 74.2L110 38Z" fill="#5c4fb5" opacity="0.08"/>
+            <circle cx="110" cy="110" r="18" fill="#5c4fb5" opacity="0.06"/>
             <!-- orbit dots -->
-            <circle cx="110" cy="48" r="4" fill="#a78bfa" opacity="0.18"/>
-            <circle cx="162" cy="110" r="3" fill="#a78bfa" opacity="0.13"/>
-            <circle cx="110" cy="172" r="4" fill="#a78bfa" opacity="0.18"/>
-            <circle cx="58" cy="110" r="3" fill="#a78bfa" opacity="0.13"/>
+            <circle cx="110" cy="48" r="4" fill="#9c8fe8" opacity="0.18"/>
+            <circle cx="162" cy="110" r="3" fill="#9c8fe8" opacity="0.13"/>
+            <circle cx="110" cy="172" r="4" fill="#9c8fe8" opacity="0.18"/>
+            <circle cx="58" cy="110" r="3" fill="#9c8fe8" opacity="0.13"/>
           </svg>
         </div>
 
@@ -1419,37 +1424,40 @@ document.addEventListener('DOMContentLoaded', function() {
 <style>
 /* ══════════════════════════════════════════════════════════
    NuMind AI Counsellor — v4  ·  11/10 Edition
-   Lora · DM Sans · Fira Code
+   Poppins · Inter · Fira Code
 ══════════════════════════════════════════════════════════ */
-:root {
-  --sb:     #faf9fc;
-  --sb2:    rgba(26,20,56,0.035);
-  --sbb:    rgba(26,20,56,0.08);
-  --sbt:    #3c3454;
-  --sbm:    #8b84a3;
+/* Counsellor tokens — scoped to #page-counsellor so they can never override
+   the global brand palette (previously a :root block hijacked --bg/--ink
+   for the whole app, causing the beige off-brand look everywhere). */
+#page-counsellor {
+  --sb:     #f4f8f9;
+  --sb2:    rgba(12,53,64,0.04);
+  --sbb:    rgba(12,53,64,0.09);
+  --sbt:    #29505c;
+  --sbm:    #7d97a0;
 
-  --bg:     #f7f5f0;
+  --bg:     #eef4f5;
   --surf:   #ffffff;
-  --bdr:    #e5e0d8;
-  --bdr2:   #ccc8bf;
-  --ink:    #19160f;
-  --ink2:   #3c3830;
-  --ink3:   #78716c;
-  --ink4:   #a9a39b;
+  --bdr:    rgba(12,53,64,0.1);
+  --bdr2:   rgba(12,53,64,0.18);
+  --ink:    #0c3540;
+  --ink2:   #29505c;
+  --ink3:   #5d7a83;
+  --ink4:   #93aab1;
 
-  --v:      #5b21b6;
-  --v2:     #7c3aed;
-  --vbg:    #f4f1ff;
-  --vbd:    #ddd6fe;
+  --v:      #5c4fb5;
+  --v2:     #7c6fcd;
+  --vbg:    #f7f5ff;
+  --vbd:    #ded8f6;
   --green:  #059669;
-  --gbg:    #ecfdf5;
-  --gbd:    #a7f3d0;
+  --gbg:    #e8f7f0;
+  --gbd:    #b2e6d2;
 
-  --user-bubble: #6d5bd0;
+  --user-bubble: #5c4fb5;
   --ai-bubble:   #ffffff;
 
-  --fd: 'Lora', Georgia, serif;
-  --fb: 'DM Sans', system-ui, sans-serif;
+  --fd: 'Poppins', sans-serif;
+  --fb: 'Inter', system-ui, sans-serif;
   --fm: 'Fira Code', monospace;
 
   --ease-spring: cubic-bezier(.34,1.48,.64,1);
@@ -1606,7 +1614,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-ctx-chip {
   display:flex; align-items:center; gap:5px;
   padding:4px 10px; border-radius:20px;
-  background:linear-gradient(135deg,rgba(91,33,182,0.08),rgba(139,92,246,0.06));
+  background:linear-gradient(135deg,rgba(92,79,181,0.08),rgba(139,92,246,0.06));
   border:1px solid var(--vbd); color:var(--v);
   font-size:11px; font-weight:600; white-space:nowrap;
   max-width:160px; overflow:hidden; text-overflow:ellipsis;
@@ -1709,7 +1717,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-lock-input {
   width:100%; padding:12px 13px 12px 37px; box-sizing:border-box;
   border:1.5px solid var(--bdr2); border-radius:10px;
-  background:#faf9fc; color:var(--ink);
+  background:var(--sb, #f4f8f9); color:var(--ink);
   font-family:var(--fb); font-size:14px; outline:none;
   transition:border-color .18s, box-shadow .18s;
 }
@@ -1722,9 +1730,9 @@ document.addEventListener('DOMContentLoaded', function() {
   font-family:var(--fb); font-size:14px; font-weight:600;
   cursor:pointer; display:flex; align-items:center; justify-content:center; gap:7px;
   transition:opacity .17s, transform .12s, box-shadow .17s;
-  box-shadow:0 8px 22px rgba(91,33,182,0.28);
+  box-shadow:0 8px 22px rgba(92,79,181,0.28);
 }
-.nc-lock-btn:hover { opacity:.9; transform:translateY(-1px); box-shadow:0 12px 28px rgba(91,33,182,0.32); }
+.nc-lock-btn:hover { opacity:.9; transform:translateY(-1px); box-shadow:0 12px 28px rgba(92,79,181,0.32); }
 .nc-lock-btn:active { transform:none; }
 .nc-lock-btn:disabled { opacity:.38; cursor:not-allowed; transform:none; }
 .nc-lock-footer { text-align:center; font-size:11.5px; color:var(--ink4); margin:11px 0 0; line-height:1.6; }
@@ -1742,8 +1750,8 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-welcome-bg {
   position:absolute; inset:0; pointer-events:none;
   background:
-    radial-gradient(ellipse 55% 45% at 12% 18%, rgba(91,33,182,0.055) 0%, transparent 60%),
-    radial-gradient(ellipse 40% 55% at 88% 82%, rgba(124,58,237,0.04) 0%, transparent 60%);
+    radial-gradient(ellipse 55% 45% at 12% 18%, rgba(92,79,181,0.055) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 55% at 88% 82%, rgba(92,79,181,0.04) 0%, transparent 60%);
 }
 /* Empty-state watermark */
 .nc-empty-mark {
@@ -1765,22 +1773,22 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-welcome-av { margin-bottom:1.1rem; }
 .nc-ai-orb-sm {
   width:48px; height:48px; border-radius:14px;
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  background:linear-gradient(135deg,#5c4fb5,#7c6fcd);
   display:flex; align-items:center; justify-content:center;
-  box-shadow:0 8px 24px rgba(91,33,182,0.22);
+  box-shadow:0 8px 24px rgba(92,79,181,0.22);
   /* breathing pulse */
   animation:nc-orb-breathe 3.5s ease-in-out infinite;
 }
 @keyframes nc-orb-breathe {
-  0%,100%{box-shadow:0 8px 24px rgba(91,33,182,0.22)}
-  50%{box-shadow:0 10px 32px rgba(91,33,182,0.38), 0 0 0 6px rgba(91,33,182,0.07)}
+  0%,100%{box-shadow:0 8px 24px rgba(92,79,181,0.22)}
+  50%{box-shadow:0 10px 32px rgba(92,79,181,0.38), 0 0 0 6px rgba(92,79,181,0.07)}
 }
 .nc-welcome-hi {
   font-family:var(--fd); font-size:27px; font-weight:700;
   color:var(--ink); letter-spacing:-0.4px; margin-bottom:.45rem; line-height:1.2;
 }
 .nc-hi-name {
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6);
+  background:linear-gradient(135deg,#5c4fb5,#7c6fcd);
   -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;
 }
 .nc-welcome-desc { font-size:14.5px; color:var(--ink3); line-height:1.7; margin-bottom:1.3rem; }
@@ -1798,7 +1806,7 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 .nc-starter:hover {
   border-color:var(--vbd); background:var(--vbg);
-  transform:translateY(-2px); box-shadow:0 6px 18px rgba(91,33,182,0.09);
+  transform:translateY(-2px); box-shadow:0 6px 18px rgba(92,79,181,0.09);
 }
 .nc-starter:active { transform:none; }
 .nc-starter-head { display:flex; align-items:center; gap:8px; margin-bottom:5px; }
@@ -1843,15 +1851,15 @@ document.addEventListener('DOMContentLoaded', function() {
   font-size:12px; font-weight:700; margin-top:2px;
 }
 .ac-msg-assistant .acp-msg-av {
-  background:linear-gradient(135deg,#5b21b6,#8b5cf6); color:#fff;
-  box-shadow:0 2px 8px rgba(91,33,182,0.22);
+  background:linear-gradient(135deg,#5c4fb5,#7c6fcd); color:#fff;
+  box-shadow:0 2px 8px rgba(92,79,181,0.22);
   font-size:13px;
   /* breathing animation on the avatar orb */
   animation:nc-av-breathe 4s ease-in-out infinite;
 }
 @keyframes nc-av-breathe {
-  0%,100%{box-shadow:0 2px 8px rgba(91,33,182,0.22)}
-  50%{box-shadow:0 3px 14px rgba(91,33,182,0.38),0 0 0 3px rgba(91,33,182,0.08)}
+  0%,100%{box-shadow:0 2px 8px rgba(92,79,181,0.22)}
+  50%{box-shadow:0 3px 14px rgba(92,79,181,0.38),0 0 0 3px rgba(92,79,181,0.08)}
 }
 .ac-msg-user .acp-msg-av { background:var(--bdr); color:var(--ink3); }
 
@@ -1882,15 +1890,15 @@ document.addEventListener('DOMContentLoaded', function() {
 .ac-msg-assistant .ac-bubble li::marker{color:var(--v2)}
 .ac-msg-assistant .ac-bubble strong{font-weight:700;color:var(--ink)}
 .ac-msg-assistant .ac-bubble em{font-style:italic;color:var(--ink2)}
-.ac-msg-assistant .ac-bubble code{font-family:var(--fm);font-size:12.5px;background:#f2ede4;border:1px solid var(--bdr);border-radius:4px;padding:1px 5px;color:#5b21b6}
-.ac-msg-assistant .ac-bubble pre{background:#19160f;border-radius:8px;padding:12px 14px;overflow-x:auto;margin:.5em 0}
+.ac-msg-assistant .ac-bubble code{font-family:var(--fm);font-size:12.5px;background:var(--lavenderx, #f7f5ff);border:1px solid var(--bdr);border-radius:4px;padding:1px 5px;color:#5c4fb5}
+.ac-msg-assistant .ac-bubble pre{background:#0c3540;border-radius:8px;padding:12px 14px;overflow-x:auto;margin:.5em 0}
 .ac-msg-assistant .ac-bubble pre code{background:none;border:none;padding:0;color:#e5e5e5;font-size:12.5px}
 .ac-msg-assistant .ac-bubble blockquote{border-left:3px solid var(--vbd);margin:.5em 0;padding:4px 12px;background:var(--vbg);color:var(--ink3);font-style:italic;border-radius:0 7px 7px 0}
 .ac-msg-assistant .ac-bubble a{color:var(--v2);text-decoration:underline;text-underline-offset:2px}
 .ac-msg-assistant .ac-bubble hr{border:none;border-top:1px solid var(--bdr);margin:.75em 0}
 .ac-msg-assistant .ac-bubble table{border-collapse:collapse;font-size:13px;width:100%;margin:.5em 0}
 .ac-msg-assistant .ac-bubble th,.ac-msg-assistant .ac-bubble td{border:1px solid var(--bdr);padding:6px 10px;text-align:left}
-.ac-msg-assistant .ac-bubble th{background:#f2ede4;font-weight:600}
+.ac-msg-assistant .ac-bubble th{background:var(--lavenderx, #f7f5ff);font-weight:600}
 
 /* Reactions */
 .nc-rx { display:flex; align-items:center; gap:3px; margin-top:5px; opacity:0; transition:opacity .15s; }
@@ -1970,8 +1978,8 @@ document.addEventListener('DOMContentLoaded', function() {
   box-shadow:0 1px 4px rgba(0,0,0,0.04);
 }
 .nc-input-box:focus-within {
-  border-color:#8b5cf6;
-  box-shadow:0 0 0 3px rgba(91,33,182,0.09), 0 2px 8px rgba(0,0,0,0.05);
+  border-color:#7c6fcd;
+  box-shadow:0 0 0 3px rgba(92,79,181,0.09), 0 2px 8px rgba(0,0,0,0.05);
 }
 #acp-input {
   width:100%; background:transparent; border:none; outline:none;
@@ -1989,13 +1997,13 @@ document.addEventListener('DOMContentLoaded', function() {
 .nc-hint { flex:1; text-align:right; font-size:10.5px; color:var(--ink4); white-space:nowrap; overflow:hidden; }
 .nc-send {
   width:32px; height:32px; border-radius:9px;
-  background:linear-gradient(135deg,#5b21b6,#7c3aed);
+  background:linear-gradient(135deg,#5c4fb5,#5c4fb5);
   border:none; cursor:pointer; color:#fff;
   display:flex; align-items:center; justify-content:center; flex-shrink:0;
   transition:opacity .13s, transform .1s, box-shadow .13s;
-  box-shadow:0 3px 10px rgba(91,33,182,0.28);
+  box-shadow:0 3px 10px rgba(92,79,181,0.28);
 }
-.nc-send:hover { opacity:.88; transform:scale(1.06); box-shadow:0 5px 14px rgba(91,33,182,0.36); }
+.nc-send:hover { opacity:.88; transform:scale(1.06); box-shadow:0 5px 14px rgba(92,79,181,0.36); }
 .nc-send:active { transform:scale(.94); }
 .nc-send:disabled { opacity:.3; cursor:not-allowed; transform:none; }
 .nc-disclaimer { text-align:center; font-size:10.5px; color:var(--ink4); margin:7px 0 0; line-height:1.5; }
@@ -2052,7 +2060,7 @@ document.addEventListener('DOMContentLoaded', function() {
 .arp-panel-head {
   display:flex; align-items:center; justify-content:space-between;
   padding:18px 20px; border-bottom:1px solid var(--sbb);
-  font-family:var(--fh,'Lora',serif); font-size:15px; font-weight:700; color:var(--sbt);
+  font-family:var(--fd,'Poppins',sans-serif); font-size:15px; font-weight:700; color:var(--sbt);
   flex-shrink:0;
 }
 .arp-close-btn {
@@ -2620,9 +2628,9 @@ _acWhenReady(function(){
           if(document.getElementById('ac-resume-chip')) return;
           var cp=document.getElementById('page-counsellor'); if(cp&&cp.classList.contains('active')) return;
           var chip=document.createElement('div'); chip.id='ac-resume-chip';
-          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:linear-gradient(135deg,#5b21b6,#6d5bd0);color:rgba(255,255,255,0.95);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:11px 14px 11px 15px;font-family:DM Sans,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(91,33,182,0.35);cursor:pointer';
+          chip.style.cssText='position:fixed;bottom:24px;right:24px;z-index:9000;background:linear-gradient(135deg,#5c4fb5,#7c6fcd);color:rgba(255,255,255,0.95);border:1px solid rgba(255,255,255,0.15);border-radius:12px;padding:11px 14px 11px 15px;font-family:Inter,system-ui,sans-serif;font-size:13px;font-weight:600;display:flex;align-items:center;gap:10px;box-shadow:0 10px 32px rgba(92,79,181,0.35);cursor:pointer';
           var inner=document.createElement('div'); inner.style.cssText='display:flex;align-items:center;gap:8px;flex:1';
-          inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#a78bfa"/></svg> Resume AI Counsellor';
+          inner.innerHTML='<svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M12 2L15.09 8.26L22 9.27L17 14.14L18.18 21.02L12 17.77L5.82 21.02L7 14.14L2 9.27L8.91 8.26L12 2Z" fill="#9c8fe8"/></svg> Resume AI Counsellor';
           inner.addEventListener('click',function(){chip.remove();if(typeof window.goPage==='function')window.goPage('counsellor');});
           var close=document.createElement('button'); close.innerHTML='&times;';
           close.style.cssText='background:rgba(255,255,255,.07);border:none;color:rgba(255,255,255,.45);width:22px;height:22px;border-radius:50%;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;padding:0;transition:background .12s';

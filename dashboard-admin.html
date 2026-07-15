@@ -9,21 +9,21 @@
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --brand:#7c3aed;--brand2:#8b5cf6;--brand3:#6d28d9;
-  --ok:#10b981;--warn:#f59e0b;--danger:#ef4444;--info:#3b82f6;
-  --bg:#faf9fc;--bg2:#f4f1f9;--surface:#ffffff;--surface2:#f7f5fb;--surface3:#efeaf7;
-  --border:#e6e0f0;--border2:#d9d0e8;
-  --ink:#1e1b2e;--ink2:#3d3856;--ink3:#6b6485;--ink4:#8b84a3;--ink5:#a49dbb;
-  --radius:12px;--radius-lg:18px;
-  --shadow:0 2px 8px rgba(124,58,237,.08);--shadow-lg:0 16px 48px rgba(124,58,237,.14);
+  --brand:#157d8c;--brand2:#2ba0b2;--brand3:#0b4650;--lav:#5c4fb5;
+  --ok:#059669;--warn:#d97706;--danger:#dc2626;--info:#2ba0b2;
+  --bg:#eef3f4;--bg2:#e3ebec;--surface:#ffffff;--surface2:#f4f8f9;--surface3:#e9f1f2;
+  --border:rgba(12,53,64,.1);--border2:rgba(12,53,64,.18);
+  --ink:#0c3540;--ink2:#29505c;--ink3:#476975;--ink4:#5d7a83;--ink5:#93aab1;
+  --radius:12px;--radius-lg:16px;
+  --shadow:0 1px 3px rgba(11,70,80,.06),0 5px 18px rgba(11,70,80,.06);--shadow-lg:0 12px 40px rgba(11,70,80,.14);
   --font:'Inter',sans-serif;--mono:'JetBrains Mono',monospace;
   --sw:248px
 }
 body{font-family:var(--font);background:var(--bg);color:var(--ink2);min-height:100vh;-webkit-font-smoothing:antialiased}
 
 /* ── LOGIN ── */
-#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);background-image:radial-gradient(ellipse at 20% 40%,rgba(124,58,237,.18) 0%,transparent 55%),radial-gradient(ellipse at 80% 70%,rgba(59,130,246,.1) 0%,transparent 50%)}
-.lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:48px 44px;width:100%;max-width:420px;box-shadow:0 0 0 1px rgba(124,58,237,.15),var(--shadow-lg)}
+#login-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:var(--bg);background-image:radial-gradient(ellipse at 20% 40%,rgba(21,125,140,.16) 0%,transparent 55%),radial-gradient(ellipse at 80% 70%,rgba(92,79,181,.12) 0%,transparent 50%)}
+.lcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:48px 44px;width:100%;max-width:420px;box-shadow:0 0 0 1px rgba(21,125,140,.16),var(--shadow-lg)}
 .lcard-eye{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:var(--brand3);margin-bottom:8px}
 .lcard-title{font-size:26px;font-weight:900;color:var(--ink);margin-bottom:4px}
 .lcard-sub{font-size:13px;color:var(--ink4);margin-bottom:32px}
@@ -380,6 +380,31 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
 .mt-val{font-size:12px;font-weight:700;color:var(--ink);width:48px;text-align:right;flex-shrink:0}
 .mt-cnt{font-size:11px;color:var(--ink5);width:60px;text-align:right;flex-shrink:0}
 
+
+/* ═══ Brand polish layer — unified geometry, type & structure ═══ */
+.ni{display:flex;align-items:center;justify-content:center;width:17px}
+.ni svg{width:15px;height:15px;display:block}
+.kpi-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;color:var(--brand);background:rgba(21,125,140,.10);border:1px solid rgba(21,125,140,.18)}
+.kpi-icon svg{width:18px;height:18px;display:block}
+.kpi.c2 .kpi-icon{color:var(--ok);background:rgba(5,150,105,.10);border-color:rgba(5,150,105,.18)}
+.kpi.c3 .kpi-icon{color:var(--warn);background:rgba(217,119,6,.10);border-color:rgba(217,119,6,.18)}
+.kpi.c4 .kpi-icon{color:var(--info);background:rgba(43,160,178,.10);border-color:rgba(43,160,178,.18)}
+.kpi.c5 .kpi-icon{color:var(--danger);background:rgba(220,38,38,.10);border-color:rgba(220,38,38,.18)}
+.kpi{border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:var(--shadow)}
+.kpi-val{font-variant-numeric:tabular-nums;letter-spacing:-0.02em}
+.card{border-radius:var(--radius-lg);box-shadow:var(--shadow)}
+.tbl th{font-size:10.5px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--ink4)}
+.tbl td{font-size:13px}
+.btn{font-weight:600;letter-spacing:.005em;border-radius:10px}
+.btn-xs{padding:4px 10px;font-size:11.5px;border-radius:8px;min-height:26px}
+.btn-sm{border-radius:9px}
+.btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+.nav-item{border-radius:8px;margin:1px 8px}
+.ph h1{letter-spacing:-0.02em}
+.card-title{letter-spacing:-0.01em}
+input.ti,select.ti{border-radius:9px}
+input.ti:focus,select.ti:focus{border-color:var(--brand);box-shadow:0 0 0 3px rgba(21,125,140,.12);outline:none}
+::selection{background:rgba(21,125,140,.18)}
 </style>
 </head>
 <body>
@@ -390,12 +415,32 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
     <div class="lcard-eye">⚡ NuMind MAPS</div>
     <div class="lcard-title">Admin Console</div>
     <div class="lcard-sub">Super admin access — full system control.</div>
-    <div class="lerr" id="lerr"></div>
-    <label class="fl">Email</label>
-    <input class="fi" type="email" id="l-email" placeholder="admin@numind.co.in" autocomplete="email">
-    <label class="fl">Password</label>
-    <input class="fi" type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
-    <button class="btn-login" id="l-btn" onclick="doLogin()">Access Console</button>
+    <div id="lp-main">
+      <div class="lerr" id="lerr"></div>
+      <label class="fl">Email</label>
+      <input class="fi" type="email" id="l-email" placeholder="admin@numind.co.in" autocomplete="email">
+      <label class="fl">Password</label>
+      <input class="fi" type="password" id="l-pass" placeholder="••••••••" autocomplete="current-password">
+      <button class="btn-login" id="l-btn" onclick="doLogin()">Access Console</button>
+      <div style="margin-top:14px;text-align:center"><span style="font-size:12px;color:var(--brand2);cursor:pointer;font-weight:600" onclick="fpOpen()">Forgot password?</span></div>
+    </div>
+    <div id="fp-panel" style="display:none">
+      <div class="lerr" id="fp-err"></div>
+      <div id="fp-step1">
+        <label class="fl">Account Email</label>
+        <input class="fi" type="email" id="fp-email" placeholder="admin@numind.co.in" autocomplete="email">
+        <button class="btn-login" id="fp-send" onclick="fpRequest()">Send reset token</button>
+      </div>
+      <div id="fp-step2" style="display:none">
+        <div style="font-size:12px;color:var(--ink4);margin-bottom:12px;line-height:1.5" id="fp-note"></div>
+        <label class="fl">Reset Token</label>
+        <input class="fi" type="text" id="fp-token" placeholder="Paste the token from your email" autocomplete="off">
+        <label class="fl">New Password</label>
+        <input class="fi" type="password" id="fp-pass" placeholder="Minimum 8 characters" autocomplete="new-password">
+        <button class="btn-login" id="fp-reset" onclick="fpReset()">Reset password</button>
+      </div>
+      <div style="margin-top:14px;text-align:center"><span style="font-size:12px;color:var(--ink5);cursor:pointer" onclick="fpBack()">← Back to sign in</span></div>
+    </div>
   </div>
 </div>
 
@@ -403,25 +448,25 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
 <div id="app-shell">
   <aside class="sidebar">
     <div class="sb-logo">
-      <div class="sb-logo-icon">🧠</div>
+      <div class="sb-logo-icon"><svg viewBox="0 0 24 24" fill="none"><rect x="2" y="2" width="20" height="20" rx="5" fill="#fff" fill-opacity=".14"/><text x="7" y="17" font-family="Arial Black,sans-serif" font-size="13" font-weight="900" fill="#fff">N</text><circle cx="17.5" cy="6.5" r="2" fill="#64e4f0"/></svg></div>
       <div><div class="sb-logo-name">NuMind MAPS</div><div class="sb-logo-tag">Admin Console</div></div>
     </div>
     <div class="sb-sec">Overview</div>
-    <div class="nav-item active" onclick="show('overview')" id="nav-overview"><span class="ni">📊</span> Dashboard</div>
+    <div class="nav-item active" onclick="show('overview')" id="nav-overview"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span> Dashboard</div>
     <div class="sb-sec">Students</div>
-    <div class="nav-item" onclick="show('students')" id="nav-students"><span class="ni">👥</span> All Students</div>
-    <div class="nav-item" onclick="show('atrisk')" id="nav-atrisk"><span class="ni">⚠️</span> At-Risk <span class="nb" id="risk-nb">0</span></div>
+    <div class="nav-item" onclick="show('students')" id="nav-students"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span> All Students</div>
+    <div class="nav-item" onclick="show('atrisk')" id="nav-atrisk"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg></span> At-Risk <span class="nb" id="risk-nb">0</span></div>
     <div class="sb-sec">Schools</div>
-    <div class="nav-item" onclick="show('schools')" id="nav-schools"><span class="ni">🏫</span> All Schools</div>
-    <div class="nav-item" onclick="show('schools-reg')" id="nav-schools-reg"><span class="ni">🗂️</span> School Registry</div>
+    <div class="nav-item" onclick="show('schools')" id="nav-schools"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-4h6v4"/><line x1="9" y1="10" x2="9" y2="10.01"/><line x1="15" y1="10" x2="15" y2="10.01"/><line x1="9" y1="14" x2="9" y2="14.01"/><line x1="15" y1="14" x2="15" y2="14.01"/></svg></span> All Schools</div>
+    <div class="nav-item" onclick="show('schools-reg')" id="nav-schools-reg"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span> School Registry</div>
     <div class="sb-sec">System</div>
-    <div class="nav-item" onclick="show('users')" id="nav-users"><span class="ni">👤</span> User Management</div>
-    <div class="nav-item" onclick="show('reminders')" id="nav-reminders"><span class="ni">📧</span> Reminder Log</div>
-    <div class="nav-item" onclick="show('queries')" id="nav-queries"><span class="ni">💬</span> Student Queries <span class="nb" id="queries-nb" style="display:none">0</span></div>
-    <div class="nav-item" onclick="show('audit')" id="nav-audit"><span class="ni">📋</span> Audit Log</div>
-    <div class="nav-item" onclick="show('testemail')" id="nav-testemail"><span class="ni">🔧</span> Test Email</div>
-    <div class="nav-item" onclick="show('scheduled')" id="nav-scheduled"><span class="ni">⏰</span> Scheduled Reminders</div>
-    <div class="nav-item" onclick="show('analytics')" id="nav-analytics"><span class="ni">📈</span> Analytics</div>
+    <div class="nav-item" onclick="show('users')" id="nav-users"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span> User Management</div>
+    <div class="nav-item" onclick="show('reminders')" id="nav-reminders"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg></span> Reminder Log</div>
+    <div class="nav-item" onclick="show('queries')" id="nav-queries"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span> Student Queries <span class="nb" id="queries-nb" style="display:none">0</span></div>
+    <div class="nav-item" onclick="show('audit')" id="nav-audit"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><line x1="9" y1="12" x2="15" y2="12"/><line x1="9" y1="16" x2="13" y2="16"/></svg></span> Audit Log</div>
+    <div class="nav-item" onclick="show('testemail')" id="nav-testemail"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span> Test Email</div>
+    <div class="nav-item" onclick="show('scheduled')" id="nav-scheduled"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></span> Scheduled Reminders</div>
+    <div class="nav-item" onclick="show('analytics')" id="nav-analytics"><span class="ni"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span> Analytics</div>
     <div class="sb-footer">
       <div class="sb-user">
         <div class="sb-avatar" id="sb-avatar">A</div>
@@ -484,11 +529,11 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
         </div>
 
         <div class="krow krow-5">
-          <div class="kpi c1"><div class="kpi-icon">🏫</div><div class="kpi-val" id="ov-schools">—</div><div class="kpi-label">Schools</div></div>
-          <div class="kpi c2"><div class="kpi-icon">✅</div><div class="kpi-val" id="ov-done">—</div><div class="kpi-label">Completed</div><div class="kpi-sub" id="ov-done-pct"></div></div>
-          <div class="kpi c3"><div class="kpi-icon">⏳</div><div class="kpi-val" id="ov-prog">—</div><div class="kpi-label">In Progress</div></div>
-          <div class="kpi c4"><div class="kpi-icon">○</div><div class="kpi-val" id="ov-none">—</div><div class="kpi-label">Not Started</div></div>
-          <div class="kpi c5"><div class="kpi-icon">👥</div><div class="kpi-val" id="ov-total">—</div><div class="kpi-label">Total Registered</div></div>
+          <div class="kpi c1"><div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M9 21v-4h6v4"/><line x1="9" y1="10" x2="9" y2="10.01"/><line x1="15" y1="10" x2="15" y2="10.01"/><line x1="9" y1="14" x2="9" y2="14.01"/><line x1="15" y1="14" x2="15" y2="14.01"/></svg></div><div class="kpi-val" id="ov-schools">—</div><div class="kpi-label">Schools</div></div>
+          <div class="kpi c2"><div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div><div class="kpi-val" id="ov-done">—</div><div class="kpi-label">Completed</div><div class="kpi-sub" id="ov-done-pct"></div></div>
+          <div class="kpi c3"><div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div class="kpi-val" id="ov-prog">—</div><div class="kpi-label">In Progress</div></div>
+          <div class="kpi c4"><div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/></svg></div><div class="kpi-val" id="ov-none">—</div><div class="kpi-label">Not Started</div></div>
+          <div class="kpi c5"><div class="kpi-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div class="kpi-val" id="ov-total">—</div><div class="kpi-label">Total Registered</div></div>
         </div>
 
         <!-- Funnel + Progress -->
@@ -666,8 +711,22 @@ input[type=checkbox]{width:13px;height:13px;cursor:pointer;accent-color:var(--br
 
       <!-- ══ SCHOOLS ══ -->
       <div class="section" id="section-schools">
-        <div class="ph"><div><h1>All Schools</h1><p>Completion breakdown per school.</p></div></div>
-        <div class="card"><div id="schools-wrap"><div class="empty"><div class="spinner spd"></div></div></div></div>
+        <div class="ph">
+          <div><h1>All Schools</h1><p>Completion breakdown per school.</p></div>
+          <div class="ph-r"><button class="btn btn-outline btn-sm" onclick="exportSchoolsCSV()">⬇ Export CSV</button></div>
+        </div>
+        <div class="card">
+          <div class="toolbar">
+            <input class="ti" type="search" id="school-q" placeholder="🔍 Search schools…" style="width:220px" oninput="filterSchools()">
+            <select class="ti" id="school-sort" onchange="filterSchools()">
+              <option value="pct-asc">Completion % ↑ (worst first)</option>
+              <option value="pct-desc">Completion % ↓ (best first)</option>
+              <option value="name">Name A–Z</option>
+              <option value="total">Total students ↓</option>
+            </select>
+          </div>
+          <div id="schools-wrap"><div class="empty"><div class="spinner spd"></div></div></div>
+        </div>
       </div>
 
       <!-- ══ SCHOOL REGISTRY ══ -->
@@ -1083,6 +1142,45 @@ async function doLogin(){
 document.getElementById('l-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 function doLogout(){_api('POST','/api/dashboard/logout',{}).catch(()=>{});localStorage.removeItem('admin_token');location.reload();}
 
+// ── FORGOT PASSWORD ──
+// Two-step flow against /api/dashboard/forgot-password + /reset-password.
+// When SMTP is unconfigured the server returns the token directly (admin
+// relay path) — it's pre-filled so the flow still completes end to end.
+function fpOpen(){document.getElementById('lp-main').style.display='none';document.getElementById('fp-panel').style.display='block';document.getElementById('fp-err').style.display='none';document.getElementById('fp-step2').style.display='none';document.getElementById('fp-step1').style.display='block';}
+function fpBack(){document.getElementById('fp-panel').style.display='none';document.getElementById('lp-main').style.display='block';}
+async function fpRequest(){
+  const email=document.getElementById('fp-email').value.trim();
+  const err=document.getElementById('fp-err'),btn=document.getElementById('fp-send');
+  err.style.display='none';
+  if(!email){err.textContent='Enter your account email.';err.style.display='block';return;}
+  btn.disabled=true;btn.textContent='Sending…';
+  try{
+    const res=await _api('POST','/api/dashboard/forgot-password',{email},false);
+    document.getElementById('fp-step1').style.display='none';
+    document.getElementById('fp-step2').style.display='block';
+    const note=document.getElementById('fp-note');
+    if(res.token){document.getElementById('fp-token').value=res.token;note.textContent='Email is not configured on this server — your reset token has been pre-filled below. Set a new password to continue.';}
+    else{note.textContent='If an account exists for that email, a reset token has been emailed to it (valid for 1 hour). Paste it below.';}
+  }catch(e){err.textContent=e.message||'Request failed. Please try again.';err.style.display='block';}
+  btn.disabled=false;btn.textContent='Send reset token';
+}
+async function fpReset(){
+  const token=document.getElementById('fp-token').value.trim();
+  const pass=document.getElementById('fp-pass').value;
+  const err=document.getElementById('fp-err'),btn=document.getElementById('fp-reset');
+  err.style.display='none';
+  if(!token){err.textContent='Paste the reset token first.';err.style.display='block';return;}
+  if(pass.length<8){err.textContent='New password must be at least 8 characters.';err.style.display='block';return;}
+  btn.disabled=true;btn.textContent='Resetting…';
+  try{
+    await _api('POST','/api/dashboard/reset-password',{token,password:pass},false);
+    toast('Password updated. Sign in with your new password.','success');
+    document.getElementById('fp-token').value='';document.getElementById('fp-pass').value='';
+    fpBack();
+  }catch(e){err.textContent=e.message||'Reset failed. The token may be invalid or expired.';err.style.display='block';}
+  btn.disabled=false;btn.textContent='Reset password';
+}
+
 // ── INIT ──
 async function initApp(){
   document.getElementById('login-screen').style.display='none';
@@ -1135,12 +1233,12 @@ function refreshCurrent(){if(_curSection==='overview')loadOverview();else show(_
 // ── OVERVIEW ──
 async function loadOverview(){
   try{
-    const[{stats},{schools},trendData,{students}]=await Promise.all([
+    const[statsResp,{schools},trendData]=await Promise.all([
       _api('GET','/api/dashboard/stats'),
       _api('GET','/api/dashboard/schools'),
       _api('GET','/api/dashboard/trend?days=14').catch(()=>({trend:[]})),
-      _api('GET','/api/dashboard/students?limit=2000').catch(()=>({students:[]})),
     ]);
+    const stats=statsResp.stats,genderAgg=statsResp.gender||[];
     _schools=schools;{const stuNames=schools.map(s=>s.school);_allSchoolNames=[...new Set([..._allSchoolNames,...stuNames])].sort();}
     const total=stats.total||0,done=stats.completed||0,prog=stats.in_progress||0,none=stats.not_started||0;
     const pD=total?Math.round(done/total*100):0,pP=total?Math.round(prog/total*100):0;
@@ -1159,36 +1257,42 @@ async function loadOverview(){
     else lb.innerHTML=sorted.slice(0,8).map((s,i)=>{
       const p=s.total?Math.round(s.completed/s.total*100):0;
       const col=p>=70?'var(--ok)':p>=40?'var(--warn)':'var(--danger)';
-      const medal=i===0?'🥇':i===1?'🥈':i===2?'🥉':'<span style="font-size:12px;color:var(--ink4);font-weight:700">'+(i+1)+'</span>';
+      const medal='<span style="font-size:12px;font-weight:800;color:'+(i<3?'var(--brand2)':'var(--ink4)')+'">#'+(i+1)+'</span>';
       return '<div class="lb-row"><div class="lb-rank">'+medal+'</div><div class="lb-info"><div class="lb-name">'+_esc(s.school)+'</div><div class="lb-bar"><div class="lb-bar-fill" style="width:'+p+'%;background:'+col+'"></div></div></div><div class="lb-stats"><div class="lb-pct" style="color:'+col+'">'+p+'%</div><div class="lb-count">'+s.completed+'/'+s.total+'</div></div><button class="btn btn-outline btn-xs" onclick="show(\'students\');setTimeout(()=>{document.getElementById(\'stu-school\').value=\''+_esc(s.school)+'\';loadStudents();},120)">View →</button></div>';
     }).join('');
-    renderTrendChart(trendData.trend||[]);renderSchoolChart(schools);loadAtRiskPreview();
-    renderGenderBreakdown(students);renderGoals(schools);
-    // System health tiles
-    const remTotal=await _api('GET','/api/dashboard/reminder-log').catch(()=>({log:[]}));
-    if(!_users||!_users.length){try{const{users}=await _api('GET','/api/dashboard/users');_users=users||[];}catch(_){}}
-    document.getElementById('sh-emails').textContent=(remTotal.log||[]).length;
-    document.getElementById('sh-users').textContent=(_users||[]).filter(u=>u.active!==false).length;
+    // Each panel renders independently — a chart failure must not blank the rest
+    const safe=fn=>{try{fn();}catch(e){console.warn('[overview panel]',e);}};
+    safe(()=>renderTrendChart(trendData.trend||[]));
+    safe(()=>renderSchoolChart(schools));
+    safe(()=>loadAtRiskPreview());
+    safe(()=>renderGenderBreakdown(genderAgg));
+    safe(()=>renderGoals(schools));
+    // System health tiles — trend/schools tiles immediately, slow fetches in parallel
     const todayStr=new Date().toISOString().slice(0,10);
-    document.getElementById('sh-today').textContent=(trendData.trend||[]).find(r=>r.day&&r.day.slice(0,10)===todayStr)?.completed||0;
-    document.getElementById('sh-schools').textContent=schools.filter(s=>s.total&&s.completed/s.total>=.7).length;
+    safe(()=>{document.getElementById('sh-today').textContent=(trendData.trend||[]).find(r=>r.day&&r.day.slice(0,10)===todayStr)?.completed||0;});
+    safe(()=>{document.getElementById('sh-schools').textContent=schools.filter(s=>s.total&&s.completed/s.total>=.7).length;});
     document.getElementById('last-refresh').textContent='Updated '+new Date().toLocaleTimeString('en-IN');
+    _api('GET','/api/dashboard/reminder-log').then(r=>{document.getElementById('sh-emails').textContent=(r.log||[]).length;}).catch(()=>{document.getElementById('sh-emails').textContent='0';});
+    (async()=>{try{if(!_users||!_users.length){const{users}=await _api('GET','/api/dashboard/users');_users=users||[];}
+      document.getElementById('sh-users').textContent=(_users||[]).filter(u=>u.active!==false).length;}catch(_){document.getElementById('sh-users').textContent='—';}})();
   }catch(e){toast('Failed to load: '+e.message,'error');}
 }
 
-function renderGenderBreakdown(students){
+function renderGenderBreakdown(genderAgg){
+  // genderAgg: exact server-side aggregate [{gender,total,completed}] — never capped
   const wrap=document.getElementById('gender-wrap');if(!wrap)return;
-  const counts={Male:0,Female:0,Other:0};let total=0;
-  students.forEach(s=>{const g=s.gender||'Other';counts[g]=((counts[g]||0)+1);total++;});
+  const agg={Male:{n:0,c:0},Female:{n:0,c:0},Other:{n:0,c:0}};let total=0;
+  (genderAgg||[]).forEach(r=>{
+    const g=agg[r.gender]?r.gender:'Other';
+    agg[g].n+=r.total||0;agg[g].c+=r.completed||0;total+=r.total||0;
+  });
   if(!total){wrap.innerHTML='<div class="empty" style="padding:24px"><div class="et">No gender data</div></div>';return;}
-  const entries=[['Male',counts.Male,'gender-fill-m'],['Female',counts.Female,'gender-fill-f'],['Other',(counts.Other||0)+(total-counts.Male-counts.Female),'gender-fill-o']];
-  const completedByGender={Male:0,Female:0,Other:0};
-  students.forEach(s=>{if(s.status==='completed'){const g=s.gender||'Other';completedByGender[g]=(completedByGender[g]||0)+1;}});
-  wrap.innerHTML=entries.map(([g,n,cls])=>{
-    const pct=total?Math.round(n/total*100):0;
-    const cPct=n?Math.round((completedByGender[g]||0)/n*100):0;
+  const entries=[['Male',agg.Male,'gender-fill-m'],['Female',agg.Female,'gender-fill-f'],['Other',agg.Other,'gender-fill-o']];
+  wrap.innerHTML=entries.map(([g,d,cls])=>{
+    const pct=total?Math.round(d.n/total*100):0;
+    const cPct=d.n?Math.round(d.c/d.n*100):0;
     const col=cPct>=70?'var(--ok)':cPct>=40?'var(--warn)':'var(--danger)';
-    return '<div class="gender-row"><div class="gender-label">'+g+'</div><div class="gender-bar"><div class="'+cls+'" style="width:'+pct+'%"></div></div><div class="gender-count">'+n+'</div><div style="font-size:11px;font-weight:700;color:'+col+';width:40px;text-align:right">'+cPct+'%</div></div>';
+    return '<div class="gender-row"><div class="gender-label">'+g+'</div><div class="gender-bar"><div class="'+cls+'" style="width:'+pct+'%"></div></div><div class="gender-count">'+d.n+'</div><div style="font-size:11px;font-weight:700;color:'+col+';width:40px;text-align:right">'+cPct+'%</div></div>';
   }).join('')+'<div style="font-size:11px;color:var(--ink5);margin-top:12px;padding-top:10px;border-top:1px solid var(--border)">% = completion rate within each group</div>';
 }
 
@@ -1216,12 +1320,12 @@ async function loadTrend(){
   try{const{trend}=await _api('GET','/api/dashboard/trend?days='+days);renderTrendChart(trend||[]);}catch{}
 }
 function renderTrendChart(trend){
-  const ctx=document.getElementById('chart-trend');if(!ctx)return;
+  const ctx=document.getElementById('chart-trend');if(!ctx||typeof Chart==='undefined')return;
   if(_charts.trend)_charts.trend.destroy();if(!trend.length)return;
   _charts.trend=new Chart(ctx,{type:'bar',data:{labels:trend.map(r=>{const d=new Date(r.day);return d.toLocaleDateString('en-IN',{day:'numeric',month:'short'});}),datasets:[{label:'Completions',data:trend.map(r=>r.completed),backgroundColor:'rgba(124,58,237,.5)',borderColor:'rgba(139,92,246,.9)',borderWidth:1,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}},y:{ticks:{color:'#64748b',font:{size:10},stepSize:1},grid:{color:'rgba(45,45,61,.6)'},beginAtZero:true}}}});
 }
 function renderSchoolChart(schools){
-  const ctx=document.getElementById('chart-schools');if(!ctx||!schools.length)return;
+  const ctx=document.getElementById('chart-schools');if(!ctx||!schools.length||typeof Chart==='undefined')return;
   if(_charts.schools)_charts.schools.destroy();
   const top=schools.slice(0,8);
   _charts.schools=new Chart(ctx,{type:'bar',data:{labels:top.map(s=>s.school.length>16?s.school.slice(0,16)+'…':s.school),datasets:[{label:'Completed %',data:top.map(s=>s.total?Math.round(s.completed/s.total*100):0),backgroundColor:top.map(s=>{const p=s.total?s.completed/s.total*100:0;return p>=70?'rgba(16,185,129,.5)':p>=40?'rgba(245,158,11,.5)':'rgba(239,68,68,.5)';}),borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(45,45,61,.6)'},max:100,beginAtZero:true},y:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}}}}});
@@ -1230,18 +1334,17 @@ function renderSchoolChart(schools){
 async function loadAtRiskPreview(){
   const wrap=document.getElementById('ov-risk');
   try{
-    const{students}=await _api('GET','/api/dashboard/students?limit=500');
-    const now=Date.now();const cut=3*86400000;
-    const risks=students.filter(s=>s.status==='in_progress'&&(now-new Date(s.registered_at||0).getTime())>cut);
+    const{students:risks}=await _api('GET','/api/dashboard/at-risk?days=3');
+    const now=Date.now();
     _atRisk=risks;const nb=document.getElementById('risk-nb');
     if(risks.length){nb.textContent=risks.length;nb.style.display='';}
-    const prev=risks.sort((a,b)=>new Date(a.registered_at)-new Date(b.registered_at)).slice(0,5);
-    if(!prev.length){wrap.innerHTML='<div class="empty" style="padding:24px"><div class="et">✅ No at-risk students</div><div class="es">All in-progress students registered within 3 days.</div></div>';return;}
+    const prev=risks.slice(0,5);
+    if(!prev.length){wrap.innerHTML='<div class="empty" style="padding:24px"><div class="et">✅ No at-risk students</div><div class="es">Everyone who registered over 3 days ago has completed their report.</div></div>';return;}
     wrap.innerHTML=prev.map(s=>{
       const days=Math.floor((now-new Date(s.registered_at||0).getTime())/86400000);
       const init=(s.full_name||s.first_name||'?')[0].toUpperCase();
       const col=days>=7?'var(--danger)':'var(--warn)';const bg=days>=7?'rgba(239,68,68,.12)':'rgba(245,158,11,.12)';
-      return '<div class="risk-row"><div class="risk-av">'+init+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--ink);cursor:pointer" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div style="font-size:11px;color:var(--ink4);margin-top:1px">'+_esc(s.school||'')+'&nbsp;·&nbsp;Class '+_esc(s.class||'?')+'</div></div><div style="font-size:11px;font-weight:700;color:'+col+';background:'+bg+';padding:2px 7px;border-radius:5px;white-space:nowrap">⚠️ '+days+'d ago</div><button class="btn btn-outline btn-xs" data-email="'+_esc(s.email||'')+'" data-name="'+_esc(s.full_name||'')+'" onclick="quickRemindFromBtn(this)" style="flex-shrink:0">📧</button></div>';
+      return '<div class="risk-row"><div class="risk-av">'+init+'</div><div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:600;color:var(--ink);cursor:pointer" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div style="font-size:11px;color:var(--ink4);margin-top:1px">'+_esc(s.school||'')+'&nbsp;·&nbsp;Class '+_esc(s.class||'?')+'</div></div><div style="font-size:11px;font-weight:700;color:'+col+';background:'+bg+';padding:2px 7px;border-radius:5px;white-space:nowrap">'+days+'d ago</div><button class="btn btn-outline btn-xs" data-email="'+_esc(s.email||'')+'" data-name="'+_esc(s.full_name||'')+'" onclick="quickRemindFromBtn(this)" style="flex-shrink:0">Remind</button></div>';
     }).join('');
   }catch{wrap.innerHTML='<div class="empty" style="padding:24px"><div class="et">Could not load</div></div>';}
 }
@@ -1251,15 +1354,14 @@ async function loadAtRisk(){
   const wrap=document.getElementById('atrisk-wrap');
   wrap.innerHTML='<div class="empty"><div class="spinner spd"></div></div>';
   try{
-    const{students}=await _api('GET','/api/dashboard/students?limit=500');
+    const{students:risks}=await _api('GET','/api/dashboard/at-risk?days=3');
     const now=Date.now();
-    const risks=students.filter(s=>s.status==='in_progress'&&(now-new Date(s.registered_at||0).getTime())>3*86400000).sort((a,b)=>new Date(a.registered_at)-new Date(b.registered_at));
     _atRisk=risks;document.getElementById('risk-rem-btn').style.display=risks.length?'':'none';
-    if(!risks.length){wrap.innerHTML='<div class="empty"><div class="ei">✅</div><div class="et">No at-risk students</div><div class="es">All in-progress students registered within 3 days.</div></div>';return;}
-    wrap.innerHTML='<table class="tbl"><thead><tr><th></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Days Stuck</th><th>Progress</th><th>Actions</th></tr></thead><tbody>'+risks.map(s=>{
+    if(!risks.length){wrap.innerHTML='<div class="empty"><div class="ei">✅</div><div class="et">No at-risk students</div><div class="es">Everyone who registered over 3 days ago has completed their report.</div></div>';return;}
+    wrap.innerHTML='<table class="tbl"><thead><tr><th></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Status</th><th>Days Stuck</th><th>Progress</th><th>Actions</th></tr></thead><tbody>'+risks.map(s=>{
       const days=Math.floor((now-new Date(s.registered_at||0).getTime())/86400000);
       const col=days>=7?'var(--danger)':'var(--warn)';
-      return '<tr><td><input type="checkbox" class="risk-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5)">'+_esc(s.email||'—')+'</td><td><span style="font-weight:700;color:'+col+'">⚠️ '+days+'d</span></td><td>'+_mDots(s.modules_done||0)+'</td><td><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')">👁</button></td></tr>';
+      return '<tr><td><input type="checkbox" class="risk-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4)">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5)">'+_esc(s.email||'—')+'</td><td>'+_sbadge(s.status)+'</td><td><span style="font-weight:700;color:'+col+'">'+days+'d</span></td><td>'+_mDots(s.modules_done||0)+'</td><td><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')">View</button></td></tr>';
     }).join('')+'</tbody></table>';
   }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
 }
@@ -1330,6 +1432,7 @@ function filterSchools(){
   +'</div>';
 }
 function exportSchoolsCSV(){
+  if(!_allSchools.length){toast('No school data loaded yet — open the Schools page first.','error');return;}
   const rows=[['School','Total','Completed','In Progress','Not Started','Completion %']];
   _allSchools.forEach(s=>{const pct=s.total?Math.round(s.completed/s.total*100):0;rows.push([s.school,s.total,s.completed,s.in_progress||0,s.total-s.completed-(s.in_progress||0),pct+'%']);});
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
@@ -1337,28 +1440,52 @@ function exportSchoolsCSV(){
   toast('Exported '+_allSchools.length+' schools.','success');
 }
 // ── STUDENTS ──
-async function loadStudents(){
+const STU_PAGE_SIZE=200;let _stuPage=0,_stuTotal=0;
+function gotoStuPage(p){_stuPage=Math.max(0,p);loadStudents(true);}
+async function loadStudents(keepPage){
+  if(!keepPage)_stuPage=0;
   const q=document.getElementById('stu-q').value.trim();const school=document.getElementById('stu-school').value;
   const cls=document.getElementById('stu-class').value;const status=document.getElementById('stu-status').value;
   const wrap=document.getElementById('stu-wrap');wrap.innerHTML='<div class="empty"><div class="spinner spd"></div></div>';
   try{
-    const params=new URLSearchParams({limit:500});if(q)params.set('search',q);if(school)params.set('school',school);if(cls)params.set('class',cls);
-    const{students}=await _api('GET','/api/dashboard/students?'+params);_students=students;
-    // populate filters
-    const snames=[...new Set(students.map(s=>s.school).filter(Boolean))].sort();const curS=document.getElementById('stu-school').value;
-    document.getElementById('stu-school').innerHTML='<option value="">All Schools</option>'+snames.map(s=>'<option value="'+_esc(s)+'"'+(s===curS?' selected':'')+'>'+_esc(s)+'</option>').join('');
-    const classes=[...new Set(students.map(s=>s.class).filter(Boolean))].sort();const curC=document.getElementById('stu-class').value;
-    document.getElementById('stu-class').innerHTML='<option value="">All Classes</option>'+classes.map(c=>'<option value="'+c+'"'+(c===curC?' selected':'')+'>'+c+'</option>').join('');
-    const filtered=status?students.filter(s=>s.status===status):students;
-    document.getElementById('stu-lbl').textContent=filtered.length+' Students';
-    _renderStudents(filtered);
+    // School dropdown from the FULL school list, not from the current page of rows
+    if(document.getElementById('stu-school').options.length<=1){
+      let names=_allSchoolNames;
+      if(!names||!names.length){try{const{schools}=await _api('GET','/api/dashboard/schools');names=schools.map(s=>s.school).sort();_allSchoolNames=names;}catch{names=[];}}
+      document.getElementById('stu-school').innerHTML='<option value="">All Schools</option>'+names.map(s=>'<option value="'+_esc(s)+'"'+(s===school?' selected':'')+'>'+_esc(s)+'</option>').join('');
+    }
+    if(document.getElementById('stu-class').options.length<=1){
+      document.getElementById('stu-class').innerHTML='<option value="">All Classes</option>'+['9','10','11','12'].map(c=>'<option value="'+c+'"'+(c===cls?' selected':'')+'>Class '+c+'</option>').join('');
+    }
+    const params=new URLSearchParams({limit:STU_PAGE_SIZE,offset:_stuPage*STU_PAGE_SIZE});
+    if(q)params.set('search',q);if(school)params.set('school',school);if(cls)params.set('class',cls);if(status)params.set('status',status);
+    const{students,total}=await _api('GET','/api/dashboard/students?'+params);
+    _students=students;_stuTotal=total||students.length;
+    document.getElementById('stu-lbl').textContent=_stuTotal+' Students';
+    _renderStudents(students);
+    _renderStuPager();
   }catch(e){wrap.innerHTML='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';}
+}
+function _renderStuPager(){
+  const wrap=document.getElementById('stu-wrap');
+  const pages=Math.max(1,Math.ceil(_stuTotal/STU_PAGE_SIZE));
+  if(pages<=1)return;
+  const from=_stuPage*STU_PAGE_SIZE+1,to=Math.min((_stuPage+1)*STU_PAGE_SIZE,_stuTotal);
+  wrap.insertAdjacentHTML('beforeend',
+    '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 20px;border-top:1px solid var(--border);background:var(--bg2)">'
+    +'<span style="font-size:12px;color:var(--ink4)">Showing '+from+'–'+to+' of '+_stuTotal+'</span>'
+    +'<div style="display:flex;gap:6px;align-items:center">'
+    +'<button class="btn btn-outline btn-xs" '+(_stuPage===0?'disabled':'')+' onclick="gotoStuPage('+(_stuPage-1)+')">← Prev</button>'
+    +'<span style="font-size:12px;color:var(--ink4)">Page '+(_stuPage+1)+' / '+pages+'</span>'
+    +'<button class="btn btn-outline btn-xs" '+(_stuPage>=pages-1?'disabled':'')+' onclick="gotoStuPage('+(_stuPage+1)+')">Next →</button>'
+    +'</div></div>');
 }
 
 function _renderStudents(list){
   const wrap=document.getElementById('stu-wrap');
   if(!list.length){wrap.innerHTML='<div class="empty"><div class="ei">👥</div><div class="et">No students found</div></div>';return;}
-  wrap.innerHTML='<table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" onchange="stuToggleAll(this)"></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Status</th><th>Progress</th><th>Registered</th><th>Actions</th></tr></thead><tbody>'+list.map(s=>'<tr><td><input type="checkbox" class="stu-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'" onchange="stuUpdSel()"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_esc(s.school||'')+'">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(s.email||'—')+'</td><td>'+_sbadge(s.status)+'</td><td>'+_mDots(s.modules_done||0)+'</td><td style="font-size:11px;color:var(--ink5)">'+_fmtDate(s.registered_at)+'</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')" title="View">👁</button>'+(s.status==='completed'?'<button class="btn btn-ghost btn-xs" onclick="_curStuId=\''+_esc(s.session_id)+'\';drTab(4);openDrawer(\''+_esc(s.session_id)+'\')" title="Report">📄</button>':'')+'<button class="btn btn-ghost btn-xs" onclick="confirmDelStu(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Delete">🗑</button></td></tr>').join('')+'</tbody></table>';
+  wrap.innerHTML='<table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" onchange="stuToggleAll(this)"></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Status</th><th>Progress</th><th>Registered</th><th>Actions</th></tr></thead><tbody>'+list.map(s=>'<tr><td><input type="checkbox" class="stu-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'" onchange="stuUpdSel()"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_esc(s.school||'')+'">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(s.email||'—')+'</td><td>'+_sbadge(s.status)+'</td><td>'+_mDots(s.modules_done||0)+'</td><td style="font-size:11px;color:var(--ink5)">'+_fmtDate(s.registered_at)+'</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')" title="View">View</button>'+(s.status==='completed'?'<button class="btn btn-ghost btn-xs" onclick="_curStuId=\''+_esc(s.session_id)+'\';drTab(4);openDrawer(\''+_esc(s.session_id)+'\')" title="Report">Report</button>':'')+'<button class="btn btn-ghost btn-xs" onclick="resetStuPin(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Reset counsellor PIN">PIN</button>'
++'<button class="btn btn-ghost btn-xs" onclick="confirmDelStu(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Delete">Del</button></td></tr>').join('')+'</tbody></table>';
 }
 function stuToggleAll(cb){_stuSel.clear();document.querySelectorAll('.stu-chk').forEach(el=>{el.checked=cb.checked;if(cb.checked)_stuSel.add(el.dataset.email);});_stuBar();}
 function stuUpdSel(){_stuSel.clear();document.querySelectorAll('.stu-chk:checked').forEach(el=>_stuSel.add(el.dataset.email));_stuBar();}
@@ -1440,8 +1567,9 @@ async function openDrawer(sid){
 
 async function loadDrawerReport(sid){
   try{
-    const{report}=await _api('GET','/api/dashboard/students/'+sid+'/report');
-    _curReport=report;renderPsych(report);renderCareer(report);renderAIReport(report);
+    const resp=await _api('GET','/api/dashboard/students/'+sid+'/report');
+    if(resp.has_report===false){const m='<div class="empty" style="padding:36px 20px"><div class="ei">\u23f3</div><div class="et">No report yet</div><div class="es">This student hasn\u2019t completed the assessment. The report appears here once all four modules are done.</div></div>';document.getElementById('dr-psych').innerHTML=m;document.getElementById('dr-career').innerHTML=m;const rp=document.getElementById('dr-report');if(rp)rp.innerHTML=m;return;}
+    const report=resp.report;_curReport=report;renderPsych(report);renderCareer(report);renderAIReport(report);
   }catch(e){const msg='<div class="empty"><div class="et">'+_esc(e.message)+'</div></div>';document.getElementById('dr-psych').innerHTML=msg;document.getElementById('dr-career').innerHTML=msg;}
 }
 
@@ -1509,6 +1637,13 @@ async function addTag(){const pre=document.getElementById('dr-tag-pre').value,cu
 async function removeTag(tag){_curStuTags=_curStuTags.filter(t=>t!==tag);try{await _api('PUT','/api/dashboard/students/'+_curStuId+'/tags',{tags:_curStuTags});_renderTags();}catch(e){toast('Error: '+e.message,'error');}}
 
 // ── USERS ──
+function resetStuPin(sid,name){
+  document.getElementById('cf-title').textContent='Reset PIN for "'+name+'"?';
+  document.getElementById('cf-body').textContent='Clears their AI Counsellor PIN and signs them out everywhere. They will set a new PIN on next login.';
+  document.getElementById('cf-ok').onclick=async()=>{closeConfirm();try{const r=await _api('POST','/api/dashboard/students/'+sid+'/reset-pin');toast(r.message||'PIN cleared.','success');}catch(e){toast('Error: '+e.message,'error');}};
+  document.getElementById('conf-ov').classList.add('open');
+}
+
 async function loadUsers(){try{const{users}=await _api('GET','/api/dashboard/users');_users=users;renderUsers();document.getElementById('users-lbl').textContent='Dashboard Users ('+users.length+')';}catch(e){toast('Failed to load users: '+e.message,'error');}}
 function renderUsers(){
   const q=document.getElementById('usr-q').value.toLowerCase(),role=document.getElementById('usr-role').value;
@@ -1684,9 +1819,9 @@ async function sendTestEmail(){
 // ── ANALYTICS ──
 async function loadAnalytics(){
   try{
-    const[{schools},{students}]=await Promise.all([
+    const[{schools},statsResp]=await Promise.all([
       _api('GET','/api/dashboard/schools'),
-      _api('GET','/api/dashboard/students?limit=2000').catch(()=>({students:[]})),
+      _api('GET','/api/dashboard/stats').catch(()=>({stats:{},gender:[]})),
     ]);
     // KPIs
     const rates=schools.filter(s=>s.total).map(s=>Math.round(s.completed/s.total*100));
@@ -1697,15 +1832,15 @@ async function loadAnalytics(){
     document.getElementById('an-worst').textContent=worst+'%';
     const remLog=await _api('GET','/api/dashboard/reminder-log').catch(()=>({log:[]}));
     document.getElementById('an-emails').textContent=(remLog.log||[]).length;
-    // Class chart
-    const classMap={};students.forEach(s=>{const c=s.class||'?';if(!classMap[c])classMap[c]={total:0,done:0};classMap[c].total++;if(s.status==='completed')classMap[c].done++;});
+    // Class chart — aggregated from full per-school class summaries (never capped)
+    const classMap={};schools.forEach(s=>(s.classes||[]).forEach(c=>{const k=c.class||'?';if(!classMap[k])classMap[k]={total:0,done:0};classMap[k].total+=c.total||0;classMap[k].done+=c.completed||0;}));
     const cls=Object.entries(classMap).sort(([a],[b])=>String(a).localeCompare(String(b),undefined,{numeric:true}));
     const cCtx=document.getElementById('chart-class-analytics');
     if(cCtx){if(_charts.classA)_charts.classA.destroy();
     _charts.classA=new Chart(cCtx,{type:'bar',data:{labels:cls.map(([c])=>'Class '+c),datasets:[{label:'Completed',data:cls.map(([,v])=>v.done),backgroundColor:'rgba(16,185,129,.6)',borderRadius:4},{label:'Total',data:cls.map(([,v])=>v.total),backgroundColor:'rgba(124,58,237,.2)',borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#94a3b8',font:{size:10}}}},scales:{x:{ticks:{color:'#64748b',font:{size:10}},grid:{display:false}},y:{ticks:{color:'#64748b',font:{size:10}},grid:{color:'rgba(45,45,61,.6)'},beginAtZero:true}}}});}
-    // Gender chart
+    // Gender chart — exact server-side aggregate
     const gm={Male:0,Female:0,Other:0};const gd={Male:0,Female:0,Other:0};
-    students.forEach(s=>{const g=s.gender||'Other';gm[g]=(gm[g]||0)+1;if(s.status==='completed')gd[g]=(gd[g]||0)+1;});
+    (statsResp.gender||[]).forEach(r=>{const g=gm.hasOwnProperty(r.gender)?r.gender:'Other';gm[g]+=r.total||0;gd[g]+=r.completed||0;});
     const gCtx=document.getElementById('chart-gender-analytics');
     if(gCtx){if(_charts.genderA)_charts.genderA.destroy();
     _charts.genderA=new Chart(gCtx,{type:'doughnut',data:{labels:['Male','Female','Other'],datasets:[{label:'Total',data:[gm.Male,gm.Female,gm.Other],backgroundColor:['rgba(59,130,246,.7)','rgba(236,72,153,.7)','rgba(139,92,246,.7)'],borderWidth:0},{label:'Completed',data:[gd.Male,gd.Female,gd.Other],backgroundColor:['rgba(59,130,246,.3)','rgba(236,72,153,.3)','rgba(139,92,246,.3)'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{position:'bottom',labels:{color:'#94a3b8',font:{size:10}}}}}});}

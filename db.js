@@ -1,767 +1,319 @@
 /* ════════════════════════════════════════════════════════════════════
-   db.js  —  NuMind MAPS  |  SQLite database layer
-   Node.js 18+, CommonJS, better-sqlite3 (synchronous)
+   db.js — NuMind MAPS  |  Core student/assessment/report layer (PostgreSQL)
+   --------------------------------------------------------------------
+   Async rewrite on top of pg-core.js. Public API is unchanged in name/shape
+   but every DB-touching function is now `async` and returns a Promise.
+   Callers in server.js already `await` the write path via _dbWrite, and the
+   read path (getFullReport etc.) must now be awaited too.
 
-   ── Scale target ─────────────────────────────────────────────────
-   20 000 users/day  →  ~14 req/min sustained, ~100/min peak burst.
-   PM2 cluster: each worker keeps its own connection; WAL mode allows
-   N concurrent readers + 1 writer without SQLITE_BUSY.
+   Conversions from the better-sqlite3 version:
+     • @named params → $1,$2,… positional; helpers one()/many()/exec()/tx().
+     • INSERT OR REPLACE → INSERT … ON CONFLICT … DO UPDATE (explicit keys).
+     • is_fallback stored as BOOLEAN (was 0/1). CASE guards compare = FALSE.
+     • db.transaction(fn)() → await tx(async (c) => { ... }).
+     • Case-insensitive email now handled by CITEXT, so LOWER() wrappers on
+       the email column are dropped (kept in JS .trim()/.toLowerCase() for
+       normalisation of the stored value only).
 
-   ── Bug history ───────────────────────────────────────────────────
-   BUG 1  registered_at always overwritten on restart/re-registration.
-     FIX: registered_at excluded from DO UPDATE SET — written once on
-          first INSERT, never touched again.
-
-   BUG 2  Child report tables used DELETE-then-INSERT — a crash between
-          them left the session permanently empty.
-     FIX: INSERT OR REPLACE (atomic per-row). No DELETE step.
-          Crash leaves old or new data — never empty.
-
-   BUG 3  saveReport overwrote good AI prose with a fallback report.
-     FIX: upsertReportSummary CASE logic: AI prose fields only updated
-          when incoming is_fallback = 0. Computed fields always updated.
-
-   BUG 4  saveRegistration generated a fresh timestamp on every call.
-     FIX: Pass student.registeredAt (if present) so re-runs are idempotent.
-
-   ── Schema ───────────────────────────────────────────────────────
-     students           — registration + profile
-     assessments        — raw answers, scores, durations per module
-     section_progress   — incremental audit log of submissions
-     report_summary     — AI prose + computed snapshot fields
-     report_personality — 9 NMAP dims per session
-     report_aptitude    — 8 DAAB sub-tests per session
-     report_interests   — up to 8 CPI ranked interests per session
-     report_seaa        — 3 SEA domains per session
-     report_careers     — Integrated Career Fit Matrix rows (variable)
-════════════════════════════════════════════════════════════════════ */
+   The pure derivation helpers (no DB access) are carried over verbatim.
+   ════════════════════════════════════════════════════════════════════ */
 
 'use strict';
 
-const path = require('path');
+const pg = require('./pg-core.js');
 
-/* ── Singleton DB connection ────────────────────────────────────── */
-let _db    = null;
-let _stmts = null;
-
-/* ══════════════════════════════════════════════════════════════════
-   MODULE LIST — single source of truth. Mirrors state.js / server.js.
-══════════════════════════════════════════════════════════════════ */
 const MODULES = [
   'cpi', 'sea', 'nmap',
   'daab_va', 'daab_pa', 'daab_na', 'daab_lsa',
   'daab_hma', 'daab_ar', 'daab_ma', 'daab_sa',
 ];
 
-/* ══════════════════════════════════════════════════════════════════
-   INIT — call once at startup (idempotent)
-══════════════════════════════════════════════════════════════════ */
-function _initDb() {
-  if (_db) return _db;
-
-  const Database = require('better-sqlite3');
-  const dbPath   = process.env.SQLITE_PATH || path.join(__dirname, 'numind.db');
-  _db = new Database(dbPath);
-
-  /* ── Performance pragmas for 20 000 users/day ───────────────────
-     All safe for production. WAL provides crash recovery so
-     synchronous=NORMAL cannot cause data loss.
-  ─────────────────────────────────────────────────────────────── */
-  _db.pragma('journal_mode = WAL');       // concurrent readers + 1 writer, no SQLITE_BUSY
-  _db.pragma('busy_timeout = 5000');      // wait 5 s on lock before throwing
-  _db.pragma('synchronous = NORMAL');     // fsync on WAL checkpoints only (~3x faster than FULL)
-  _db.pragma('cache_size = -16000');      // 16 MB page cache — reduces disk reads for hot data
-  _db.pragma('temp_store = MEMORY');      // temp tables/indexes in RAM, not on disk
-  _db.pragma('foreign_keys = ON');        // enforce referential integrity
-  _db.pragma('mmap_size = 67108864');     // 64 MB memory-mapped I/O for read-heavy dashboard queries
-
-  /* ── Schema ─────────────────────────────────────────────────── */
-  _db.exec(`
-    CREATE TABLE IF NOT EXISTS students (
-      session_id          TEXT PRIMARY KEY,
-      first_name          TEXT,
-      last_name           TEXT,
-      full_name           TEXT,
-      class               TEXT,
-      section             TEXT,
-      school              TEXT,
-      school_state        TEXT,
-      school_city         TEXT,
-      age                 TEXT,
-      gender              TEXT,
-      email               TEXT,
-      registered_at       TEXT NOT NULL,
-      completed_at        TEXT,
-      report_generated_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS assessments (
-      session_id            TEXT PRIMARY KEY,
-      saved_at              TEXT NOT NULL,
-      cpi_raw_answers       TEXT, cpi_scores_json       TEXT, cpi_duration_seconds       INTEGER, cpi_completed_at       TEXT,
-      sea_raw_answers       TEXT, sea_scores_json       TEXT, sea_duration_seconds       INTEGER, sea_completed_at       TEXT,
-      nmap_raw_answers      TEXT, nmap_scores_json      TEXT, nmap_duration_seconds      INTEGER, nmap_completed_at      TEXT,
-      daab_va_raw_answers   TEXT, daab_va_scores_json   TEXT, daab_va_duration_seconds   INTEGER, daab_va_completed_at   TEXT,
-      daab_pa_raw_answers   TEXT, daab_pa_scores_json   TEXT, daab_pa_duration_seconds   INTEGER, daab_pa_completed_at   TEXT,
-      daab_na_raw_answers   TEXT, daab_na_scores_json   TEXT, daab_na_duration_seconds   INTEGER, daab_na_completed_at   TEXT,
-      daab_lsa_raw_answers  TEXT, daab_lsa_scores_json  TEXT, daab_lsa_duration_seconds  INTEGER, daab_lsa_completed_at  TEXT,
-      daab_hma_raw_answers  TEXT, daab_hma_scores_json  TEXT, daab_hma_duration_seconds  INTEGER, daab_hma_completed_at  TEXT,
-      daab_ar_raw_answers   TEXT, daab_ar_scores_json   TEXT, daab_ar_duration_seconds   INTEGER, daab_ar_completed_at   TEXT,
-      daab_ma_raw_answers   TEXT, daab_ma_scores_json   TEXT, daab_ma_duration_seconds   INTEGER, daab_ma_completed_at   TEXT,
-      daab_sa_raw_answers   TEXT, daab_sa_scores_json   TEXT, daab_sa_duration_seconds   INTEGER, daab_sa_completed_at   TEXT,
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS section_progress (
-      id               INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id       TEXT NOT NULL,
-      module_key       TEXT NOT NULL,
-      submitted_at     TEXT NOT NULL,
-      duration_seconds INTEGER,
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_summary (
-      session_id               TEXT PRIMARY KEY,
-      generated_at             TEXT NOT NULL,
-      is_fallback              INTEGER NOT NULL DEFAULT 0,
-      holistic_summary         TEXT,
-      aptitude_profile         TEXT,
-      interest_profile         TEXT,
-      internal_motivators      TEXT,
-      personality_profile      TEXT,
-      wellbeing_guidance       TEXT,
-      stream_advice            TEXT,
-      avg_personality_stanine  REAL,
-      avg_aptitude_stanine     REAL,
-      top_interest_score       INTEGER,
-      fit_score                INTEGER,
-      fit_tier                 TEXT,
-      personality_status       TEXT,
-      aptitude_status          TEXT,
-      interest_status          TEXT,
-      seaa_status              TEXT,
-      strong_fit_pathways      TEXT,
-      emerging_fit_pathways    TEXT,
-      exploratory_pathways     TEXT,
-      recommended_primary      TEXT,
-      recommended_alternate    TEXT,
-      recommended_exploratory  TEXT,
-      top_personality_traits_json TEXT,
-      strong_aptitudes_json        TEXT,
-      emerging_aptitudes_json      TEXT,
-      top3_interests_json          TEXT,
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_personality (
-      session_id  TEXT    NOT NULL,
-      position    INTEGER NOT NULL,
-      name        TEXT    NOT NULL,
-      stanine     INTEGER NOT NULL,
-      band        TEXT    NOT NULL,
-      PRIMARY KEY (session_id, position),
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_aptitude (
-      session_id  TEXT    NOT NULL,
-      position    INTEGER NOT NULL,
-      key         TEXT    NOT NULL,
-      name        TEXT    NOT NULL,
-      stanine     INTEGER NOT NULL,
-      band        TEXT    NOT NULL,
-      raw_score   INTEGER,
-      max_score   INTEGER,
-      PRIMARY KEY (session_id, key),
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_interests (
-      session_id  TEXT    NOT NULL,
-      rank        INTEGER NOT NULL,
-      label       TEXT    NOT NULL,
-      score       INTEGER NOT NULL,
-      level       TEXT    NOT NULL,
-      PRIMARY KEY (session_id, rank),
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_seaa (
-      session_id  TEXT NOT NULL,
-      key         TEXT NOT NULL,
-      title       TEXT NOT NULL,
-      score       INTEGER NOT NULL,
-      category    TEXT,
-      cat_label   TEXT,
-      PRIMARY KEY (session_id, key),
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    CREATE TABLE IF NOT EXISTS report_careers (
-      session_id       TEXT    NOT NULL,
-      position         INTEGER NOT NULL,
-      career           TEXT    NOT NULL,
-      cluster          TEXT,
-      interest_fit     TEXT,
-      aptitude_fit     TEXT,
-      personality_fit  TEXT,
-      seaa_fit         TEXT,
-      suitability_pct  INTEGER,
-      alignment        TEXT,
-      rationale        TEXT,
-      PRIMARY KEY (session_id, position),
-      FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-    );
-
-    -- Core read indexes
-    CREATE INDEX IF NOT EXISTS idx_students_school      ON students(school);
-    CREATE INDEX IF NOT EXISTS idx_students_school_ci   ON students(LOWER(school));
-    CREATE INDEX IF NOT EXISTS idx_students_class       ON students(class);
-    CREATE INDEX IF NOT EXISTS idx_students_registered  ON students(registered_at);
-    CREATE INDEX IF NOT EXISTS idx_students_email       ON students(email);
-    CREATE INDEX IF NOT EXISTS idx_students_email_ci    ON students(LOWER(email));
-    CREATE INDEX IF NOT EXISTS idx_students_completed   ON students(completed_at);
-    CREATE INDEX IF NOT EXISTS idx_section_prog_session ON section_progress(session_id);
-    CREATE INDEX IF NOT EXISTS idx_section_prog_module  ON section_progress(module_key);
-    CREATE INDEX IF NOT EXISTS idx_careers_cluster      ON report_careers(cluster);
-    CREATE INDEX IF NOT EXISTS idx_interests_label      ON report_interests(label);
-    CREATE INDEX IF NOT EXISTS idx_summary_fit_tier     ON report_summary(fit_tier);
-    CREATE INDEX IF NOT EXISTS idx_summary_generated    ON report_summary(generated_at);
-    CREATE INDEX IF NOT EXISTS idx_summary_seaa         ON report_summary(seaa_status);
-    CREATE INDEX IF NOT EXISTS idx_summary_school       ON report_summary(session_id);
-  `);
-
-  /* ── Lightweight migration: add columns missing from legacy DBs ─ */
-  for (const m of MODULES) {
-    try {
-      const cols = _db.prepare(`PRAGMA table_info(assessments)`).all().map(c => c.name);
-      if (!cols.includes(m + '_completed_at')) {
-        _db.exec(`ALTER TABLE assessments ADD COLUMN ${m}_completed_at TEXT`);
-      }
-    } catch (_) {}
-  }
-
-  /* ── Legacy schema integrity: ensure session_id PK exists ────────
-     CREATE TABLE IF NOT EXISTS is a no-op on legacy DBs that may lack
-     the PRIMARY KEY needed by ON CONFLICT(session_id) upserts.
-     Detect and rebuild, preserving all existing rows.
-  ─────────────────────────────────────────────────────────────── */
-  const _hasPK = (table) => {
-    try {
-      const info = _db.prepare(`PRAGMA table_info(${table})`).all();
-      if (info.find(c => c.name === 'session_id' && c.pk === 1)) return true;
-      const idxList = _db.prepare(`PRAGMA index_list(${table})`).all();
-      for (const idx of idxList) {
-        if (!idx.unique) continue;
-        const cols = _db.prepare(`PRAGMA index_info(${idx.name})`).all();
-        if (cols.length === 1 && cols[0].name === 'session_id') return true;
-      }
-    } catch (_) {}
-    return false;
-  };
-
-  const _rebuildPreservingData = (table, createSql, extraIndexSql) => {
-    process.stderr.write('[WARN]  [DB] Rebuilding "' + table + '" — legacy schema. Preserving existing rows.\n');
-    _db.pragma('foreign_keys = OFF');
-    const tx = _db.transaction(() => {
-      const oldCols = _db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-      _db.exec(`ALTER TABLE ${table} RENAME TO ${table}__legacy`);
-      _db.exec(createSql);
-      const newCols = _db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name);
-      const shared  = oldCols.filter(c => newCols.includes(c));
-      if (shared.length) {
-        const cols = shared.join(', ');
-        _db.exec(`INSERT OR IGNORE INTO ${table} (${cols}) SELECT ${cols} FROM ${table}__legacy`);
-      }
-      _db.exec(`DROP TABLE ${table}__legacy`);
-      if (extraIndexSql) _db.exec(extraIndexSql);
-    });
-    try { tx(); } finally { _db.pragma('foreign_keys = ON'); }
-  };
-
-  if (!_hasPK('students')) {
-    _rebuildPreservingData('students', `
-      CREATE TABLE students (
-        session_id TEXT PRIMARY KEY, first_name TEXT, last_name TEXT, full_name TEXT,
-        class TEXT, section TEXT, school TEXT, school_state TEXT, school_city TEXT,
-        age TEXT, gender TEXT, email TEXT,
-        registered_at TEXT NOT NULL, completed_at TEXT, report_generated_at TEXT
-      )
-    `, `
-      CREATE INDEX IF NOT EXISTS idx_students_school     ON students(school);
-      CREATE INDEX IF NOT EXISTS idx_students_class      ON students(class);
-      CREATE INDEX IF NOT EXISTS idx_students_registered ON students(registered_at);
-      CREATE INDEX IF NOT EXISTS idx_students_email      ON students(email);
-      CREATE INDEX IF NOT EXISTS idx_students_completed  ON students(completed_at);
-    `);
-  }
-
-  if (!_hasPK('assessments')) {
-    const moduleCols = MODULES
-      .map(m => `${m}_raw_answers TEXT, ${m}_scores_json TEXT, ${m}_duration_seconds INTEGER, ${m}_completed_at TEXT`)
-      .join(',\n        ');
-    _rebuildPreservingData('assessments', `
-      CREATE TABLE assessments (
-        session_id TEXT PRIMARY KEY, saved_at TEXT NOT NULL,
-        ${moduleCols},
-        FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-      )
-    `);
-  }
-
-  if (!_hasPK('report_summary')) {
-    _rebuildPreservingData('report_summary', `
-      CREATE TABLE report_summary (
-        session_id TEXT PRIMARY KEY, generated_at TEXT NOT NULL, is_fallback INTEGER NOT NULL DEFAULT 0,
-        holistic_summary TEXT, aptitude_profile TEXT, interest_profile TEXT,
-        internal_motivators TEXT, personality_profile TEXT, wellbeing_guidance TEXT, stream_advice TEXT,
-        avg_personality_stanine REAL, avg_aptitude_stanine REAL, top_interest_score INTEGER,
-        fit_score INTEGER, fit_tier TEXT,
-        personality_status TEXT, aptitude_status TEXT, interest_status TEXT, seaa_status TEXT,
-        strong_fit_pathways TEXT, emerging_fit_pathways TEXT, exploratory_pathways TEXT,
-        recommended_primary TEXT, recommended_alternate TEXT, recommended_exploratory TEXT,
-        top_personality_traits_json TEXT, strong_aptitudes_json TEXT,
-        emerging_aptitudes_json TEXT, top3_interests_json TEXT,
-        FOREIGN KEY (session_id) REFERENCES students(session_id) ON DELETE CASCADE
-      )
-    `, `
-      CREATE INDEX IF NOT EXISTS idx_summary_fit_tier  ON report_summary(fit_tier);
-      CREATE INDEX IF NOT EXISTS idx_summary_generated ON report_summary(generated_at);
-      CREATE INDEX IF NOT EXISTS idx_summary_seaa      ON report_summary(seaa_status);
-    `);
-  }
-
-  /* ── Email-identity migration ────────────────────────────────────
-     Email is now the student identity. Enforce one row per email with a
-     UNIQUE index. Before adding it, collapse any duplicate-email rows left
-     by the old session_id-only model (admin row + login row for the same
-     student). Keep the row that has a report (rule: "test taken" = report
-     exists); if none has a report, keep the oldest by registered_at. Loser
-     rows are deleted; their child tables cascade via FK.
-  ─────────────────────────────────────────────────────────────────── */
-  try {
-    const dupEmails = _db.prepare(`
-      SELECT LOWER(TRIM(email)) AS em, COUNT(*) AS n
-      FROM students
-      WHERE email IS NOT NULL AND TRIM(email) <> ''
-      GROUP BY LOWER(TRIM(email))
-      HAVING n > 1
-    `).all();
-
-    if (dupEmails.length) {
-      process.stderr.write('[WARN]  [DB] Email migration: collapsing ' + dupEmails.length + ' duplicate-email group(s).\n');
-      _db.pragma('foreign_keys = ON'); // ensure child rows cascade on delete
-      const dedupeTx = _db.transaction(() => {
-        for (const { em } of dupEmails) {
-          const rows = _db.prepare(`
-            SELECT s.session_id,
-                   s.registered_at,
-                   CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END AS has_report
-            FROM students s
-            LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-            WHERE LOWER(TRIM(s.email)) = ?
-          `).all(em);
-
-          // Winner: report first, then oldest registered_at.
-          rows.sort((a, b) => {
-            if (a.has_report !== b.has_report) return b.has_report - a.has_report;
-            return String(a.registered_at || '').localeCompare(String(b.registered_at || ''));
-          });
-          const keep = rows[0];
-          for (const r of rows) {
-            if (r.session_id === keep.session_id) continue;
-            _db.prepare(`DELETE FROM students WHERE session_id = ?`).run(r.session_id);
-          }
-          process.stderr.write('[INFO]  [DB] email "' + em + '": kept ' + keep.session_id +
-            ' (report=' + keep.has_report + '), removed ' + (rows.length - 1) + ' duplicate(s).\n');
-        }
-      });
-      dedupeTx();
-    }
-
-    // Normalise emails to a canonical lowercase/trim form so the UNIQUE
-    // index treats "A@x.com" and "a@x.com " as the same identity.
-    _db.exec(`UPDATE students SET email = LOWER(TRIM(email)) WHERE email IS NOT NULL AND email <> LOWER(TRIM(email))`);
-
-    // Enforce uniqueness. Partial index so legacy rows with blank email
-    // (should not exist, but be safe) don't all collide on ''.
-    _db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_students_email
-              ON students(email) WHERE email IS NOT NULL AND email <> ''`);
-  } catch (e) {
-    process.stderr.write('[ERROR] [DB] Email-identity migration failed: ' + e.message + '\n');
-  }
-
-  /* ── Drop superseded "reports" table from very old deployments ─ */
-  try {
-    const legacyExists = _db.prepare(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name='reports'`
-    ).get();
-    if (legacyExists) {
-      process.stderr.write('[WARN]  [DB] Dropping legacy "reports" table — superseded by report_summary + FK tables.\n');
-      _db.exec('DROP TABLE reports');
-    }
-  } catch (_) {}
-
-  process.stdout.write('✅  SQLite initialised at ' + dbPath + '\n');
-  return _db;
-}
-
-/* ══════════════════════════════════════════════════════════════════
-   PREPARED STATEMENTS — built lazily after _initDb()
-   Prepared once, reused for every request.
-══════════════════════════════════════════════════════════════════ */
-function _prep() {
-  if (_stmts) return _stmts;
-  const db = _initDb();
-
-  _stmts = {
-
-    /* FIX Bug 1 + 4: registered_at absent from DO UPDATE — written once, never overwritten */
-    upsertStudent: db.prepare(`
-      INSERT INTO students (
-        session_id, first_name, last_name, full_name, class, section,
-        school, school_state, school_city, age, gender, email, registered_at
-      ) VALUES (
-        @session_id, @first_name, @last_name, @full_name, @class, @section,
-        @school, @school_state, @school_city, @age, @gender, @email, @registered_at
-      )
-      ON CONFLICT(session_id) DO UPDATE SET
-        first_name   = excluded.first_name,
-        last_name    = excluded.last_name,
-        full_name    = excluded.full_name,
-        class        = excluded.class,
-        section      = excluded.section,
-        school       = excluded.school,
-        school_state = excluded.school_state,
-        school_city  = excluded.school_city,
-        age          = excluded.age,
-        gender       = excluded.gender,
-        email        = excluded.email
-        -- registered_at intentionally omitted: preserved forever after first INSERT
-    `),
-
-    ensureAssessmentRow: db.prepare(`
-      INSERT INTO assessments (session_id, saved_at)
-      VALUES (@session_id, @saved_at)
-      ON CONFLICT(session_id) DO NOTHING
-    `),
-
-    markCompleted: db.prepare(`
-      UPDATE students SET completed_at = @ts WHERE session_id = @session_id
-    `),
-
-    markReportTimestamp: db.prepare(`
-      UPDATE students SET report_generated_at = @ts WHERE session_id = @session_id
-    `),
-
-    insertSectionProgress: db.prepare(`
-      INSERT INTO section_progress (session_id, module_key, submitted_at, duration_seconds)
-      VALUES (@session_id, @module_key, @submitted_at, @duration_seconds)
-    `),
-
-    /* FIX Bug 3: AI prose only overwritten when is_fallback = 0 */
-    upsertReportSummary: db.prepare(`
-      INSERT OR REPLACE INTO report_summary (
-        session_id, generated_at, is_fallback,
-        holistic_summary, aptitude_profile, interest_profile,
-        internal_motivators, personality_profile, wellbeing_guidance, stream_advice,
-        avg_personality_stanine, avg_aptitude_stanine, top_interest_score,
-        fit_score, fit_tier,
-        personality_status, aptitude_status, interest_status, seaa_status,
-        strong_fit_pathways, emerging_fit_pathways, exploratory_pathways,
-        recommended_primary, recommended_alternate, recommended_exploratory,
-        top_personality_traits_json, strong_aptitudes_json, emerging_aptitudes_json,
-        top3_interests_json
-      ) VALUES (
-        @session_id, @generated_at, @is_fallback,
-        @holistic_summary, @aptitude_profile, @interest_profile,
-        @internal_motivators, @personality_profile, @wellbeing_guidance, @stream_advice,
-        @avg_personality_stanine, @avg_aptitude_stanine, @top_interest_score,
-        @fit_score, @fit_tier,
-        @personality_status, @aptitude_status, @interest_status, @seaa_status,
-        @strong_fit_pathways, @emerging_fit_pathways, @exploratory_pathways,
-        @recommended_primary, @recommended_alternate, @recommended_exploratory,
-        @top_personality_traits_json, @strong_aptitudes_json, @emerging_aptitudes_json,
-        @top3_interests_json
-      )
-      ON CONFLICT(session_id) DO UPDATE SET
-        generated_at = excluded.generated_at,
-        is_fallback  = excluded.is_fallback,
-        holistic_summary    = CASE WHEN excluded.is_fallback = 0 THEN excluded.holistic_summary    ELSE holistic_summary    END,
-        aptitude_profile    = CASE WHEN excluded.is_fallback = 0 THEN excluded.aptitude_profile    ELSE aptitude_profile    END,
-        interest_profile    = CASE WHEN excluded.is_fallback = 0 THEN excluded.interest_profile    ELSE interest_profile    END,
-        internal_motivators = CASE WHEN excluded.is_fallback = 0 THEN excluded.internal_motivators ELSE internal_motivators END,
-        personality_profile = CASE WHEN excluded.is_fallback = 0 THEN excluded.personality_profile ELSE personality_profile END,
-        wellbeing_guidance  = CASE WHEN excluded.is_fallback = 0 THEN excluded.wellbeing_guidance  ELSE wellbeing_guidance  END,
-        stream_advice       = CASE WHEN excluded.is_fallback = 0 THEN excluded.stream_advice       ELSE stream_advice       END,
-        avg_personality_stanine     = excluded.avg_personality_stanine,
-        avg_aptitude_stanine        = excluded.avg_aptitude_stanine,
-        top_interest_score          = excluded.top_interest_score,
-        fit_score                   = excluded.fit_score,
-        fit_tier                    = excluded.fit_tier,
-        personality_status          = excluded.personality_status,
-        aptitude_status             = excluded.aptitude_status,
-        interest_status             = excluded.interest_status,
-        seaa_status                 = excluded.seaa_status,
-        strong_fit_pathways         = excluded.strong_fit_pathways,
-        emerging_fit_pathways       = excluded.emerging_fit_pathways,
-        exploratory_pathways        = excluded.exploratory_pathways,
-        recommended_primary         = excluded.recommended_primary,
-        recommended_alternate       = excluded.recommended_alternate,
-        recommended_exploratory     = excluded.recommended_exploratory,
-        top_personality_traits_json = excluded.top_personality_traits_json,
-        strong_aptitudes_json       = excluded.strong_aptitudes_json,
-        emerging_aptitudes_json     = excluded.emerging_aptitudes_json,
-        top3_interests_json         = excluded.top3_interests_json
-    `),
-
-    /* FIX Bug 2: INSERT OR REPLACE — atomic per-row, no DELETE step */
-    upsertPersonality: db.prepare(`
-      INSERT OR REPLACE INTO report_personality (session_id, position, name, stanine, band)
-      VALUES (@session_id, @position, @name, @stanine, @band)
-    `),
-    upsertAptitude: db.prepare(`
-      INSERT OR REPLACE INTO report_aptitude (session_id, position, key, name, stanine, band, raw_score, max_score)
-      VALUES (@session_id, @position, @key, @name, @stanine, @band, @raw_score, @max_score)
-    `),
-    upsertInterest: db.prepare(`
-      INSERT OR REPLACE INTO report_interests (session_id, rank, label, score, level)
-      VALUES (@session_id, @rank, @label, @score, @level)
-    `),
-    upsertSeaa: db.prepare(`
-      INSERT OR REPLACE INTO report_seaa (session_id, key, title, score, category, cat_label)
-      VALUES (@session_id, @key, @title, @score, @category, @cat_label)
-    `),
-    upsertCareer: db.prepare(`
-      INSERT OR REPLACE INTO report_careers (
-        session_id, position, career, cluster,
-        interest_fit, aptitude_fit, personality_fit, seaa_fit,
-        suitability_pct, alignment, rationale
-      ) VALUES (
-        @session_id, @position, @career, @cluster,
-        @interest_fit, @aptitude_fit, @personality_fit, @seaa_fit,
-        @suitability_pct, @alignment, @rationale
-      )
-    `),
-
-    /* Read helpers — used by getFullReport (prepared once, fast on repeat calls) */
-    getStudent:     db.prepare(`SELECT * FROM students          WHERE session_id = ?`),
-    getAssessment:  db.prepare(`SELECT * FROM assessments       WHERE session_id = ?`),
-    getSummary:     db.prepare(`SELECT * FROM report_summary    WHERE session_id = ?`),
-    getPersonality: db.prepare(`SELECT * FROM report_personality WHERE session_id = ? ORDER BY position`),
-    getAptitude:    db.prepare(`SELECT * FROM report_aptitude    WHERE session_id = ? ORDER BY position`),
-    getInterests:   db.prepare(`SELECT * FROM report_interests   WHERE session_id = ? ORDER BY rank`),
-    getSeaa:        db.prepare(`SELECT * FROM report_seaa        WHERE session_id = ?`),
-    getCareers:     db.prepare(`SELECT * FROM report_careers     WHERE session_id = ? ORDER BY position`),
-
-    /* NEW: lookup by email — used by returning-student flow and counsellor unlock */
-    getStudentByEmail: db.prepare(`
-      SELECT s.*, rs.fit_tier, rs.fit_score, rs.recommended_primary, rs.seaa_status
-      FROM students s
-      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-      WHERE lower(s.email) = lower(?)
-      ORDER BY s.registered_at DESC
-      LIMIT 1
-    `),
-
-    deleteCareersBySession: db.prepare(`DELETE FROM report_careers WHERE session_id = ?`),
-  };
-
-  /* Per-module UPDATE statements — each touches only its 4 columns */
-  _stmts.updateModule = {};
-  for (const m of MODULES) {
-    _stmts.updateModule[m] = db.prepare(`
-      UPDATE assessments SET
-        ${m}_raw_answers      = @raw_answers,
-        ${m}_scores_json      = @scores_json,
-        ${m}_duration_seconds = @duration_seconds,
-        ${m}_completed_at     = @completed_at,
-        saved_at              = @saved_at
-      WHERE session_id = @session_id
-    `);
-  }
-
-  return _stmts;
+/* One-time schema init. Kept name-compatible with the old _initDb(). */
+let _schemaReady = null;
+async function _initDb() {
+  if (!_schemaReady) _schemaReady = pg.initSchema();
+  await _schemaReady;
+  return pg;
 }
 
 /* ══════════════════════════════════════════════════════════════════
    PUBLIC API
 ══════════════════════════════════════════════════════════════════ */
 
-function saveRegistration(student, sessionId) {
-  const db = _initDb();
-  const s  = _prep();
+async function saveRegistration(student, sessionId) {
+  if (!sessionId) throw new Error('saveRegistration: sessionId is required');
+  await _initDb();
   const norm = String(student.email || '').toLowerCase().trim();
-
-  // Atomic find-or-create keyed on email. Running the lookup and the insert
-  // inside ONE transaction (plus the UNIQUE(email) backstop) removes the
-  // check-then-write race: under 500 concurrent users, two first-time
-  // registrations for the same email can't both insert. The loser reuses
-  // the winner's row instead of throwing a 500.
-  const result = db.transaction(() => {
-    if (norm) {
-      const existing = s.getStudentByEmail.get(norm);
-      if (existing) {
-        // Identity already exists — reuse it. Never overwrite, never dupe.
-        return { session_id: existing.session_id, existing: true, testTaken: existing.fit_tier != null };
-      }
-    }
-    s.upsertStudent.run({
-      session_id:    sessionId,
-      first_name:    student.firstName    || '',
-      last_name:     student.lastName     || '',
-      full_name:     student.fullName     || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
-      class:         student.class        || '',
-      section:       student.section      || '',
-      school:        student.school       || '',
-      school_state:  student.schoolState  || '',
-      school_city:   student.schoolCity   || '',
-      age:           String(student.age   || ''),
-      gender:        student.gender       || '',
-      email:         norm,
-      registered_at: student.registeredAt || new Date().toISOString(),
-    });
-
-    // Auto-register a new school in schools_registry if this student's school
-    // isn't already there. schools_registry was previously admin-curated only
-    // (added exclusively via the dashboard's manual "add school" screen), so a
-    // student typing a brand-new school name (the "Other" free-text option at
-    // registration) was silently invisible to School Management's per-school
-    // access and filtering — it existed only as a free-text value on this row.
-    // Defensive: a failure here is a missing side-effect, not a registration
-    // failure, so it must never throw past this point.
-    const schoolName = String(student.school || '').trim();
-    if (schoolName) {
-      try {
-        const already = db.prepare(
-          `SELECT id FROM schools_registry WHERE LOWER(name) = LOWER(?)`
-        ).get(schoolName);
-        if (!already) {
-          db.prepare(`
-            INSERT INTO schools_registry (name, city, state, added_at, active)
-            VALUES (?, ?, ?, ?, 1)
-          `).run(schoolName, student.schoolCity || null, student.schoolState || null, new Date().toISOString());
-          try {
-            db.prepare(`
-              INSERT INTO audit_log (user_id, user_email, action, target, detail, ip, ts)
-              VALUES (NULL, ?, 'school_auto_registered', ?, ?, NULL, ?)
-            `).run(
-              norm || 'unknown',
-              schoolName,
-              JSON.stringify({ city: student.schoolCity || null, state: student.schoolState || null, via: 'student_registration' }),
-              new Date().toISOString()
-            );
-          } catch (_) { /* audit_log missing/unavailable — non-fatal */ }
-        }
-      } catch (_) { /* schools_registry not yet initialised — non-fatal */ }
-    }
-
-    return { session_id: sessionId, existing: false, testTaken: false };
-  });
+  const nowIso = new Date().toISOString();
 
   try {
-    return result();
+    return await pg.tx(async (c) => {
+      // Atomic find-or-create keyed on email. Lookup + insert share one
+      // transaction; the CITEXT unique-ish email index is the cross-process backstop.
+      if (norm) {
+        const existing = await _getStudentByEmailTx(c, norm);
+        if (existing) {
+          return { session_id: existing.session_id, existing: true, testTaken: existing.fit_tier != null };
+        }
+      }
+
+      await c.query(
+        `INSERT INTO students (
+           session_id, first_name, last_name, full_name, class, section,
+           school, school_state, school_city, age, gender, email, registered_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (session_id) DO UPDATE SET
+           first_name   = EXCLUDED.first_name,
+           last_name    = EXCLUDED.last_name,
+           full_name    = EXCLUDED.full_name,
+           class        = EXCLUDED.class,
+           section      = EXCLUDED.section,
+           school       = EXCLUDED.school,
+           school_state = EXCLUDED.school_state,
+           school_city  = EXCLUDED.school_city,
+           age          = EXCLUDED.age,
+           gender       = EXCLUDED.gender,
+           email        = EXCLUDED.email
+           -- registered_at intentionally omitted: preserved after first INSERT`,
+        [
+          sessionId,
+          student.firstName || '',
+          student.lastName  || '',
+          student.fullName  || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+          student.class       || '',
+          student.section     || '',
+          student.school      || '',
+          student.schoolState || '',
+          student.schoolCity  || '',
+          String(student.age || ''),
+          student.gender || '',
+          norm,
+          student.registeredAt || nowIso,
+        ]
+      );
+
+      // Auto-register unseen school names. Best-effort — never fail registration.
+      const schoolName = String(student.school || '').trim();
+      if (schoolName) {
+        try {
+          const already = await c.query(
+            `SELECT id FROM schools_registry WHERE name = $1`, [schoolName]
+          );
+          if (already.rowCount === 0) {
+            await c.query(
+              `INSERT INTO schools_registry (name, city, state, added_at, active)
+               VALUES ($1,$2,$3,$4,TRUE)
+               ON CONFLICT (name) DO NOTHING`,
+              [schoolName, student.schoolCity || null, student.schoolState || null, nowIso]
+            );
+            try {
+              await c.query(
+                `INSERT INTO audit_log (user_id, user_email, action, target, detail, ip, ts)
+                 VALUES (NULL, $1, 'school_auto_registered', $2, $3, NULL, $4)`,
+                [
+                  norm || 'unknown',
+                  schoolName,
+                  JSON.stringify({ city: student.schoolCity || null, state: student.schoolState || null, via: 'student_registration' }),
+                  nowIso,
+                ]
+              );
+            } catch (_) { /* audit_log unavailable — non-fatal */ }
+          }
+        } catch (_) { /* schools_registry unavailable — non-fatal */ }
+      }
+
+      return { session_id: sessionId, existing: false, testTaken: false };
+    });
   } catch (e) {
-    // UNIQUE(email) collision from a simultaneous insert that committed first.
-    // Resolve to the row that won and reuse it — this is success, not error.
-    if (norm && /UNIQUE constraint failed: students.email/i.test(String(e.message))) {
-      const row = s.getStudentByEmail.get(norm);
+    // Concurrent insert committed the same email first — reuse its row.
+    // Postgres unique violation is SQLSTATE 23505.
+    if (norm && (e.code === '23505')) {
+      const row = await getStudentByEmail(norm);
       if (row) return { session_id: row.session_id, existing: true, testTaken: row.fit_tier != null };
     }
     throw e;
   }
 }
 
-function saveSection(sessionId, moduleKey, payload) {
+async function saveSection(sessionId, moduleKey, payload) {
   if (!sessionId)                   throw new Error('saveSection: sessionId is required');
   if (!MODULES.includes(moduleKey)) throw new Error('saveSection: unknown module ' + moduleKey);
+  await _initDb();
 
-  const db  = _initDb();
-  const s   = _prep();
   const now = new Date().toISOString();
   const p   = payload || {};
+  const dur = Math.floor(p.duration || 0);
 
-  db.transaction(() => {
-    s.ensureAssessmentRow.run({ session_id: sessionId, saved_at: now });
-    s.updateModule[moduleKey].run({
-      session_id:       sessionId,
-      saved_at:         now,
-      completed_at:     now,
-      raw_answers:      JSON.stringify(p.raw_answers ?? null),
-      scores_json:      JSON.stringify(p.scores      ?? null),
-      duration_seconds: Math.floor(p.duration || 0),
-    });
-    s.insertSectionProgress.run({
-      session_id:       sessionId,
-      module_key:       moduleKey,
-      submitted_at:     now,
-      duration_seconds: Math.floor(p.duration || 0),
-    });
-  })();
+  await pg.tx(async (c) => {
+    await c.query(
+      `INSERT INTO assessments (session_id, saved_at) VALUES ($1,$2)
+       ON CONFLICT (session_id) DO NOTHING`,
+      [sessionId, now]
+    );
+    await c.query(
+      `UPDATE assessments SET
+         ${moduleKey}_raw_answers      = $2,
+         ${moduleKey}_scores_json      = $3,
+         ${moduleKey}_duration_seconds = $4,
+         ${moduleKey}_completed_at     = $5,
+         saved_at                      = $6
+       WHERE session_id = $1`,
+      [
+        sessionId,
+        JSON.stringify(p.raw_answers ?? null),
+        JSON.stringify(p.scores      ?? null),
+        dur,
+        now,
+        now,
+      ]
+    );
+    await c.query(
+      `INSERT INTO section_progress (session_id, module_key, submitted_at, duration_seconds)
+       VALUES ($1,$2,$3,$4)`,
+      [sessionId, moduleKey, now, dur]
+    );
+  });
 }
 
-function saveReport({ sessionId, student, assessments, report }) {
+async function saveReport({ sessionId, student, assessments, report }) {
   if (!sessionId) throw new Error('saveReport: sessionId is required');
-
-  const db  = _initDb();
-  const s   = _prep();
+  await _initDb();
   const now = new Date().toISOString();
 
-  db.transaction(() => {
+  await pg.tx(async (c) => {
     /* 1) Student */
     if (student) {
-      s.upsertStudent.run({
-        session_id:    sessionId,
-        first_name:    student.firstName    || '',
-        last_name:     student.lastName     || '',
-        full_name:     student.fullName     || '',
-        class:         student.class        || '',
-        section:       student.section      || '',
-        school:        student.school       || '',
-        school_state:  student.schoolState  || '',
-        school_city:   student.schoolCity   || '',
-        age:           String(student.age   || ''),
-        gender:        student.gender       || '',
-        email:         student.email        || '',
-        registered_at: student.registeredAt || now,
-      });
+      const norm = String(student.email || '').toLowerCase().trim();
+      await c.query(
+        `INSERT INTO students (
+           session_id, first_name, last_name, full_name, class, section,
+           school, school_state, school_city, age, gender, email, registered_at
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (session_id) DO UPDATE SET
+           first_name   = EXCLUDED.first_name,
+           last_name    = EXCLUDED.last_name,
+           full_name    = EXCLUDED.full_name,
+           class        = EXCLUDED.class,
+           section      = EXCLUDED.section,
+           school       = EXCLUDED.school,
+           school_state = EXCLUDED.school_state,
+           school_city  = EXCLUDED.school_city,
+           age          = EXCLUDED.age,
+           gender       = EXCLUDED.gender,
+           email        = EXCLUDED.email`,
+        [
+          sessionId,
+          student.firstName || '',
+          student.lastName  || '',
+          student.fullName  || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+          student.class       || '',
+          student.section     || '',
+          student.school      || '',
+          student.schoolState || '',
+          student.schoolCity  || '',
+          String(student.age || ''),
+          student.gender || '',
+          norm,
+          student.registeredAt || now,
+        ]
+      );
     }
 
     /* 2) Assessments */
     if (assessments && typeof assessments === 'object') {
-      s.ensureAssessmentRow.run({ session_id: sessionId, saved_at: now });
+      await c.query(
+        `INSERT INTO assessments (session_id, saved_at) VALUES ($1,$2)
+         ON CONFLICT (session_id) DO NOTHING`,
+        [sessionId, now]
+      );
       for (const m of MODULES) {
         let p = assessments[m];
         if (!p && m.startsWith('daab_') && assessments.daab) p = assessments.daab[m.slice(5)];
         if (!p) continue;
-        s.updateModule[m].run({
-          session_id:       sessionId,
-          saved_at:         now,
-          completed_at:     p.completed_at || now,
-          raw_answers:      JSON.stringify(p.raw_answers ?? null),
-          scores_json:      JSON.stringify(p.scores      ?? null),
-          duration_seconds: Math.floor(p.duration || 0),
-        });
+        await c.query(
+          `UPDATE assessments SET
+             ${m}_raw_answers      = $2,
+             ${m}_scores_json      = $3,
+             ${m}_duration_seconds = $4,
+             ${m}_completed_at     = $5,
+             saved_at              = $6
+           WHERE session_id = $1`,
+          [
+            sessionId,
+            JSON.stringify(p.raw_answers ?? null),
+            JSON.stringify(p.scores      ?? null),
+            Math.floor(p.duration || 0),
+            p.completed_at || now,
+            now,
+          ]
+        );
       }
     }
 
-    /* 3) Derive display rows */
+    /* 3) Derive display rows (pure, no DB) */
     const personality = _derivePersonality(assessments || {});
     const aptitude    = _deriveAptitude(assessments    || {});
     const interests   = _deriveInterests(assessments   || {});
     const seaa        = _deriveSeaa(assessments        || {});
-    const careers     = _deriveCareers(report         || {}, interests);
+    const careers     = _deriveCareers(report          || {}, interests);
 
-    /* 4) Child-table upserts (Bug 2 fix) */
-    for (const row of personality) s.upsertPersonality.run({ session_id: sessionId, ...row });
-    for (const row of aptitude)    s.upsertAptitude.run({ session_id: sessionId, ...row });
-    for (const row of interests)   s.upsertInterest.run({ session_id: sessionId, ...row });
-    for (const row of seaa)        s.upsertSeaa.run({ session_id: sessionId, ...row });
-    s.deleteCareersBySession.run(sessionId);   // careers are position-keyed, safe inside transaction
-    for (const row of careers)     s.upsertCareer.run({ session_id: sessionId, ...row });
+    /* 4) Child-table upserts */
+    for (const row of personality) {
+      await c.query(
+        `INSERT INTO report_personality (session_id, position, name, stanine, band)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (session_id, position) DO UPDATE SET
+           name = EXCLUDED.name, stanine = EXCLUDED.stanine, band = EXCLUDED.band`,
+        [sessionId, row.position, row.name, row.stanine, row.band]
+      );
+    }
+    for (const row of aptitude) {
+      await c.query(
+        `INSERT INTO report_aptitude (session_id, position, key, name, stanine, band, raw_score, max_score)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         ON CONFLICT (session_id, key) DO UPDATE SET
+           position = EXCLUDED.position, name = EXCLUDED.name, stanine = EXCLUDED.stanine,
+           band = EXCLUDED.band, raw_score = EXCLUDED.raw_score, max_score = EXCLUDED.max_score`,
+        [sessionId, row.position, row.key, row.name, row.stanine, row.band, row.raw_score, row.max_score]
+      );
+    }
+    for (const row of interests) {
+      await c.query(
+        `INSERT INTO report_interests (session_id, rank, label, score, level)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (session_id, rank) DO UPDATE SET
+           label = EXCLUDED.label, score = EXCLUDED.score, level = EXCLUDED.level`,
+        [sessionId, row.rank, row.label, row.score, row.level]
+      );
+    }
+    for (const row of seaa) {
+      await c.query(
+        `INSERT INTO report_seaa (session_id, key, title, score, category, cat_label)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         ON CONFLICT (session_id, key) DO UPDATE SET
+           title = EXCLUDED.title, score = EXCLUDED.score,
+           category = EXCLUDED.category, cat_label = EXCLUDED.cat_label`,
+        [sessionId, row.key, row.title, row.score, row.category, row.cat_label]
+      );
+    }
+    // Careers are position-keyed; clear then re-insert inside the same tx.
+    await c.query(`DELETE FROM report_careers WHERE session_id = $1`, [sessionId]);
+    for (const row of careers) {
+      await c.query(
+        `INSERT INTO report_careers (
+           session_id, position, career, cluster,
+           interest_fit, aptitude_fit, personality_fit, seaa_fit,
+           suitability_pct, alignment, rationale
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          sessionId, row.position, row.career, row.cluster,
+          row.interest_fit, row.aptitude_fit, row.personality_fit, row.seaa_fit,
+          row.suitability_pct, row.alignment, row.rationale,
+        ]
+      );
+    }
 
-    /* 5) Report summary (Bug 3 fix) */
+    /* 5) Report summary (fallback prose-preservation guard) */
     if (report && typeof report === 'object') {
       const PROSE_FIELDS = [
         'holistic_summary','aptitude_profile','interest_profile',
@@ -770,92 +322,189 @@ function saveReport({ sessionId, student, assessments, report }) {
       const missing = PROSE_FIELDS.filter(f => !report[f]);
       if (missing.length) process.stderr.write('[WARN]  [DB] saveReport: missing AI fields for ' + sessionId + ' — ' + missing.join(', ') + '\n');
 
-      const summary = _deriveSummary(personality, aptitude, interests, seaa, careers, report);
-      s.upsertReportSummary.run({
-        session_id:          sessionId,
-        generated_at:        now,
-        is_fallback:         report._fallback ? 1 : 0,
-        holistic_summary:    report.holistic_summary    || '',
-        aptitude_profile:    report.aptitude_profile    || '',
-        interest_profile:    report.interest_profile    || '',
-        internal_motivators: report.internal_motivators || '',
-        personality_profile: report.personality_profile || '',
-        wellbeing_guidance:  report.wellbeing_guidance  || '',
-        stream_advice:       report.stream_advice       || '',
-        ...summary,
-      });
-      s.markReportTimestamp.run({ session_id: sessionId, ts: now });
+      const summary    = _deriveSummary(personality, aptitude, interests, seaa, careers, report);
+      const isFallback = !!report._fallback;
+
+      await c.query(
+        `INSERT INTO report_summary (
+           session_id, generated_at, is_fallback,
+           holistic_summary, aptitude_profile, interest_profile,
+           internal_motivators, personality_profile, wellbeing_guidance, stream_advice,
+           avg_personality_stanine, avg_aptitude_stanine, top_interest_score,
+           fit_score, fit_tier,
+           personality_status, aptitude_status, interest_status, seaa_status,
+           strong_fit_pathways, emerging_fit_pathways, exploratory_pathways,
+           recommended_primary, recommended_alternate, recommended_exploratory,
+           top_personality_traits_json, strong_aptitudes_json, emerging_aptitudes_json,
+           top3_interests_json
+         ) VALUES (
+           $1,$2,$3,
+           $4,$5,$6,
+           $7,$8,$9,$10,
+           $11,$12,$13,
+           $14,$15,
+           $16,$17,$18,$19,
+           $20,$21,$22,
+           $23,$24,$25,
+           $26,$27,$28,
+           $29
+         )
+         ON CONFLICT (session_id) DO UPDATE SET
+           generated_at = EXCLUDED.generated_at,
+           is_fallback  = EXCLUDED.is_fallback,
+           holistic_summary    = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.holistic_summary    ELSE report_summary.holistic_summary    END,
+           aptitude_profile    = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.aptitude_profile    ELSE report_summary.aptitude_profile    END,
+           interest_profile    = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.interest_profile    ELSE report_summary.interest_profile    END,
+           internal_motivators = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.internal_motivators ELSE report_summary.internal_motivators END,
+           personality_profile = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.personality_profile ELSE report_summary.personality_profile END,
+           wellbeing_guidance  = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.wellbeing_guidance  ELSE report_summary.wellbeing_guidance  END,
+           stream_advice       = CASE WHEN EXCLUDED.is_fallback = FALSE THEN EXCLUDED.stream_advice       ELSE report_summary.stream_advice       END,
+           avg_personality_stanine     = EXCLUDED.avg_personality_stanine,
+           avg_aptitude_stanine        = EXCLUDED.avg_aptitude_stanine,
+           top_interest_score          = EXCLUDED.top_interest_score,
+           fit_score                   = EXCLUDED.fit_score,
+           fit_tier                    = EXCLUDED.fit_tier,
+           personality_status          = EXCLUDED.personality_status,
+           aptitude_status             = EXCLUDED.aptitude_status,
+           interest_status             = EXCLUDED.interest_status,
+           seaa_status                 = EXCLUDED.seaa_status,
+           strong_fit_pathways         = EXCLUDED.strong_fit_pathways,
+           emerging_fit_pathways       = EXCLUDED.emerging_fit_pathways,
+           exploratory_pathways        = EXCLUDED.exploratory_pathways,
+           recommended_primary         = EXCLUDED.recommended_primary,
+           recommended_alternate       = EXCLUDED.recommended_alternate,
+           recommended_exploratory     = EXCLUDED.recommended_exploratory,
+           top_personality_traits_json = EXCLUDED.top_personality_traits_json,
+           strong_aptitudes_json       = EXCLUDED.strong_aptitudes_json,
+           emerging_aptitudes_json     = EXCLUDED.emerging_aptitudes_json,
+           top3_interests_json         = EXCLUDED.top3_interests_json`,
+        [
+          sessionId, now, isFallback,
+          report.holistic_summary    || '',
+          report.aptitude_profile    || '',
+          report.interest_profile    || '',
+          report.internal_motivators || '',
+          report.personality_profile || '',
+          report.wellbeing_guidance  || '',
+          report.stream_advice       || '',
+          summary.avg_personality_stanine,
+          summary.avg_aptitude_stanine,
+          summary.top_interest_score,
+          summary.fit_score,
+          summary.fit_tier,
+          summary.personality_status,
+          summary.aptitude_status,
+          summary.interest_status,
+          summary.seaa_status,
+          summary.strong_fit_pathways,
+          summary.emerging_fit_pathways,
+          summary.exploratory_pathways,
+          summary.recommended_primary,
+          summary.recommended_alternate,
+          summary.recommended_exploratory,
+          summary.top_personality_traits_json,
+          summary.strong_aptitudes_json,
+          summary.emerging_aptitudes_json,
+          summary.top3_interests_json,
+        ]
+      );
+
+      await c.query(`UPDATE students SET report_generated_at = $2 WHERE session_id = $1`, [sessionId, now]);
     } else {
       process.stderr.write('[WARN]  [DB] saveReport: no report object for session ' + sessionId + '\n');
     }
 
     /* 6) Mark completed */
-    s.markCompleted.run({ session_id: sessionId, ts: now });
-  })();
+    await c.query(`UPDATE students SET completed_at = $2 WHERE session_id = $1`, [sessionId, now]);
+  });
 }
 
-function getFullReport(sessionId) {
-  const s = _prep();
+/* Read-time derivation from a raw assessments row (columns *_scores_json).
+   Pure — no DB access. Unchanged from the SQLite version. */
+function deriveDisplayRowsFromAssessmentRow(row) {
+  if (!row) return { personality: [], aptitude: [], interests: [], seaa: [] };
+  const jp = (v) => { try { return JSON.parse(v); } catch { return null; } };
+  const a = {
+    cpi:  { scores: jp(row.cpi_scores_json) },
+    sea:  { scores: jp(row.sea_scores_json) },
+    nmap: { scores: jp(row.nmap_scores_json) },
+  };
+  for (const k of ['va','pa','na','lsa','hma','ar','ma','sa'])
+    a['daab_' + k] = { scores: jp(row['daab_' + k + '_scores_json']) };
   return {
-    student:     s.getStudent.get(sessionId),
-    assessments: s.getAssessment.get(sessionId),
-    summary:     s.getSummary.get(sessionId),
-    personality: s.getPersonality.all(sessionId),
-    aptitude:    s.getAptitude.all(sessionId),
-    interests:   s.getInterests.all(sessionId),
-    seaa:        s.getSeaa.all(sessionId),
-    careers:     s.getCareers.all(sessionId),
+    personality: row.nmap_scores_json ? _derivePersonality(a) : [],
+    aptitude:    Object.keys(a).some(k => k.startsWith('daab_') && a[k].scores) ? _deriveAptitude(a) : [],
+    interests:   _deriveInterests(a),
+    seaa:        row.sea_scores_json ? _deriveSeaa(a) : [],
   };
 }
 
-function getSectionProgress(sessionId) {
-  return _initDb().prepare(`
-    SELECT module_key, submitted_at, duration_seconds
-    FROM section_progress WHERE session_id = ? ORDER BY id ASC
-  `).all(sessionId);
+async function getFullReport(sessionId) {
+  await _initDb();
+  const [student, assessments, summary, personality, aptitude, interests, seaa, careers] = await Promise.all([
+    pg.one(`SELECT * FROM students          WHERE session_id = $1`, [sessionId]),
+    pg.one(`SELECT * FROM assessments       WHERE session_id = $1`, [sessionId]),
+    pg.one(`SELECT * FROM report_summary    WHERE session_id = $1`, [sessionId]),
+    pg.many(`SELECT * FROM report_personality WHERE session_id = $1 ORDER BY position`, [sessionId]),
+    pg.many(`SELECT * FROM report_aptitude    WHERE session_id = $1 ORDER BY position`, [sessionId]),
+    pg.many(`SELECT * FROM report_interests   WHERE session_id = $1 ORDER BY rank`,     [sessionId]),
+    pg.many(`SELECT * FROM report_seaa        WHERE session_id = $1`,                   [sessionId]),
+    pg.many(`SELECT * FROM report_careers     WHERE session_id = $1 ORDER BY position`, [sessionId]),
+  ]);
+  return { student, assessments, summary, personality, aptitude, interests, seaa, careers };
 }
 
-/* NEW: Lookup most recent session for an email + summary snapshot */
-function getStudentByEmail(email) {
+async function getSectionProgress(sessionId) {
+  await _initDb();
+  return pg.many(
+    `SELECT module_key, submitted_at, duration_seconds
+     FROM section_progress WHERE session_id = $1 ORDER BY id ASC`,
+    [sessionId]
+  );
+}
+
+/* Shared email → student+summary snapshot query (used in and out of tx). */
+const _EMAIL_LOOKUP_SQL = `
+  SELECT s.*, rs.fit_tier, rs.fit_score, rs.recommended_primary, rs.seaa_status
+  FROM students s
+  LEFT JOIN report_summary rs ON rs.session_id = s.session_id
+  WHERE s.email = $1
+  ORDER BY s.registered_at DESC
+  LIMIT 1`;
+
+async function _getStudentByEmailTx(client, norm) {
+  const r = await client.query(_EMAIL_LOOKUP_SQL, [norm]);
+  return r.rows[0] || null;
+}
+
+async function getStudentByEmail(email) {
   if (!email) return null;
-  return _prep().getStudentByEmail.get(String(email).toLowerCase().trim()) || null;
+  await _initDb();
+  return pg.one(_EMAIL_LOOKUP_SQL, [String(email).toLowerCase().trim()]);
 }
 
-/* ── Email-identity resolver ──────────────────────────────────────
-   The single source of truth for "what session_id owns this email".
-   Used by /api/save-registration (student login/registration) so that:
-     • email already in DB  → reuse that row's session_id (no new row)
-     • email not in DB      → caller creates one row with the given sid
-   Returns { session_id, exists, testTaken }.
-     testTaken === true  ⇢ a report exists in the backend for this email
-                          (this is the ONLY definition of "test taken").
-   Because students.email is UNIQUE, there is at most one row per email,
-   so this is unambiguous and race-safe (the UNIQUE index is the backstop
-   if two requests try to insert the same email simultaneously).
-─────────────────────────────────────────────────────────────────── */
-function resolveStudentByEmail(email) {
+async function resolveStudentByEmail(email) {
   const norm = String(email || '').toLowerCase().trim();
   if (!norm) return { session_id: null, exists: false, testTaken: false };
-  const row = _prep().getStudentByEmail.get(norm);
+  await _initDb();
+  const row = await pg.one(_EMAIL_LOOKUP_SQL, [norm]);
   if (!row) return { session_id: null, exists: false, testTaken: false };
-  // getStudentByEmail LEFT JOINs report_summary; fit_tier is non-null only
-  // when a report row exists. That is our "report exists in backend" test.
-  const testTaken = row.fit_tier != null;
-  return { session_id: row.session_id, exists: true, testTaken };
+  return { session_id: row.session_id, exists: true, testTaken: row.fit_tier != null };
 }
 
-function close() {
-  if (_db) {
-    try { _db.close(); } catch (_) {}
-    _db    = null;
-    _stmts = null;
-  }
+async function getStudentBySessionId(sessionId) {
+  if (!sessionId) return null;
+  await _initDb();
+  return pg.one(`SELECT * FROM students WHERE session_id = $1`, [String(sessionId)]);
+}
+
+async function close() {
+  await pg.close();
+  _schemaReady = null;
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   DERIVATION HELPERS
-   Mirror download.js so the DB always stores the same values the
-   PDF renders. Keep these in sync if download.js changes.
+   DERIVATION HELPERS  (pure — no DB access; carried over verbatim)
 ══════════════════════════════════════════════════════════════════ */
 
 const NMAP_TITLES = [
@@ -955,7 +604,6 @@ function _deriveCareers(report, derivedInterests) {
     });
   }
 
-  // Fallback: derive from top interests when no career table exists
   return (derivedInterests || []).slice(0, 6).map((it, i) => ({
     position: i, career: it.label, cluster: it.label,
     interest_fit: it.level === 'Strong' ? 'High' : it.level === 'Moderate' ? 'Moderate' : 'Low',
@@ -974,7 +622,7 @@ function _deriveSummary(personality, aptitude, interests, seaa, careers, report)
   const _pct = (s) => ((s - 1) / 8) * 100;
   let fitRaw  = (_pct(avgPers) * 0.30) + (_pct(avgApt) * 0.30) + ((topInterestScore / 20) * 100 * 0.40);
   for (const c of seaa) {
-    if (c.cat_label === 'Support Needed')          fitRaw -= 7;
+    if (c.cat_label === 'Support Needed')            fitRaw -= 7;
     else if (c.cat_label === 'Developing Readiness') fitRaw -= 3;
   }
   const fitScore = Math.max(0, Math.min(100, Math.round(fitRaw)));
@@ -1021,15 +669,8 @@ function _deriveSummary(personality, aptitude, interests, seaa, careers, report)
   };
 }
 
-/* ══════════════════════════════════════════════════════════════════
-   EXPORTS
-══════════════════════════════════════════════════════════════════ */
-function getStudentBySessionId(sessionId) {
-  if (!sessionId) return null;
-  return _prep().getStudent.get(String(sessionId)) || null;
-}
-
 module.exports = {
+  deriveDisplayRowsFromAssessmentRow,
   _initDb,
   saveRegistration,
   saveSection,
