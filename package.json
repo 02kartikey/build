@@ -4,7 +4,7 @@
   "description": "NuMind MAPS \u2014 Multi-dimensional Assessment & Profiling System",
   "main": "server.js",
   "engines": {
-    "node": ">=18.0.0"
+    "node": "22.x"
   },
   "scripts": {
     "start": "node server.js",
@@ -23,7 +23,6 @@
     "db:migrate:dry": "node migrate-sqlite-to-pg.js --dry-run"
   },
   "dependencies": {
-    "better-sqlite3": "^11.10.0",
     "dotenv": "^16.4.5",
     "pg": "^8.13.1"
   },
