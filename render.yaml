@@ -1,0 +1,97 @@
+# ============================================================================
+# render.yaml — NuMind MAPS
+# ----------------------------------------------------------------------------
+# Creates the Postgres instance AND the web service, and wires DATABASE_URL
+# between them automatically via `fromDatabase`. No copy-pasting a URL, and
+# no way to point at 127.0.0.1 by accident.
+#
+# Apply: commit this to the repo root, then in Render:
+#   New  →  Blueprint  →  pick this repo  →  Apply
+# ============================================================================
+
+databases:
+  - name: numind-db
+    databaseName: numind
+    user: numind
+    region: singapore          # closest Render region to India (~100-150ms)
+    plan: basic-256mb          # NOT free: free DBs expire and block pooling
+    postgresMajorVersion: "16"
+    ipAllowList: []            # internal-only. No public internet access.
+                               # To load local data, temporarily add your IP
+                               # in the dashboard, then set it back to empty.
+
+services:
+  - type: web
+    name: numind-maps
+    runtime: node
+    region: singapore          # MUST match the database region, or the
+                               # internal URL will not resolve.
+    plan: starter              # NOT free: free web services block outbound
+                               # SMTP ports 25/465/587, which kills all email.
+    branch: main
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health   # server.js:1355
+    autoDeploy: true
+
+    envVars:
+      # ---- Database: injected by Render, always the correct internal URL ----
+      - key: DATABASE_URL
+        fromDatabase:
+          name: numind-db
+          property: connectionString
+
+      # ---- Runtime ----
+      - key: NODE_VERSION
+        value: "22.23.1"
+      - key: LOG_LEVEL
+        value: warn
+
+      # NOTE: PORT is deliberately absent — Render injects it and server.js:42
+      # reads process.env.PORT. Setting it by hand only risks a mismatch.
+      #
+      # NOTE: PGSSL is deliberately absent — pg-core.js already defaults to
+      # SSL-on for the DATABASE_URL path. Setting PGSSL=disable breaks Render.
+      #
+      # NOTE: IP_RL_MAX is deliberately absent — it defaults to 200 in
+      # server.js:201. The value 1000000 is the LOAD-TEST override and must
+      # never reach production; it disables IP rate limiting entirely.
+
+      # ---- Secrets: Render prompts for these on Apply, never in git ----
+      - key: APP_TOKEN
+        generateValue: true    # Render generates a fresh secure random value.
+                               # Safe: server.js:308 injects it into the page
+                               # meta tag and the client reads it back, so no
+                               # hardcoded value needs to match. Also rotates
+                               # the token that leaked in your screenshot.
+      - key: OPENAI_API_KEY
+        sync: false            # paste the NEW key (rotate the leaked one)
+      - key: SMTP_PASS
+        sync: false            # Gmail app password
+      - key: ALLOWED_ORIGIN
+        sync: false            # your real domain, e.g. https://maps.numind.co.in
+
+      # ---- Email ----
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USER
+        value: social.numind@gmail.com
+      - key: NOTIFICATION_EMAIL
+        value: social.numind@gmail.com
+
+      # ---- AI models ----
+      - key: OPENAI_MODEL
+        value: gpt-4o          # full report generation
+      - key: COUNSELLOR_MODEL
+        value: gpt-4o-mini     # Aria chat. gpt-4 is ~an order of magnitude
+                               # more expensive for high-volume student chat.
+
+      # ---- Capacity (WEB_CONCURRENCY=1 on starter → one process) ----
+      - key: PG_POOL_MAX
+        value: "10"
+      - key: MAX_CONCURRENT_AI
+        value: "20"
+      - key: MAX_CONCURRENT_CHAT
+        value: "40"
