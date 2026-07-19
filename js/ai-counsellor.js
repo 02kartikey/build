@@ -71,6 +71,7 @@ const _AC = {
   conversationId:  null,
   reportSummary:   null,
   fullScores:      null,  // full score arrays from unlock — enables report panel for returning users
+  journey:         null,  // longitudinal growth across classes — enables the journey banner
 };
 
 /* ── DOM helpers ────────────────────────────────────────────────── */
@@ -482,6 +483,7 @@ function _acApplySession(data) {
   _AC.messages      = (data.history || []).map(function(h){ return { role: h.role, content: h.content }; });
   _AC.reportSummary = data.reportSummary || null;
   _AC.fullScores    = data.fullScores    || null;
+  _AC.journey       = data.journey       || null;
   if (data.counsellorToken) {
     _AC.counsellorToken = data.counsellorToken;
     try { localStorage.setItem('nmind_ac_ctok', data.counsellorToken); } catch(_) {}
@@ -578,13 +580,16 @@ async function acSend() {
       if (done) break;
       fullText += decoder.decode(value, { stream: true });
       streamEl.innerHTML = '';
-      streamEl.appendChild(window._acRenderMarkdown(fullText));
+      streamEl.appendChild(window._acRenderMarkdown(
+        window.NMGoals ? window.NMGoals.stripMilestones(fullText) : fullText));
       _acScrollToBottom('acp-messages');
     }
 
     // Final render to guarantee fully-formatted output once streaming ends
     streamEl.innerHTML = '';
-    streamEl.appendChild(window._acRenderMarkdown(fullText));
+    streamEl.appendChild(window._acRenderMarkdown(
+      window.NMGoals ? window.NMGoals.stripMilestones(fullText) : fullText));
+    if (window.NMGoals) window.NMGoals.renderAcceptCards(streamEl, fullText);
     streamEl.classList.remove('ac-streaming');
     // Only record assistant turn if we actually got content
     if (fullText.trim()) {

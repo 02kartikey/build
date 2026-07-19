@@ -3,7 +3,7 @@
    Page navigation, resume overlay, registration.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S, _clearSession, _restoreSession, _saveSession, DB, _isConfigured } from './state.js';
+import { S, _clearSession, _restoreSession, _saveSession, DB, _isConfigured, resetAssessmentState } from './state.js';
 import { showDbStatus } from './db-status.js';
 import { startNMAP, renderNMAPPage, renderNMAPSidebarNav, startTimer } from './ui/nmap-page.js';
 import { renderCPIQ } from './ui/cpi-page.js';
@@ -239,6 +239,44 @@ async function doRegister() {
 
     showDbStatus('saved', '✓ Details saved!');
 
+    // Journey lock: already completed the assessment for THIS class. No retake
+    // in the same class — they can retake only after moving up a class. Route
+    // them to the AI counsellor to view their report and progress.
+    if (data && data.attemptedThisClass) {
+      window.alert(
+        'You have already completed the NuMind MAPS assessment for ' + (S.student.class || 'this class') + '.\n\n' +
+        'You can take it again next year in your next class — that is how we map your growth journey and show how far you have come.\n\n' +
+        'We will take you to your AI Counsellor, where you can view your report and track your progress.'
+      );
+      _saveSession('register');
+      if (typeof goPage === 'function') goPage('counsellor'); else startNMAP();
+      return;
+    }
+
+    // Returning student whose class has advanced → a NEW attempt that adds a
+    // fresh point to their growth journey (their earlier attempts are preserved).
+    if (data && data.attemptsCount > 0) {
+      const proceed = window.confirm(
+        'Welcome back! You last completed the assessment in ' + (data.lastAttemptClass || 'an earlier class') + '.\n\n' +
+        'Taking it now in ' + (S.student.class || 'your new class') + ' adds a new point to your growth journey, so you and your counsellor can see how you have progressed since then.\n\n' +
+        'Click OK to begin, or Cancel to visit your AI Counsellor.'
+      );
+      if (proceed) {
+        // Fresh attempt — clear the previous sitting's answers/scores so the
+        // student actually re-takes the test (otherwise pages prefill the old
+        // responses and the "new" attempt just re-submits an identical report).
+        resetAssessmentState();
+        _saveSession('register');
+        startNMAP();
+      } else {
+        _saveSession('register');
+        if (typeof goPage === 'function') goPage('counsellor'); else startNMAP();
+      }
+      return;
+    }
+
+    // Legacy path: a report exists but predates journey tracking (no attempt
+    // history). Preserve the original retake-overwrites behaviour for these.
     // Test-already-taken gate: testTaken means a report exists in the backend.
     // The results page renders from LOCAL state only, so a returning user must
     // go to the AI counsellor (DB-backed) to view it — or explicitly retake.
@@ -248,12 +286,17 @@ async function doRegister() {
         'Click OK to RETAKE the test (this will update your existing report), ' +
         'or Cancel to go to your AI Counsellor to discuss your existing results.'
       );
-      _saveSession('register');
       if (retake) {
+        // Retake = a genuine fresh sitting, not a re-submit of the old answers.
+        resetAssessmentState();
+        _saveSession('register');
         startNMAP(); // flows into the same session_id row, regenerates report
       } else if (typeof goPage === 'function') {
+        _saveSession('register');
         goPage('counsellor'); // existing report lives here, loaded from DB
       } else {
+        resetAssessmentState();
+        _saveSession('register');
         startNMAP();
       }
       return;

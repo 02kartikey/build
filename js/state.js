@@ -287,6 +287,43 @@ function clearState() {
   }
 }
 
+/* Reset the IN-MEMORY assessment answers/scores to blank for a fresh attempt,
+   and drop the persisted snapshots so a reload can't restore the old answers.
+   Keeps identity (S.student / S.sessionId). Used when a returning student
+   starts a NEW attempt (next class) or retakes — otherwise the pages prefill
+   from the previous sitting and the "new" attempt just re-submits old answers,
+   producing an identical report with no real growth to map. Uses splice so any
+   live references held by the assessment pages to S.<mod>.answers stay valid. */
+function resetAssessmentState() {
+  S.cpi.answers.splice(0, S.cpi.answers.length, ...Array.from({ length: 20 }, () => []));
+  S.cpi.scores = null; S.cpi.startTime = null; S.cpi.duration = 0; S.cpi.currentQ = 0;
+
+  S.sea.answers.splice(0, S.sea.answers.length, ...new Array(60).fill(null));
+  S.sea.scores = null; S.sea.startTime = null; S.sea.duration = 0; S.sea.currentPage = 0;
+
+  S.nmap.answers.splice(0, S.nmap.answers.length, ...new Array(63).fill(null));
+  S.nmap.scores = null; S.nmap.startTime = null; S.nmap.duration = 0; S.nmap.currentDim = 0;
+
+  const _daabLens = { va: 20, pa: 50, na: 20, lsa: 20, hma: 20, ar: 20, ma: 20, sa: 20 };
+  Object.keys(_daabLens).forEach((k) => {
+    const sub = S.daab[k];
+    if (!sub) return;
+    sub.answers.splice(0, sub.answers.length, ...new Array(_daabLens[k]).fill(null));
+    sub.scores = null; sub.startTime = null; sub.duration = 0; sub.timerStartedAt = null;
+    if ('currentPage' in sub) sub.currentPage = 0;
+  });
+  S.daab.currentSub = 0;
+
+  // Clear both persistence layers so a boot-time restore can't repopulate S.
+  try { _clearSession(); } catch (_) {}
+  try {
+    if (S.sessionId) localStorage.removeItem('nm_state_' + S.sessionId);
+    localStorage.removeItem('nm_last_session');
+  } catch (_) {}
+
+  _log.log('[NM] Assessment state reset for a fresh attempt.');
+}
+
 /* Sweep stale nm_state_* keys on load: shared/kiosk devices accumulate
    orphaned per-session snapshots until localStorage hits quota. Drop keys
    older than 4h or with unparseable payloads. */
@@ -323,4 +360,4 @@ function clearState() {
   }
 })();
 
-export { _isConfigured, DB, S, _SESSION_KEY, _saveSession, _clearSession, _restoreSession, saveState, loadState, clearState };
+export { _isConfigured, DB, S, _SESSION_KEY, _saveSession, _clearSession, _restoreSession, saveState, loadState, clearState, resetAssessmentState };

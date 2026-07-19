@@ -405,6 +405,45 @@ function _applyUnlocked(name,messages){
     if(chips.length){strip.innerHTML=chips.map(function(c){return'<span>'+c+'</span>';}).join('');strip.style.display='flex';}
   })();
 
+  /* growth journey banner — shows the student their progress across classes,
+     and makes it visible that Aria is aware of their journey */
+  (function(){
+    try{
+      var AC=window._AC; if(!AC||!AC.journey||!AC.journey.has_journey) return;
+      var strip=document.getElementById('acp-report-strip'); var host=strip&&strip.parentNode; if(!host) return;
+      function es(s){return String(s==null?'':s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+      var A=AC.journey.attempts||[], D=AC.journey.deltas||[], last=D[D.length-1]||null;
+      var sign=function(n){return n>0?'+'+n:''+n;};
+      var metrics=[];
+      if(last){
+        if(typeof last.fit_score_delta==='number') metrics.push({t:'Overall fit',d:last.fit_score_delta,x:(last.fit_tier_from&&last.fit_tier_to&&last.fit_tier_from!==last.fit_tier_to)?(es(last.fit_tier_from)+' → '+es(last.fit_tier_to)):''});
+        if(typeof last.avg_aptitude_delta==='number'&&last.avg_aptitude_delta!==0) metrics.push({t:'Aptitude',d:last.avg_aptitude_delta,x:''});
+        if(typeof last.avg_personality_delta==='number'&&last.avg_personality_delta!==0) metrics.push({t:'Personality',d:last.avg_personality_delta,x:''});
+      }
+      var path=A.map(function(a){return es(a.class);}).join(' → ');
+      var el=document.getElementById('acp-journey-banner');
+      if(!el){ el=document.createElement('div'); el.id='acp-journey-banner'; el.className='acp-journey-banner'; strip.insertAdjacentElement('afterend',el); }
+      var html='<span class="acp-jb-title">📈 Your growth journey</span>'+
+               '<span class="acp-jb-path">'+path+'</span>';
+      metrics.forEach(function(m){
+        var up=m.d>0, flat=m.d===0;
+        html+='<span class="acp-jb-metric '+(flat?'flat':(up?'up':'down'))+'">'+es(m.t)+' '+(flat?'':(up?'▲':'▼'))+' '+es(sign(m.d))+(m.x?' <em>('+m.x+')</em>':'')+'</span>';
+      });
+      if(AC.journey.overall && AC.journey.overall.narrative){
+        html+='<span class="acp-jb-summary">'+es(AC.journey.overall.narrative)+'</span>';
+      }
+      html+='<button type="button" class="acp-jb-ask">Ask Aria about my progress</button>';
+      el.innerHTML=html;
+      el.style.display='flex';
+      var askBtn=el.querySelector('.acp-jb-ask');
+      if(askBtn) askBtn.addEventListener('click',function(){
+        var inp=document.getElementById('acp-input');
+        if(inp){ inp.value="Can you walk me through how I've grown since my last assessment?"; if(typeof _acResizeTextarea==='function'){try{_acResizeTextarea(inp);}catch(_){}} }
+        if(typeof window.acSend==='function') window.acSend();
+      });
+    }catch(_){}
+  })();
+
   /* sidebar */
   var card=document.getElementById('acp-user-card'),av=document.getElementById('acp-sb-av'),nm=document.getElementById('acp-sb-name'),clr=document.getElementById('acp-sb-clear');
   if(card)card.style.display='';if(av)av.textContent=name.charAt(0).toUpperCase();if(nm)nm.textContent=name;if(clr)clr.style.display='';
@@ -522,6 +561,7 @@ _acWhenReady(function(){
         AC.email=stored.email; AC.name=data.name||stored.name||'Student';
         AC.unlocked=true; AC.messages=(data.history||[]).map(function(h){return{role:h.role,content:h.content};});
         AC.reportSummary=data.reportSummary||null;
+        AC.journey=data.journey||null;
         AC._serverConvs=data.conversations||[];
         /* Build sessions from server */
         _sessions=[];
