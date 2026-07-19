@@ -131,10 +131,10 @@ function buildInterp(cpi, sea) {
 
   let narrative = `Your strongest career interest is <strong>${top.label}</strong> (score: ${top.score}/20 — ${top.level}), with great secondary interest in <strong>${(cpi.top3[1]||{label:'—'}).label}</strong> and <strong>${(cpi.top3[2]||{label:'—'}).label}</strong>. `;
   if (badCount===0) {
-    narrative += `Your SEL readiness is healthy across all three dimensions — that's a fantastic foundation. You're set up to chase your interests with real confidence! 💪`;
+    narrative += `Your SEAA readiness is healthy across all three dimensions — that's a fantastic foundation. You're set up to chase your interests with real confidence! 💪`;
   } else {
     const weak=[];
-    if(!emoOk) weak.push('emotional SEL readiness');
+    if(!emoOk) weak.push('emotional SEAA readiness');
     if(!socOk) weak.push('social connections');
     if(!acaOk) weak.push('academic engagement');
     narrative += `There are some signs of difficulty in ${weak.join(' and ')}. With the right support, you can work on these alongside your career goals — one doesn't have to wait for the other.`;
@@ -154,7 +154,7 @@ function buildInterp(cpi, sea) {
         <div class="iscard-sub">Score: ${top.score}/20 · ${top.level}<br>2nd: ${(cpi.top3[1]||{label:'—'}).label} · 3rd: ${(cpi.top3[2]||{label:'—'}).label}</div>
       </div>
       <div class="iscard">
-        <div class="eyebrow">SEL Readiness Summary</div>
+        <div class="eyebrow">SEAA Readiness Summary</div>
         <div class="iscard-title"><span class="bar-bdg ${adjustCls}" style="display:inline-block;margin-bottom:5px">${adjustMsg.split('—')[0].split('!')[0].trim()}</span></div>
         <div class="iscard-sub">Emotional: Cat.${seaCat('E')} &nbsp;·&nbsp; Social: Cat.${seaCat('S')} &nbsp;·&nbsp; Academic: Cat.${seaCat('A')}</div>
       </div>
@@ -173,7 +173,7 @@ const CAREER_DB = {
   cd: [{t:'UI/UX Designer',desc:'Create beautiful, user-friendly digital products.',tags:['Design','Tech']},{t:'Film / Theatre Director',desc:'Direct creative productions for screen or stage.',tags:['Arts','Leadership']},{t:'Graphic Designer / Animator',desc:'Produce visual assets for brands and media.',tags:['Design','Creative']}],
   lj: [{t:'Lawyer / Advocate',desc:'Represent clients in legal proceedings and negotiations.',tags:['Law','Analytical']},{t:'Judge / Legal Researcher',desc:'Interpret laws or conduct legal scholarship.',tags:['Law','Academic']},{t:'Policy Analyst',desc:'Analyse and advise on government or corporate policies.',tags:['Law','Research']}],
   ag: [{t:'IAS / IPS Officer',desc:'Serve in civil or police services to govern and protect the public.',tags:['Governance','Leadership']},{t:'Urban Planner',desc:'Plan and manage city infrastructure and services.',tags:['Governance','Planning']},{t:'NGO Programme Manager',desc:'Design and run community improvement programmes.',tags:['Governance','Social']}],
-  er: [{t:'Professor / Researcher',desc:'Teach at university level and advance academic knowledge.',tags:['Academic','Research']},{t:'School Counsellor',desc:'Support student SEL readiness and development.',tags:['Education','Empathy']},{t:'Curriculum Designer',desc:'Create structured learning programmes and content.',tags:['Education','Creative']}],
+  er: [{t:'Professor / Researcher',desc:'Teach at university level and advance academic knowledge.',tags:['Academic','Research']},{t:'School Counsellor',desc:'Support student SEAA readiness and development.',tags:['Education','Empathy']},{t:'Curriculum Designer',desc:'Create structured learning programmes and content.',tags:['Education','Creative']}],
   be: [{t:'Entrepreneur / Founder',desc:'Build your own venture from idea to reality.',tags:['Business','Leadership']},{t:'Investment Banker',desc:'Manage capital, evaluate deals, guide financial strategy.',tags:['Business','Finance']},{t:'Product Manager',desc:'Lead product development bridging tech and business.',tags:['Business','Tech']}],
   ps: [{t:'Social Worker / Counsellor',desc:'Support individuals and communities navigating hardship.',tags:['Service','Empathy']},{t:'HR Manager',desc:'Manage people, culture and talent in organisations.',tags:['Service','Business']},{t:'Community Development Officer',desc:'Plan and run upliftment programmes for communities.',tags:['Service','Social']}],
   sp: [{t:'Professional Athlete / Coach',desc:'Compete or coach at professional levels in your sport.',tags:['Sports','Discipline']},{t:'Sports Scientist / Analyst',desc:'Apply science to optimise athletic performance.',tags:['Sports','Science']},{t:'Physiotherapist',desc:'Help people recover from injury or improve fitness.',tags:['Sports','Medical']}],
@@ -201,7 +201,7 @@ function buildCareers(cpi, sea) {
       if(!acaOk&&['Analytical','Research','Academic','Math'].some(t=>c.tags.includes(t)))
         note=`<div class="cc-note" style="color:var(--warn)">📌 Academic support could help build this path.</div>`;
       if(!emoOk&&['Empathy','Service','Medical'].some(t=>c.tags.includes(t)))
-        note=`<div class="cc-note" style="color:var(--m2)">💙 SEL readiness support can strengthen this path.</div>`;
+        note=`<div class="cc-note" style="color:var(--m2)">💙 SEAA readiness support can strengthen this path.</div>`;
       html+=`<div class="cc">
         <div class="cc-title">${c.t}</div>
         <div class="cc-desc">${c.desc}</div>

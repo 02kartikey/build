@@ -162,7 +162,7 @@ function buildOverviewCharts() {
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #7c6fcd;min-width:200px">
         <div class="chart-stat-num" style="font-size:13px;color:#7c6fcd">${seaSummary}</div>
-        <div class="chart-stat-lbl">SEL Categories</div>
+        <div class="chart-stat-lbl">SEAA Categories</div>
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #4f46e5;min-width:140px">
         <div class="chart-stat-num" style="font-size:13px;color:#4f46e5">${cpiTop}</div>

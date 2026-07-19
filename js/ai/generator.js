@@ -213,7 +213,7 @@ async function generateAIReport() {
   const loadingMsgs = [
     'Reading your career interest profile\u2026',
     'Analysing your personality dimensions\u2026',
-    'Reviewing your SEL readiness data\u2026',
+    'Reviewing your SEAA readiness data\u2026',
     'Cross-referencing aptitude scores\u2026',
     'Writing your personalised report\u2026',
     'Almost ready\u2026',

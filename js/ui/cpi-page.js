@@ -15,10 +15,62 @@ function startCPI() {
     S.cpi.currentQ = 0;
   }
 
-  if (!resumingCpi) S.cpi.startTime = Date.now();
-
-  startTimer('cpi-timer', S.cpi);
   goPage('cpi');
+
+  // Fresh start → show the intro (what to expect + a worked example) with the
+  // counter paused. Resume → straight to questions and restart the counter.
+  if (resumingCpi) {
+    beginCPI(true);
+  } else {
+    renderCPIIntro();
+  }
+}
+
+function renderCPIIntro() {
+  const area = document.getElementById('cpi-qarea');
+  if (!area) return;
+
+  // Reset the visible progress + clear the map/mobile-nav so the intro reads
+  // clean (mirrors renderNMAPIntro clearing its page-nav).
+  const ptxt = document.getElementById('cpi-ptxt'); if (ptxt) ptxt.textContent = '0%';
+  const pbar = document.getElementById('cpi-pbar'); if (pbar) pbar.style.width = '0%';
+  const qmap = document.getElementById('cpi-qmap'); if (qmap) qmap.innerHTML = '';
+  const mnav = document.getElementById('cpi-mobile-nav'); if (mnav) mnav.innerHTML = '';
+
+  area.innerHTML = `
+    <div class="nmap-intro">
+      <div class="nmap-intro-badge">🎯 Module 3 · Interests</div>
+      <h2 class="nmap-intro-title">Interest Discovery</h2>
+      <p class="nmap-intro-sub">This is the “what excites you” part of your profile.</p>
+      <div class="nmap-intro-meta">
+        <span class="nmap-intro-chip">📝 20 questions</span>
+        <span class="nmap-intro-chip">🧭 10 career areas</span>
+        <span class="nmap-intro-chip">⏱ About 8–10 min</span>
+      </div>
+      <div class="nmap-intro-how">
+        For each question, pick up to <strong>3</strong> options that appeal to you most. There are no right or wrong answers — choose what genuinely interests you.
+      </div>
+      <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
+        <div class="daab-eg-label">Example — this is how each one looks</div>
+        <div class="daab-eg-q">Which of these would you enjoy doing? <strong>(pick up to 3)</strong></div>
+        <div class="daab-eg-opts"><span class="daab-eg-correct">Build a robot ✓</span><span class="daab-eg-correct">Write a story ✓</span><span>Manage a budget</span></div>
+        <div class="daab-eg-why">Choose the few that feel most like you — one, two, or three is fine.</div>
+      </div>
+      <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
+      <button class="btn btn-lg nmap-intro-btn" id="cpi-begin-btn" type="button">Start Interest Discovery →</button>
+    </div>`;
+
+  // Wire the button via addEventListener rather than an inline onclick, so it
+  // does not depend on beginCPI being exposed on window.
+  const btn = document.getElementById('cpi-begin-btn');
+  if (btn) btn.addEventListener('click', function () { beginCPI(false); });
+
+  window.scrollTo(0, 0);
+}
+
+function beginCPI(resuming) {
+  if (!resuming && !S.cpi.startTime) S.cpi.startTime = Date.now();
+  startTimer('cpi-timer', S.cpi);
   renderCPIQ();
 }
 
@@ -139,11 +191,8 @@ function renderCPIMap() {
     const done = arr.length > 0;
     const cur = i === S.cpi.currentQ;
 
-    const col = done ? CPI_AREAS[arr[0]].color : '';
-
     h += `
       <div class="qdot ${done ? 'done' : ''} ${cur ? 'cur' : ''}"
-           style="${done ? 'background:' + col : ''}"
            onclick="cpiJump(${i})">
         ${i + 1}
       </div>`;
@@ -161,6 +210,8 @@ function submitCPI() {
 
 export {
   startCPI,
+  renderCPIIntro,
+  beginCPI,
   renderCPIQ,
   cpiSel,
   cpiNav,

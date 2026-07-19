@@ -208,7 +208,7 @@ function renderAIReport(data) {
             ${row('🧠','Personality (NMAP)', esc(nmapLevel), nmapAvg?`Avg Stanine: ${esc(nmapAvg)}/9 · Top: ${esc(nmapTop||'—')}`:'Complete NMAP test', nmapColor, nmapEmoji)}
             ${row('⚡','Aptitude (DAAB)', esc(daabLevel), daabAvg?`Avg Stanine: ${esc(daabAvg)}/9`:'Complete DAAB test', daabColor, daabEmoji)}
             ${row('🎯','Career Interests (CPI)', esc(interestLabel), cpi?`Top: ${esc((cpi.top3||[]).slice(0,2).map(a=>a.label).join(', '))}`:'Complete CPI test', interestColor, interestEmoji)}
-            ${row('💚','Wellbeing (SEL)', esc(selLabel), sea?`E:Cat${esc(sea.cls.E.cat)} · S:Cat${esc(sea.cls.S.cat)} · A:Cat${esc(sea.cls.A.cat)}`:'Complete NSEAAS test', selColor, selEmoji)}
+            ${row('💚','Wellbeing (SEAA)', esc(selLabel), sea?`E:Cat${esc(sea.cls.E.cat)} · S:Cat${esc(sea.cls.S.cat)} · A:Cat${esc(sea.cls.A.cat)}`:'Complete SEAA test', selColor, selEmoji)}
           </tbody>
         </table>
       </div>
@@ -297,7 +297,7 @@ function renderAIReport(data) {
           ${makeList(topInterests,'#1d4ed8','#eff6ff')}
         </div>
         <div style="background:#fff;border:1.5px solid #fed7aa;border-radius:12px;padding:1rem">
-          <div style="font-weight:700;font-size:13px;color:#c2410c;margin-bottom:8px">⚡ Address SEL Concerns</div>
+          <div style="font-weight:700;font-size:13px;color:#c2410c;margin-bottom:8px">⚡ Address SEAA Concerns</div>
           <div style="font-size:12px;color:#6b7280;margin-bottom:8px">Focus support here for wellbeing:</div>
           ${makeList(seaConcerns,'#c2410c','#fff7ed')}
         </div>
@@ -322,7 +322,7 @@ function renderAIReport(data) {
           <div style="font-weight:700;font-size:14px;margin-bottom:.3rem">Report Date</div>
           <div>${new Date().toLocaleDateString('en-IN',{day:'numeric',month:'long',year:'numeric'})}</div>
           <div style="margin-top:.5rem;font-weight:700;font-size:14px">Modules Assessed</div>
-          <div>CPI · NSEAAS · NMAP · DAAB</div>
+          <div>CPI · SEAA · NMAP · NAAB</div>
         </div>
       </div>
     </div>
@@ -362,12 +362,12 @@ function renderAIReport(data) {
     )}
 
     <!-- 6. WELLBEING + SEL Charts -->
-    ${section('💙','SEL Readiness & Wellbeing','#0f766e','#0d9488','#f8fffd','rgba(13,148,136,.2)',
+    ${section('💙','SEAA Readiness & Wellbeing','#0f766e','#0d9488','#f8fffd','rgba(13,148,136,.2)',
       toHtml(data.wellbeing_guidance) +
       `<div class="chart-grid-2" style="margin-top:1.25rem">
-        ${chartBox('chart-sel-bar-rpt','SEL Domain Scores','Lower score = better adjustment (max 20)',240,'')}
+        ${chartBox('chart-sel-bar-rpt','SEAA Domain Scores','Lower score = better adjustment (max 20)',240,'')}
         <div class="chart-box" style="margin-top:1.5rem">
-          <div class="chart-box-title">SEL Readiness Gauges</div>
+          <div class="chart-box-title">SEAA Readiness Gauges</div>
           <div class="chart-box-sub">Bar colour = category · 🟢 Cat A-B Good &nbsp; 🟡 Cat C Moderate &nbsp; 🔴 Cat D-E Needs Support</div>
           <div class="sel-gauge-row" id="chart-sel-gauges-report" style="margin-top:.75rem"></div>
         </div>

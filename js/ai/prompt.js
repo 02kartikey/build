@@ -44,9 +44,9 @@ function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
     'SCORES (interpret meaningfully, never just list numbers):\n' +
     'CPI top interests: ' + top5cpi + '\n' +
     'Top 3: ' + top3names + '\n' +
-    'SEL (lower=better, Cat A=Excellent ... E=High Concern): ' + sea_line + '\n' +
+    'SEAA (lower score = better adjustment; levels run Excellent → Good → Moderate → Needs Attention → Needs Support): ' + sea_line + '\n' +
     'NMAP personality (stanine /9): ' + nmap_line + ' | Top: ' + topP + '\n' +
-    'DAAB aptitude (stanine /9): ' + daab_line + '\n\n' +
+    'Aptitude (stanine /9): ' + daab_line + '\n\n' +
     'WRITING RULES:\n' +
     '- Use ' + st.firstName + "'s name naturally throughout.\n" +
     '- Warm, mentor voice — personal story, not data dump.\n' +
@@ -57,11 +57,11 @@ function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
     'Return ONLY a JSON object with these 7 keys (no markdown fences, no preamble):\n' +
     '{\n' +
     '  "holistic_summary": "3-4 paragraphs weaving all modules into ' + st.firstName + "'s story.\",\n" +
-    '  "aptitude_profile": "2 paragraphs on DAAB strengths + gentle growth areas.",\n' +
+    '  "aptitude_profile": "2 paragraphs on aptitude strengths + gentle growth areas.",\n' +
     '  "interest_profile": "2 paragraphs on top 3 CPI clusters and exciting career directions.",\n' +
     '  "internal_motivators": "2 paragraphs naming 3-4 core motivators from CPI+NMAP patterns.",\n' +
     '  "personality_profile": "2-3 paragraphs on top NMAP strengths + 1 growth habit.",\n' +
-    '  "wellbeing_guidance": "2 paragraphs on SEL readiness with specific actions for any C/D/E areas.",\n' +
+    '  "wellbeing_guidance": "2 paragraphs on SEAA readiness with specific, encouraging actions for any areas needing support — describe levels in plain words, never letter or category codes.",\n' +
     '  "career_table": [{"rank":1,"career":"","cluster":"","interest_fit":"High","aptitude_fit":"High","personality_fit":"Medium","suitability_pct":88,"stream":"","rationale":"2 sentences grounded in actual scores."}],\n' +
     '  "stream_advice": "2 paragraphs recommending stream + entrance exams + degree pathways."\n' +
     '}\n' +

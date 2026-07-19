@@ -16,10 +16,61 @@ function startNSEAAS() {
     S.sea.answers = new Array(60).fill(null);
     S.sea.currentPage = 0;
   }
-  if (!resumingSea) S.sea.startTime = Date.now();
-  startTimer('sea-timer', S.sea);
   _saveSession('transition3');
-  goPage('nseaas'); renderSEAPage(); renderSEASidebarNav();
+  goPage('nseaas');
+  renderSEASidebarNav();
+
+  // Fresh start → show the intro (what to expect + a worked example) with the
+  // counter paused. Resume → straight to questions and restart the counter.
+  if (resumingSea) {
+    beginSEA(true);
+  } else {
+    renderSEAIntro();
+  }
+}
+
+function renderSEAIntro() {
+  const area = document.getElementById('sea-main');
+  if (!area) return;
+
+  const ptxt = document.getElementById('sea-ptxt'); if (ptxt) ptxt.textContent = '0%';
+  const pbar = document.getElementById('sea-pbar'); if (pbar) pbar.style.width = '0%';
+  const pnav = document.getElementById('sea-pnav'); if (pnav) pnav.innerHTML = '';
+
+  area.innerHTML = `
+    <div class="nmap-intro">
+      <div class="nmap-intro-badge">💬 Module 4 · Social-Emotional</div>
+      <h2 class="nmap-intro-title">SEAA Assessment</h2>
+      <p class="nmap-intro-sub">This is the “how you feel and cope” part of your profile.</p>
+      <div class="nmap-intro-meta">
+        <span class="nmap-intro-chip">📝 60 short statements</span>
+        <span class="nmap-intro-chip">🧭 3 domains</span>
+        <span class="nmap-intro-chip">⏱ About 10–12 min</span>
+      </div>
+      <div class="nmap-intro-how">
+        For each statement, answer <strong>YES</strong> or <strong>NO</strong> based on how you usually feel. There are no right or wrong answers — go with your honest first response.
+      </div>
+      <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
+        <div class="daab-eg-label">Example — this is how each one looks</div>
+        <div class="daab-eg-q">“I feel comfortable asking a teacher for help when I'm stuck.”</div>
+        <div class="daab-eg-opts"><span>YES</span><span>NO</span></div>
+        <div class="daab-eg-why">Just answer honestly — your responses stay private and help build your profile.</div>
+      </div>
+      <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
+      <button class="btn btn-lg nmap-intro-btn" id="sea-begin-btn" type="button">Start SEAA Assessment →</button>
+    </div>`;
+
+  // Wire via addEventListener so it does not depend on beginSEA being on window.
+  const btn = document.getElementById('sea-begin-btn');
+  if (btn) btn.addEventListener('click', function () { beginSEA(false); });
+
+  window.scrollTo(0, 0);
+}
+
+function beginSEA(resuming) {
+  if (!resuming && !S.sea.startTime) S.sea.startTime = Date.now();
+  startTimer('sea-timer', S.sea);
+  renderSEAPage();
 }
 
 function renderSEAPage() {
@@ -60,7 +111,7 @@ function renderSEAPage() {
   document.getElementById('sea-main').innerHTML = `
     <div class="sea-hdr">
       <div class="sea-hdr-top">
-        <h3>💬 ${PAGE_THEMES[pg].label} — How are you at school?</h3>
+        <h3>💬 ${PAGE_THEMES[pg].label} — Now let's understand your experiences in school.</h3>
         <div class="sea-pg-badge">Page ${pg+1} of 6</div>
       </div>
       <div class="sea-hdr-sub">Questions ${start+1}–${end} · Read each statement and answer YES or NO</div>
@@ -155,4 +206,4 @@ async function trySubmitNSEAAS() {
 }
 
 
-export { startNSEAAS, renderSEAPage, seaAns, trySeaNextPage, seaPageNav, renderSEASidebarNav, trySubmitNSEAAS };
+export { startNSEAAS, renderSEAIntro, beginSEA, renderSEAPage, seaAns, trySeaNextPage, seaPageNav, renderSEASidebarNav, trySubmitNSEAAS };

@@ -15,9 +15,50 @@ function startNMAP() {
     S.nmap.answers = new Array(63).fill(null);
     S.nmap.currentDim = 0;
   }
-  if (!resumingNmap) S.nmap.startTime = Date.now();
+  goPage('nmap');
+  renderNMAPSidebarNav();
+  // Fresh start → show the intro (estimated time + what to expect) with the
+  // counter paused. Resume → straight to questions and restart the counter.
+  if (resumingNmap) {
+    beginNMAP(true);
+  } else {
+    renderNMAPIntro();
+  }
+}
+
+function renderNMAPIntro() {
+  const area = document.getElementById('nmap-qarea');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="nmap-intro">
+      <div class="nmap-intro-badge">🌟 Module 1 · Personality</div>
+      <h2 class="nmap-intro-title">Personality Assessment</h2>
+      <p class="nmap-intro-sub">This is the “who you are” part of your profile.</p>
+      <div class="nmap-intro-meta">
+        <span class="nmap-intro-chip">📝 63 short statements</span>
+        <span class="nmap-intro-chip">🧭 9 dimensions</span>
+        <span class="nmap-intro-chip">⏱ About 15–20 min</span>
+      </div>
+      <div class="nmap-intro-how">
+        For each statement, pick how much it sounds like you — <strong>Always</strong>, <strong>Sometimes</strong>, or <strong>Never</strong>. There are no right or wrong answers, so go with your first feeling.
+      </div>
+      <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
+        <div class="daab-eg-label">Example — this is how each one looks</div>
+        <div class="daab-eg-q">“I enjoy meeting new people.”</div>
+        <div class="daab-eg-opts"><span>Always</span><span>Sometimes</span><span>Never</span></div>
+      </div>
+      <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
+      <button class="btn btn-lg nmap-intro-btn" onclick="beginNMAP()">Begin Personality Assessment →</button>
+    </div>`;
+  const pnav = document.getElementById('nmap-pnav'); if (pnav) pnav.innerHTML = '';
+  window.scrollTo(0, 0);
+}
+
+function beginNMAP(resuming) {
+  if (!resuming && !S.nmap.startTime) S.nmap.startTime = Date.now();
   startTimer('nmap-timer', S.nmap);
-  goPage('nmap'); renderNMAPPage(); renderNMAPSidebarNav();
+  renderNMAPPage();
+  renderNMAPSidebarNav();
 }
 
 function renderNMAPPage() {
@@ -130,7 +171,7 @@ function renderNMAPSidebarNav() {
     const active = i === S.nmap.currentDim;
     h += `<div class="nmap-dn-item ${done ? 'dn-done' : active ? 'dn-active' : ''}">
       <div class="nmap-dn-num">${dim.emoji}</div>
-      <div class="nmap-dn-label">${dim.abbr}</div>
+      <div class="nmap-dn-label">Dim ${i + 1}</div>
       <div class="nmap-dn-check">✓</div>
     </div>`;
   });
@@ -168,4 +209,4 @@ function stopTimer(mod) {
 }
 
 
-export { startNMAP, renderNMAPPage, nmapAns, tryNmapNextPage, nmapPageNav, renderNMAPSidebarNav, trySubmitNMAP, startTimer, stopTimer };
+export { startNMAP, renderNMAPIntro, beginNMAP, renderNMAPPage, nmapAns, tryNmapNextPage, nmapPageNav, renderNMAPSidebarNav, trySubmitNMAP, startTimer, stopTimer };

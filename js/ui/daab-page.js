@@ -111,10 +111,89 @@ function renderDAABSideNav() {
   _updateDaabSidebarOverall();
 }
 
+/* Per-sub-test worked examples — illustrative FORMAT demos, not scored items.
+   Shown on an intro screen before each timed section so students know exactly
+   what to expect, with the clock paused while they read. */
+const DAAB_EXAMPLES = {
+  va:  { measures: 'your word knowledge and verbal reasoning',
+         example: `<div class="daab-eg-q">Which word means the <strong>same</strong> as “RAPID”?</div>
+                   <div class="daab-eg-opts"><span>A. Slow</span><span class="daab-eg-correct">B. Quick ✓</span><span>C. Heavy</span></div>
+                   <div class="daab-eg-why">“Quick” means the same as “Rapid”, so B is correct.</div>` },
+  pa:  { measures: 'how quickly and accurately you spot differences',
+         example: `<div class="daab-eg-q">Are the two codes the <strong>Same</strong> or <strong>Different</strong>?</div>
+                   <div class="daab-eg-pair">Z8K4T&nbsp;&nbsp;&nbsp;Z8K4T → <span class="daab-eg-correct">Same (S) ✓</span></div>
+                   <div class="daab-eg-pair">Z8K4T&nbsp;&nbsp;&nbsp;Z8K9T → <span class="daab-eg-correct">Different (D) ✓</span></div>` },
+  na:  { measures: 'your speed and accuracy with numbers',
+         example: `<div class="daab-eg-q">15 × 4 = ?</div>
+                   <div class="daab-eg-opts"><span>A. 45</span><span class="daab-eg-correct">B. 60 ✓</span><span>C. 75</span></div>
+                   <div class="daab-eg-why">15 multiplied by 4 is 60, so B is correct.</div>` },
+  lsa: { measures: 'your reading, logic and reasoning',
+         example: `<div class="daab-eg-q">“A valid contract needs consent. This agreement was signed with full consent.” Is the consent requirement met?</div>
+                   <div class="daab-eg-opts"><span class="daab-eg-correct">A. Yes ✓</span><span>B. No</span></div>
+                   <div class="daab-eg-why">Consent is clearly present, so the requirement is met — A.</div>` },
+  hma: { measures: 'your grasp of basic health and biology',
+         example: `<div class="daab-eg-q">Which organ pumps blood around the body?</div>
+                   <div class="daab-eg-opts"><span>A. Lungs</span><span class="daab-eg-correct">B. Heart ✓</span><span>C. Liver</span></div>
+                   <div class="daab-eg-why">The heart pumps blood, so B is correct.</div>` },
+  ar:  { measures: 'your ability to spot patterns and rules',
+         example: `<div class="daab-eg-q">What comes next?&nbsp;&nbsp; ○&nbsp;&nbsp; ○○&nbsp;&nbsp; ○○○&nbsp;&nbsp; ?</div>
+                   <div class="daab-eg-opts"><span>A. ○</span><span>B. ○○</span><span class="daab-eg-correct">C. ○○○○ ✓</span></div>
+                   <div class="daab-eg-why">Each step adds one circle, so four circles come next — C.</div>` },
+  ma:  { measures: 'your understanding of how things work',
+         example: `<div class="daab-eg-q">Using a <strong>longer</strong> lever to lift a load makes the job…</div>
+                   <div class="daab-eg-opts"><span>A. Harder</span><span class="daab-eg-correct">B. Easier ✓</span></div>
+                   <div class="daab-eg-why">A longer lever needs less effort, so lifting is easier — B.</div>` },
+  sa:  { measures: 'how you picture and rotate shapes in your mind',
+         example: `<div class="daab-eg-q">Compare each Test Figure with the Sample Figure:</div>
+                   <div class="daab-eg-pair">Same shape, just turned → <span class="daab-eg-correct">Same orientation (S) ✓</span></div>
+                   <div class="daab-eg-pair">A mirror image → <span class="daab-eg-correct">Reversed (R) ✓</span></div>` },
+};
+
 function renderDAABSub(idx, skipTimer) {
   S.daab.currentSub = idx;
   renderDAABSideNav();
   renderDAABMobileNav();
+  // Fresh entry → show the example intro first (clock paused). Resume after a
+  // refresh → go straight to the questions so the running timer isn't lost.
+  if (skipTimer) {
+    _renderDAABQuestions(idx, true);
+  } else {
+    renderDAABIntro(idx);
+  }
+}
+
+function renderDAABIntro(idx) {
+  const sub = DAAB_SUBS[idx];
+  const eg = DAAB_EXAMPLES[sub.key] || { measures: 'this ability', example: '' };
+  const mins = (sub.time % 60 === 0) ? (sub.time / 60) + ' min' : Math.round(sub.time / 60) + ' min';
+  const area = document.getElementById('daab-subtest-area');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="daab-intro">
+      <div class="daab-intro-badge">Section ${idx + 1} of ${DAAB_SUBS.length}</div>
+      <div class="daab-intro-icon">${sub.emoji}</div>
+      <h2 class="daab-intro-title">${sub.label}</h2>
+      <p class="daab-intro-measures">This section measures ${eg.measures}.</p>
+      <div class="daab-intro-meta">
+        <span class="daab-intro-chip">📝 ${sub.total} questions</span>
+        <span class="daab-intro-chip">⏱ ${mins}, timed</span>
+        <span class="daab-intro-chip">⚡ Auto-advances at 0</span>
+      </div>
+      <div class="daab-eg">
+        <div class="daab-eg-label">Example — so you know what to expect (not scored)</div>
+        ${eg.example}
+      </div>
+      <p class="daab-intro-note">Take a breath — the timer only starts when you press the button below.</p>
+      <button class="btn btn-lg daab-intro-btn" onclick="beginDAABSection(${idx})">Start ${sub.label} →</button>
+    </div>`;
+  window.scrollTo(0, 0);
+}
+
+function beginDAABSection(idx) {
+  _renderDAABQuestions(idx, false);
+}
+
+function _renderDAABQuestions(idx, skipTimer) {
   const sub = DAAB_SUBS[idx];
   const mod = S.daab[sub.key];
   if (!skipTimer) {
@@ -228,7 +307,10 @@ function daabHeader(sub, mod) {
             <div class="daab-hdr-sub">${sub.total} questions · ${sub.time/60} min timed</div>
           </div>
         </div>
-        <span class="daab-mod-badge">Module 2 · DAAB</span>
+        <div class="daab-hdr-right">
+          <div class="daab-hdr-timer"><span class="daab-timer-icon">⏱</span><span class="daab-timer-val" id="daab-timer-val">--:--</span></div>
+          <span class="daab-mod-badge">Module 2 · Aptitude</span>
+        </div>
       </div>
     </div>
     <div class="daab-progress">
@@ -912,4 +994,4 @@ function renderSA(area, sub, mod) {
 
 /* ── END DAAB MODULE ── */
 
-export { daabTimerInt, daabSecondsLeft, startDaabTimer, stopDaabTimer, clearDaabTimer, updateDaabTimerDisplay, startDAAB, renderDAABSideNav, renderDAABSub, renderDAABMobileNav, advanceDAABSub, finishDAAB, daabHeader, updateDaabProgress, _updateDaabSidebarOverall, renderVA, renderPA, renderNA, renderMCQ, buildDAABResults, renderAR, renderMA, renderSA };
+export { daabTimerInt, daabSecondsLeft, startDaabTimer, stopDaabTimer, clearDaabTimer, updateDaabTimerDisplay, startDAAB, renderDAABSideNav, renderDAABSub, renderDAABIntro, beginDAABSection, renderDAABMobileNav, advanceDAABSub, finishDAAB, daabHeader, updateDaabProgress, _updateDaabSidebarOverall, renderVA, renderPA, renderNA, renderMCQ, buildDAABResults, renderAR, renderMA, renderSA };
