@@ -291,7 +291,7 @@ document.addEventListener('DOMContentLoaded', function() {
         You are here — your career map starts now
       </div>
       <h1>Find your direction with <em>NuMind MAPS</em></h1>
-      <p>A complete psychometric assessment that maps your interests, personality, aptitude and SEL readiness into one personalised career insight report.</p>
+      <p>A complete psychometric assessment that maps your interests, personality, aptitude and SEAA readiness into one personalised career insight report.</p>
       <div class="hero-meta">
         <span>About 65 minutes</span>
         <span>4 research-backed modules</span>
@@ -363,7 +363,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="journey-step">
           <div class="j-num">5</div>
           <div class="j-icon">💬</div>
-          <div class="j-title">SEL readiness</div>
+          <div class="j-title">SEAA readiness</div>
           <div class="j-desc">60 quick yes/no school-life statements.</div>
         </div>
         <div class="journey-step">
@@ -407,7 +407,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="mod-card-head">
             <div class="mod-card-icon">⚡</div>
             <div>
-              <div class="mod-card-tag">Module 2 · DAAB</div>
+              <div class="mod-card-tag">Module 2 · Aptitude</div>
               <h3>Aptitude battery</h3>
             </div>
           </div>
@@ -450,7 +450,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="mod-card-icon">💚</div>
             <div>
               <div class="mod-card-tag">Module 4 · NSEAAS</div>
-              <h3>SEL readiness check</h3>
+              <h3>SEAA readiness check</h3>
             </div>
           </div>
           <p>Measure Social &amp; Emotional Learning readiness across three dimensions — emotional regulation, social connection, and academic engagement.</p>
@@ -508,7 +508,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="approach-icon">⚡</div>
           <div>
             <div class="approach-title">Quick & Engaging</div>
-            <div class="approach-desc">Designed for students — the questions are clear, the interface is smooth, and it's done in under 45 minutes.</div>
+            <div class="approach-desc">Designed for students — the questions are clear, the interface is smooth, and it's done in about 60 minutes.</div>
           </div>
         </div>
         <div class="approach-card">
@@ -763,7 +763,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <h2>You've completed this section!</h2>
     <p>Amazing work! You've finished the personality assessment. Now let's measure your abilities across key aptitude areas.</p>
     <div class="t-info-box">
-      <div class="eyebrow">Next up — Module 2 · DAAB</div>
+      <div class="eyebrow">Next up — Module 2 · Aptitude</div>
       <p>8 timed sub-tests covering <strong>Verbal, Perceptual, Numerical, Legal, Abstract, Mechanical, Spatial &amp; Health</strong> abilities. Each sub-test advances automatically when time is up.</p>
     </div>
     <button class="btn btn-lg" style="background:var(--m4);color:#fff;box-shadow:0 4px 14px rgba(92,79,181,.3)" onclick="startDAAB()">Begin Aptitude Battery →</button>
@@ -873,12 +873,12 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="t-screen">
     <div class="t-emoji">🎯</div>
     <h2>Almost there!</h2>
-    <p>You've completed 3 modules! Now let's check in on how you're doing at school — the final piece of your full picture.</p>
+    <p>You've completed 3 modules! This section is about understanding your everyday experiences at school — the final piece of your full picture.</p>
     <div class="t-info-box">
       <div class="eyebrow">Next up — Module 4 · NSEAAS</div>
       <p>60 short YES / NO statements about your school life, shown 10 at a time. Honest answers give the best results!</p>
     </div>
-    <button class="btn btn-m2 btn-lg" onclick="startNSEAAS()">Begin NSEAAS Assessment →</button>
+    <button class="btn btn-m2 btn-lg" onclick="startNSEAAS()">Begin SEAA Assessment →</button>
     <div class="affirm">Final stretch — your full report awaits! 🌟</div>
   </div>
 </div>
@@ -940,7 +940,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="res-hero-in">
       <div>
         <div class="res-hero-eyebrow">✨ Your personalised insight report</div>
-        <h2>Here's what we discovered about you</h2>
+        <h2>Here's what your profile reveals about you</h2>
         <p id="res-date">—</p>
       </div>
       <div class="res-student-card">
@@ -982,12 +982,12 @@ document.addEventListener('DOMContentLoaded', function() {
           <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#f59e0b;display:inline-block"></span><strong style="color:#d97706">4–6</strong>&nbsp;Developing</span>
           <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#10b981;display:inline-block"></span><strong style="color:#059669">7–9</strong>&nbsp;Strength</span>
           <span style="color:#9ca3af">·</span>
-          <span style="color:#6b7280">SEL: <strong>lower bar = better</strong> &nbsp;|&nbsp; Interest: <strong>higher = stronger</strong></span>
+          <span style="color:#6b7280">SEAA: <strong>lower bar = better</strong> &nbsp;|&nbsp; Personality · Aptitude · Interest: <strong>higher = stronger</strong></span>
         </div>
         <!-- Tabs -->
         <div class="charts-tabs">
           <button class="chart-tab active" onclick="switchChartTab('cpi')">🧠 Career Interests</button>
-          <button class="chart-tab" onclick="switchChartTab('sel')">💚 SEL Readiness</button>
+          <button class="chart-tab" onclick="switchChartTab('sel')">💚 SEAA Readiness</button>
           <button class="chart-tab" onclick="switchChartTab('nmap')">🌟 Personality</button>
           <button class="chart-tab" onclick="switchChartTab('daab')">🔬 Aptitude</button>
           <button class="chart-tab" onclick="switchChartTab('overview')">✦ Full Overview</button>
@@ -1019,15 +1019,15 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="chart-panel" id="chart-panel-sel">
           <div class="chart-grid-2">
             <div class="chart-box">
-              <div class="chart-box-title">SEL Domain Scores</div>
+              <div class="chart-box-title">SEAA Domain Scores</div>
               <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Good &nbsp;🟡 8-14 Moderate &nbsp;🔴 14-20 Needs Attention</div>
               <div class="chart-canvas-wrap" style="height:260px">
                 <canvas id="chart-sel-bar"></canvas>
               </div>
             </div>
             <div class="chart-box">
-              <div class="chart-box-title">SEL Readiness Gauges</div>
-              <div class="chart-box-sub">Bar colour = category · 🟢 Cat A-B Good &nbsp; 🟡 Cat C Moderate &nbsp; 🔴 Cat D-E Needs Support</div>
+              <div class="chart-box-title">SEAA Readiness Gauges</div>
+              <div class="chart-box-sub">Bar colour = level · 🟢 Good &nbsp; 🟡 Moderate &nbsp; 🔴 Needs Support</div>
               <div class="sel-gauge-row" id="chart-sel-gauges" style="margin-top:.5rem"></div>
             </div>
           </div>
@@ -1146,7 +1146,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div style="font-size:52px;margin-bottom:1rem">🤖</div>
           <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Ready to generate your personalised report</div>
           <div style="color:var(--ink3);font-size:14px;max-width:480px;margin:0 auto;line-height:1.7">
-            Click <strong>Generate Report</strong> above and our AI will analyse all four modules — your career interests, SEL readiness, personality and aptitude — and write a detailed, personalised report just for you.
+            Click <strong>Generate Report</strong> above and our AI will analyse all four modules — your career interests, SEAA readiness, personality and aptitude — and write a detailed, personalised report just for you.
           </div>
         </div>
 
@@ -1379,8 +1379,8 @@ document.addEventListener('DOMContentLoaded', function() {
               <div class="nc-starter-head"><span class="nc-si nc-si-amber">🎓</span><span class="nc-starter-label">Which stream to pick?</span></div>
               <div class="nc-starter-hint">Science, Commerce, or Arts</div>
             </button>
-            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="What does my wellbeing and SEL score tell me, and how can I improve?">
-              <div class="nc-starter-head"><span class="nc-si nc-si-green">🧠</span><span class="nc-starter-label">Wellbeing &amp; SEL score</span></div>
+            <button class="nc-starter" onclick="_acQuickStart(this)" data-q="What does my wellbeing and SEAA score tell me, and how can I improve?">
+              <div class="nc-starter-head"><span class="nc-si nc-si-green">🧠</span><span class="nc-starter-label">Wellbeing &amp; SEAA score</span></div>
               <div class="nc-starter-hint">What it means and how to grow</div>
             </button>
           </div>
@@ -2093,6 +2093,88 @@ document.addEventListener('DOMContentLoaded', function() {
 .arp-bar-fill { height:100%; border-radius:6px; background:var(--green); }
 .arp-bar-fill.arp-bar-violet { background:var(--v2); }
 
+/* ══════════════════════════════════════════════════════════════════
+   ARIA — CALM REDESIGN  (soft blue / lavender, gradients, waves)
+   Scoped to #page-counsellor. Pure restyle — no markup/JS changes, so
+   the auth flow, chat, sidebar and panels keep working untouched.
+   ══════════════════════════════════════════════════════════════════ */
+#page-counsellor{
+  --sb:#f5f6fd; --sb2:rgba(96,84,196,.05); --sbb:rgba(96,84,196,.11); --sbt:#3a4166; --sbm:#8b90b3;
+  --bg:#eef1fb; --surf:#ffffff; --bdr:rgba(96,84,196,.11); --bdr2:rgba(96,84,196,.2);
+  --ink:#2a3050; --ink2:#3a4166; --ink3:#6b7194; --ink4:#a4a9c8;
+  --v:#6a5fc7; --v2:#8b7fe0; --vbg:#f4f2fe; --vbd:#e2ddf8; --green:#0f9d76; --gbg:#e7f6f1; --gbd:#b6e5d6;
+}
+/* one logo only — the sidebar brand is enough; drop the topbar duplicate */
+#page-counsellor .nc-tb-logo{ display:none !important; }
+
+/* calm gradient canvas with soft, organic colour blobs */
+#page-counsellor .nc-main{
+  background:
+    radial-gradient(58% 52% at 84% -10%, rgba(139,127,224,.16), transparent 62%),
+    radial-gradient(50% 46% at -10% 6%, rgba(116,170,235,.14), transparent 60%),
+    radial-gradient(44% 50% at 108% 108%, rgba(139,127,224,.10), transparent 60%),
+    linear-gradient(180deg,#f5f6fd 0%, #eef1fb 46%, #f6f4fd 100%);
+}
+#page-counsellor .nc-topbar{ background:rgba(245,246,253,.9); backdrop-filter:blur(14px); }
+#page-counsellor .nc-topbar::after{
+  background:linear-gradient(90deg, rgba(139,127,224,.5), rgba(116,170,235,.4), transparent 74%);
+  opacity:.6;
+}
+/* gentle wave under the topbar */
+#page-counsellor .nc-topbar::before{
+  content:''; position:absolute; left:0; right:0; bottom:-13px; height:13px; z-index:2; pointer-events:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='560' height='13' viewBox='0 0 560 13'%3E%3Cpath d='M0 5 Q140 13 280 5 T560 5 V0 H0 Z' fill='%238b7fe0' fill-opacity='0.06'/%3E%3C/svg%3E");
+  background-repeat:repeat-x; background-size:560px 13px;
+}
+#page-counsellor .nc-chat, #page-counsellor .nc-messages{ background:transparent; }
+
+/* Aria as a soft gradient orb */
+#page-counsellor .ac-msg-assistant .acp-msg-av{
+  background:radial-gradient(circle at 32% 28%, #a99bef 0%, #6a5fc7 72%);
+  color:#fff; border:none; box-shadow:0 4px 13px rgba(106,95,199,.3);
+}
+#page-counsellor .nc-user-av,
+#page-counsellor .nc-welcome-av{ box-shadow:0 6px 18px rgba(106,95,199,.28); }
+
+/* softer, friendlier message bubbles */
+#page-counsellor .ac-msg-assistant .ac-bubble{
+  background:#fff; border:1px solid rgba(96,84,196,.1);
+  border-radius:5px 18px 18px 18px; box-shadow:0 3px 14px rgba(60,55,120,.05);
+}
+#page-counsellor .ac-msg-user .ac-bubble{
+  background:linear-gradient(135deg,#6a5fc7,#8b7fe0); color:#fff; border:none;
+  border-radius:18px 5px 18px 18px; box-shadow:0 5px 16px rgba(106,95,199,.24);
+}
+
+/* calm, roomy composer */
+#page-counsellor .nc-input-box{ border-radius:22px; border-color:rgba(96,84,196,.16); background:rgba(255,255,255,.75); backdrop-filter:blur(6px); }
+#page-counsellor .nc-input-box:focus-within{ border-color:#8b7fe0; box-shadow:0 0 0 4px rgba(139,127,224,.13); }
+#page-counsellor .nc-send{ background:linear-gradient(135deg,#6a5fc7,#8b7fe0); }
+
+/* soft sidebar */
+#page-counsellor .nc-sidebar{ background:linear-gradient(180deg,#f7f8fe,#f1f3fc); }
+
+/* starter chips — gentle, tappable, curved */
+#page-counsellor .nc-starter{ border-radius:16px; border-color:rgba(96,84,196,.14); background:rgba(255,255,255,.7); transition:transform .12s, box-shadow .12s, border-color .12s; }
+#page-counsellor .nc-starter:hover{ transform:translateY(-2px); border-color:#c9c0f2; box-shadow:0 8px 20px rgba(106,95,199,.12); }
+
+/* welcome state — soft aura behind the greeting */
+#page-counsellor .nc-welcome-bg{
+  background:radial-gradient(50% 60% at 50% 30%, rgba(139,127,224,.16), transparent 70%);
+}
+
+/* lock screen — serene gradient + soft blobs + rounder card */
+#page-counsellor .nc-lock{
+  background:
+    radial-gradient(54% 48% at 82% 10%, rgba(139,127,224,.2), transparent 62%),
+    radial-gradient(50% 46% at 8% 90%, rgba(116,170,235,.18), transparent 60%),
+    linear-gradient(180deg,#f2f4fd,#e9edfb);
+}
+#page-counsellor .nc-lock-card{ border-radius:26px; box-shadow:0 30px 72px rgba(58,53,118,.16); }
+#page-counsellor .nc-lock-orb{ box-shadow:0 10px 30px rgba(106,95,199,.3); }
+#page-counsellor .nc-lock-input:focus{ border-color:#8b7fe0; box-shadow:0 0 0 4px rgba(139,127,224,.13); }
+#page-counsellor .nc-lock-btn{ background:linear-gradient(135deg,#6a5fc7,#8b7fe0); border-radius:14px; }
+
 </style>
 
 <script>
@@ -2657,5 +2739,6 @@ document.addEventListener('DOMContentLoaded',function(){
 
 <script type="module" src="./js/main.js"></script>
 <script type="module" src="./js/ai-counsellor.js"></script>
+<script src="./js/counsellor-goals-ui.js?v=2"></script>
 </body>
 </html>

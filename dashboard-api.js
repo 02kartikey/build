@@ -145,6 +145,9 @@ async function handle(req, res) {
     if (method === 'DELETE' && url.match(/^\/api\/dashboard\/students\/[^/]+\/notes\/[^/]+$/)) return _delNote(req, res);
     if (method === 'PUT'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/tags$/))      return await _setTags(req, res);
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/report$/))    return _studentReport(req, res);
+    if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/report-pdf$/)) return _studentReportPdfData(req, res);
+    if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/insights$/))  return _studentInsights(req, res);
+    if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/journey$/))   return _studentJourney(req, res);
 
     // ── At-risk (all roles, school-scoped) ───────────────────────
     if (method === 'GET' && url === '/api/dashboard/at-risk')      return _atRisk(req, res);
@@ -221,7 +224,7 @@ async function _forgotPassword(req, res) {
   const token = await _ddb.createPasswordResetToken(u.id);
   if (_sendEmail) {
     try {
-      _sendEmail({
+      await _sendEmail({
         to: u.email,
         subject: '[NuMind MAPS] Password Reset',
         text: [
@@ -473,7 +476,7 @@ async function _sendReminder(req, res) {
   for (const st of inScope) {
     if (!st.email) { failed++; continue; }
     try {
-      _sendEmail({
+      await _sendEmail({
         to:      st.email,
         subject: emailSubject,
         text: [
@@ -517,7 +520,7 @@ async function _testEmail(req, res) {
   }
 
   try {
-    _sendEmail({
+    await _sendEmail({
       to,
       subject: `[NuMind MAPS] Test Email — ${user.role} Dashboard`,
       text: [
@@ -854,6 +857,53 @@ async function _resetStudentPin(req, res) {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   AI-COUNSELLOR INSIGHTS — what the student is asking Aria
+   Scoped like _studentReport. Read-only over the student's own chats;
+   surfaces top questions + themes + summaries so staff can understand
+   what a student is going through.
+══════════════════════════════════════════════════════════════════ */
+async function _studentInsights(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
+  if (!user) return;
+  const sessionId = _seg(req.url, -2);
+  const stu = await _ddb.getStudentBySessionId(sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found' });
+  // IDOR guard: non-admins may only inspect students in their assigned schools
+  if (user.role !== 'admin') {
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+  }
+  if (!stu.email) {
+    return _json(res, 200, { insights: { totalQuestions: 0, questions: [], themes: [], summaries: [], lastActivity: null } });
+  }
+  const insights = await _cdb.getStudentInsights(stu.email);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_insights', target: sessionId });
+  _json(res, 200, { insights });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   GROWTH JOURNEY — cross-class progress for a student
+   Scoped like _studentReport. Reuses db.js getJourney via counsellor-db.
+══════════════════════════════════════════════════════════════════ */
+async function _studentJourney(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
+  if (!user) return;
+  const sessionId = _seg(req.url, -2);
+  const stu = await _ddb.getStudentBySessionId(sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found' });
+  if (user.role !== 'admin') {
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+  }
+  if (!stu.email) {
+    return _json(res, 200, { journey: { attempts: [], deltas: [], has_journey: false } });
+  }
+  const journey = await _cdb.getJourney(stu.email);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_journey', target: sessionId });
+  _json(res, 200, { journey });
+}
+
 async function _studentReport(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
@@ -875,6 +925,25 @@ async function _studentReport(req, res) {
   const hasReport = !!(report.report && (report.report.fit_tier != null || report.report.generated_at));
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_report', target: sessionId });
   _json(res, 200, { report, has_report: hasReport });
+}
+
+/* PDF-ready data for the same renderer the student uses (download.js). Same
+   role check + school-scoping IDOR guard as _studentReport. */
+async function _studentReportPdfData(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const sessionId = _seg(req.url, -2);
+  if (user.role !== 'admin') {
+    const _stu = await _ddb.getStudentBySessionId(sessionId);
+    if (!_stu) return _json(res, 404, { error: 'Student not found' });
+    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+  }
+  let data = null;
+  try { data = await _ddb.getReportPdfData(sessionId); } catch (_) {}
+  if (!data) return _json(res, 404, { error: 'No report available for this student yet.' });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'download_report', target: sessionId });
+  _json(res, 200, { ok: true, data });
 }
 
 /* ══════════════════════════════════════════════════════════════════

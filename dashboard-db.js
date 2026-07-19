@@ -1075,6 +1075,83 @@ async function consumePasswordResetToken(token, newPassword) {
 /* ══════════════════════════════════════════════════════════════════
    EXPORTS
 ══════════════════════════════════════════════════════════════════ */
+/* Assemble everything download.js needs to render a student's report PDF,
+   in the exact shapes it consumes (scorer JSON from `assessments`, AI report
+   from `report_summary` + `report_careers`). Returns null if the student or
+   their assessment scores don't exist. */
+async function getReportPdfData(sessionId) {
+  const sid = String(sessionId || '');
+  if (!sid) return null;
+
+  const student = await pg.one(
+    `SELECT session_id, first_name, last_name, full_name, class, section, school
+       FROM students WHERE session_id = $1`, [sid]);
+  if (!student) return null;
+
+  const a = await pg.one(
+    `SELECT cpi_scores_json, nmap_scores_json, sea_scores_json,
+            daab_va_scores_json, daab_pa_scores_json, daab_na_scores_json,
+            daab_lsa_scores_json, daab_hma_scores_json, daab_ar_scores_json,
+            daab_ma_scores_json, daab_sa_scores_json
+       FROM assessments WHERE session_id = $1`, [sid]);
+  if (!a) return null; // no scores saved yet → nothing to render
+
+  const rs = await pg.one(
+    `SELECT holistic_summary, aptitude_profile, interest_profile, internal_motivators,
+            personality_profile, wellbeing_guidance, stream_advice
+       FROM report_summary WHERE session_id = $1`, [sid]);
+
+  const careers = await pg.many(
+    `SELECT position, career, cluster, interest_fit, aptitude_fit, personality_fit,
+            seaa_fit, suitability_pct, alignment, rationale
+       FROM report_careers WHERE session_id = $1 ORDER BY position`, [sid]);
+
+  const _parse = (j) => { try { return j ? JSON.parse(j) : null; } catch (_) { return null; } };
+
+  const daab = {};
+  ['va', 'pa', 'na', 'lsa', 'hma', 'ar', 'ma', 'sa'].forEach((k) => {
+    const sc = _parse(a['daab_' + k + '_scores_json']);
+    if (sc) daab[k] = { scores: sc };
+  });
+
+  const ai = {};
+  if (rs) {
+    ['holistic_summary', 'aptitude_profile', 'interest_profile', 'internal_motivators',
+     'personality_profile', 'wellbeing_guidance', 'stream_advice'].forEach((k) => {
+      if (rs[k]) ai[k] = rs[k];
+    });
+  }
+  if (careers && careers.length) {
+    ai.career_table = careers.map((c, i) => ({
+      rank: i + 1,
+      career: c.career || '',
+      cluster: c.cluster || '',
+      interest_fit: c.interest_fit || '',
+      aptitude_fit: c.aptitude_fit || '',
+      personality_fit: c.personality_fit || '',
+      seaa_fit: c.seaa_fit || '',
+      suitability_pct: c.suitability_pct != null ? Number(c.suitability_pct) : 0,
+      alignment: c.alignment || '',
+      rationale: c.rationale || '',
+    }));
+  }
+
+  return {
+    student: {
+      firstName: student.first_name || (student.full_name || '').split(' ')[0] || '',
+      fullName:  student.full_name || '',
+      class:     student.class || '',
+      section:   student.section || '',
+      school:    student.school || '',
+    },
+    cpi:  _parse(a.cpi_scores_json)  || { ranked: [], top3: [] },
+    nmap: _parse(a.nmap_scores_json) || { dims: [], sorted: [] },
+    sea:  _parse(a.sea_scores_json)  || { domScores: { E: 0, S: 0, A: 0 }, cls: {} },
+    daab: Object.keys(daab).length ? daab : null,
+    ai,
+  };
+}
+
 module.exports = {
   init,
   /* auth */
@@ -1086,7 +1163,7 @@ module.exports = {
   countStudentsFiltered,
   getAtRiskStudents,
   getGenderStats,
-  listCounsellorsForSchools, getStudentBySessionId,
+  listCounsellorsForSchools, getStudentBySessionId, getReportPdfData,
   countStudentsBySchool, getAllSchools,
   /* student CRUD */
   upsertStudent, deleteStudent, resetStudentAssessment, moveStudent, runImportTransaction, getStudentByEmail,

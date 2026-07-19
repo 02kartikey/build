@@ -43,9 +43,9 @@ import { DAAB_SUBS, DAAB_KEYS, DAAB_VA_QS, DAAB_PA_QS, DAAB_NA_QS,
 import { startCPI, renderCPIQ, cpiSel, cpiNav, cpiJump, renderCPIMap, submitCPI } from './ui/cpi-page.js';
 import { startNSEAAS, renderSEAPage, seaAns, trySeaNextPage, seaPageNav,
          renderSEASidebarNav, trySubmitNSEAAS } from './ui/sea-page.js';
-import { startNMAP, renderNMAPPage, nmapAns, tryNmapNextPage, nmapPageNav,
+import { startNMAP, beginNMAP, renderNMAPPage, nmapAns, tryNmapNextPage, nmapPageNav,
          renderNMAPSidebarNav, trySubmitNMAP, startTimer, stopTimer } from './ui/nmap-page.js';
-import { startDAAB, renderDAABSub, advanceDAABSub, finishDAAB,
+import { startDAAB, renderDAABSub, beginDAABSection, advanceDAABSub, finishDAAB,
          renderVA, renderPA, renderNA, renderMCQ, renderAR, renderMA, renderSA,
          buildDAABResults } from './ui/daab-page.js';
 import { buildResults, buildCharts, buildCareers, buildNMAPResults } from './ui/results.js';
@@ -83,8 +83,8 @@ Object.assign(window, {
   // assessment entry / nav
   startCPI, cpiSel, cpiNav, cpiJump, submitCPI,
   startNSEAAS, seaAns, trySeaNextPage, seaPageNav, trySubmitNSEAAS,
-  startNMAP, nmapAns, tryNmapNextPage, nmapPageNav, trySubmitNMAP,
-  startDAAB, renderDAABSub, advanceDAABSub, finishDAAB,
+  startNMAP, beginNMAP, nmapAns, tryNmapNextPage, nmapPageNav, trySubmitNMAP,
+  startDAAB, renderDAABSub, beginDAABSection, advanceDAABSub, finishDAAB,
   // results & charts
   buildResults, buildCharts, switchChartTab,
   // registration helpers

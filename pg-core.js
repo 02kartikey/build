@@ -410,6 +410,30 @@ CREATE TABLE IF NOT EXISTS reminder_log (
 CREATE INDEX IF NOT EXISTS idx_rl_email  ON reminder_log(student_email);
 CREATE INDEX IF NOT EXISTS idx_rl_sentby ON reminder_log(sent_by);
 
+CREATE TABLE IF NOT EXISTS student_custom_context (
+  session_id TEXT PRIMARY KEY,
+  fields     JSONB NOT NULL DEFAULT '{}'::jsonb,
+  notes      TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS student_milestones (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  session_id       TEXT NOT NULL,
+  title            TEXT NOT NULL,
+  detail           TEXT,
+  target_date      DATE,
+  status           TEXT NOT NULL DEFAULT 'active',
+  source           TEXT NOT NULL DEFAULT 'aria',
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at     TIMESTAMPTZ,
+  reminder_sent_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sm_session ON student_milestones(session_id);
+CREATE INDEX IF NOT EXISTS idx_sm_status  ON student_milestones(session_id, status);
+CREATE INDEX IF NOT EXISTS idx_sm_due     ON student_milestones(status, target_date) WHERE reminder_sent_at IS NULL;
+ALTER TABLE student_milestones ADD COLUMN IF NOT EXISTS reminder_sent_at TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS student_notes (
   id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   session_id TEXT   NOT NULL REFERENCES students(session_id) ON DELETE CASCADE,
@@ -466,6 +490,35 @@ CREATE TABLE IF NOT EXISTS analytics_cache (
   cache_version INTEGER NOT NULL DEFAULT 1
 );
 CREATE INDEX IF NOT EXISTS idx_analytics_cache_ts ON analytics_cache(computed_at);
+
+/* ══ Longitudinal journey — one immutable snapshot per completed attempt ══
+   A student may retake the assessment only in a NEW class (enforced in the app
+   layer + the UNIQUE(email, class) key below). Each completed report writes a
+   compact snapshot here so we can map growth across classes/years without
+   disturbing the live report_* tables (which always hold the latest attempt).
+   metrics_json carries per-dimension detail for delta computation.            */
+CREATE TABLE IF NOT EXISTS report_history (
+  id                      BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  email                   CITEXT      NOT NULL,
+  session_id              TEXT        NOT NULL,
+  class                   TEXT,
+  attempt_no              INTEGER     NOT NULL DEFAULT 1,
+  generated_at            TIMESTAMPTZ NOT NULL,
+  fit_score               INTEGER,
+  fit_tier                TEXT,
+  avg_personality_stanine REAL,
+  avg_aptitude_stanine    REAL,
+  top_interest_score      INTEGER,
+  personality_status      TEXT,
+  aptitude_status         TEXT,
+  interest_status         TEXT,
+  seaa_status             TEXT,
+  recommended_primary     TEXT,
+  metrics_json            JSONB,
+  UNIQUE (email, class)
+);
+CREATE INDEX IF NOT EXISTS idx_rhist_email     ON report_history(email);
+CREATE INDEX IF NOT EXISTS idx_rhist_email_gen ON report_history(email, generated_at);
 `;
 
 /**

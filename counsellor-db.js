@@ -54,30 +54,35 @@ async function saveQuery({ name, email, message, preferredDate, preferredTime })
 }
 
 async function listQueries({ status, limit = 200, offset = 0, schools } = {}) {
-  // School scoping: derive school by joining students on email (CITEXT → no LOWER()).
+  // School scoping: join students on email (CITEXT → case-insensitive join),
+  // then filter on students.school. That column is plain TEXT, so the school
+  // comparison must lower-case BOTH sides — otherwise a casing mismatch between
+  // the stored school name and the caller's assigned-school list silently drops
+  // queries. Mirrors dashboard-db.js's `LOWER(s.school) IN (lowercased list)`.
   if (Array.isArray(schools) && schools.length) {
+    const lowered = schools.map(s => String(s).toLowerCase());
     // Build positional placeholders for the school list.
     if (status) {
-      const ph = schools.map((_, i) => `$${i + 1}`).join(',');
-      const params = [...schools, status, limit, offset];
+      const ph = lowered.map((_, i) => `$${i + 1}`).join(',');
+      const params = [...lowered, status, limit, offset];
       return pg.many(
         `SELECT cq.* FROM counsellor_queries cq
          JOIN students st ON st.email = cq.email
-         WHERE st.school IN (${ph})
-           AND cq.status = $${schools.length + 1}
+         WHERE LOWER(st.school) IN (${ph})
+           AND cq.status = $${lowered.length + 1}
          ORDER BY cq.submitted_at DESC
-         LIMIT $${schools.length + 2} OFFSET $${schools.length + 3}`,
+         LIMIT $${lowered.length + 2} OFFSET $${lowered.length + 3}`,
         params
       );
     }
-    const ph = schools.map((_, i) => `$${i + 1}`).join(',');
-    const params = [...schools, limit, offset];
+    const ph = lowered.map((_, i) => `$${i + 1}`).join(',');
+    const params = [...lowered, limit, offset];
     return pg.many(
       `SELECT cq.* FROM counsellor_queries cq
        JOIN students st ON st.email = cq.email
-       WHERE st.school IN (${ph})
+       WHERE LOWER(st.school) IN (${ph})
        ORDER BY cq.submitted_at DESC
-       LIMIT $${schools.length + 1} OFFSET $${schools.length + 2}`,
+       LIMIT $${lowered.length + 1} OFFSET $${lowered.length + 2}`,
       params
     );
   }
@@ -179,15 +184,16 @@ async function getReportByEmail(email) {
 
 /* Shared assembly for both lookup paths (email + session_id). */
 async function _buildReportPayload(student) {
-  let [personality, aptitude, interests, seaa] = await Promise.all([
+  let [personality, aptitude, interests, seaa, careers] = await Promise.all([
     pg.many(`SELECT name, stanine, band FROM report_personality WHERE session_id = $1 ORDER BY position`, [student.session_id]),
     pg.many(`SELECT key, name, stanine, band, raw_score, max_score FROM report_aptitude WHERE session_id = $1 ORDER BY position`, [student.session_id]),
     pg.many(`SELECT label, score, level FROM report_interests WHERE session_id = $1 ORDER BY rank`, [student.session_id]),
     pg.many(`SELECT key, title, score, category, cat_label FROM report_seaa WHERE session_id = $1`, [student.session_id]),
+    pg.many(`SELECT career, alignment, suitability_pct, rationale FROM report_careers WHERE session_id = $1 ORDER BY position`, [student.session_id]),
   ]);
 
   // Legacy backfill: derive missing child sections from raw assessment scores.
-  if (!personality.length || !aptitude.length || !interests.length || !seaa.length) {
+  if (!personality.length || !aptitude.length || !interests.length || !seaa.length || !careers.length) {
     try {
       const row = await pg.one('SELECT * FROM assessments WHERE session_id = $1', [student.session_id]);
       if (row) {
@@ -196,14 +202,19 @@ async function _buildReportPayload(student) {
         if (!aptitude.length    && derived.aptitude.length)    aptitude    = derived.aptitude;
         if (!interests.length   && derived.interests.length)   interests   = derived.interests;
         if (!seaa.length        && derived.seaa.length)        seaa        = derived.seaa;
+        // Careers backfill: map derived rows to the same 4-field shape the DB
+        // query returns, so both paths hand the renderers an identical shape.
+        if (!careers.length     && derived.careers.length) {
+          careers = derived.careers.map(c => ({
+            career:          c.career,
+            alignment:       c.alignment,
+            suitability_pct: c.suitability_pct,
+            rationale:       c.rationale,
+          }));
+        }
       }
     } catch (_) { /* best-effort — never fail the report for a backfill */ }
   }
-
-  const careers = await pg.many(
-    `SELECT career, alignment, suitability_pct, rationale FROM report_careers WHERE session_id = $1 ORDER BY position`,
-    [student.session_id]
-  );
 
   const jp = (v) => { try { return JSON.parse(v); } catch { return null; } };
 
@@ -253,6 +264,81 @@ async function _buildReportPayload(student) {
     seaa,
     careers,
     session_id: student.session_id,
+  };
+}
+
+/* ─── Longitudinal journey (delegates to db.js) ─────────────────── */
+async function getJourney(email) {
+  return require('./db.js').getJourney(email);
+}
+
+/* ─── Student question insights (staff dashboards) ──────────────────
+   Surfaces what a student has been asking Aria so a counsellor / super
+   admin can understand what they're going through: their questions, the
+   recurring themes, and the rolling AI summaries. Read-only over data
+   the student has already generated in their own counsellor chats. */
+const _THEME_RULES = [
+  { key:'streams',   label:'Stream & Subjects',    rx:/\b(stream|science|commerce|arts|humanit|subject|pcm|pcb|biology|which stream)\b/i },
+  { key:'exams',     label:'Exams & Entrance',     rx:/\b(jee|neet|boards?|cuet|clat|nda|cat|gate|upsc|olympiad|entrance|exam|marks|percentage|cut-?off)\b/i },
+  { key:'careers',   label:'Careers & Jobs',       rx:/\b(career|job|profession|salary|scope|which field|what should i (become|do)|future)\b/i },
+  { key:'colleges',  label:'Colleges & Courses',   rx:/\b(college|university|course|degree|admission|iit|nit|iim|aiims|placement)\b/i },
+  { key:'wellbeing', label:'Stress & Wellbeing',   rx:/\b(stress|anxi|pressure|scared|afraid|worried|worry|overwhelm|depress|panic|nervous|failure|tension|burnout|demotivat|can'?t focus)\b/i },
+  { key:'family',    label:'Family & Peers',       rx:/\b(parents?|father|mother|mom|dad|family|expectation|compare|friends?|peer|classmate)\b/i },
+  { key:'prep',      label:'Study & Prep',         rx:/\b(how (do|to) (i )?(study|prepare)|study plan|improve|practice|coaching|time-?table|revision|concentrate|skill)\b/i },
+  { key:'confusion', label:'Confused / Undecided', rx:/\b(confus|not sure|don'?t know|undecided|can'?t decide|which (one|option)|help me choose|feeling lost)\b/i },
+];
+
+function _classifyThemes(texts) {
+  const counts = {};
+  for (const t of texts) {
+    const s = String(t || '');
+    if (!s) continue;
+    for (const rule of _THEME_RULES) {
+      if (rule.rx.test(s)) counts[rule.key] = (counts[rule.key] || 0) + 1;
+    }
+  }
+  return _THEME_RULES
+    .filter(r => counts[r.key])
+    .map(r => ({ key: r.key, label: r.label, count: counts[r.key] }))
+    .sort((a, b) => b.count - a.count);
+}
+
+async function getStudentInsights(email, { questionLimit = 25, scanLimit = 300 } = {}) {
+  const norm = String(email || '').toLowerCase().trim();
+  if (!norm) return { totalQuestions: 0, questions: [], themes: [], summaries: [], lastActivity: null };
+
+  const rows = await pg.many(
+    `SELECT content, created_at, conversation_id
+       FROM chat_history
+      WHERE email = $1 AND role = 'user'
+      ORDER BY created_at DESC
+      LIMIT $2`,
+    [norm, Math.min(scanLimit, 1000)]
+  );
+  const totalRow = await pg.one(
+    `SELECT COUNT(*)::int AS n FROM chat_history WHERE email = $1 AND role = 'user'`,
+    [norm]
+  );
+  const themes    = _classifyThemes(rows.map(r => r.content));
+  const questions = rows.slice(0, questionLimit).map(r => ({
+    text: String(r.content || '').slice(0, 500),
+    at:   r.created_at,
+    conversation_id: r.conversation_id,
+  }));
+  const summaries = await pg.many(
+    `SELECT conversation_id, summary, message_count, updated_at
+       FROM conversation_summaries
+      WHERE email = $1
+      ORDER BY updated_at DESC
+      LIMIT 8`,
+    [norm]
+  );
+  return {
+    totalQuestions: totalRow ? totalRow.n : 0,
+    questions,
+    themes,
+    summaries,
+    lastActivity: rows.length ? rows[0].created_at : null,
   };
 }
 
@@ -576,6 +662,7 @@ module.exports = {
   init,
   saveQuery, listQueries, updateQuery,
   getReportByEmail, getReportBySessionId, hasCompletedAssessment, _invalidateReportCache,
+  getJourney, getStudentInsights,
   saveMessage, getHistory, getConversations, clearHistory,
   saveConversationSummary, getConversationSummary,
   issueToken, verifyToken, pruneTokens,

@@ -37,6 +37,7 @@ const { StringDecoder } = require('string_decoder');
 const dbModule = require('./db.js');
 const cdb      = require('./counsellor-db.js');
 const rag      = require('./counsellor-rag.js');
+const goals    = require('./counsellor-goals-db.js');
 const dashApi  = require('./dashboard-api.js');
 
 const PORT             = parseInt(process.env.PORT            || '3000', 10);
@@ -76,74 +77,90 @@ const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = SMTP_USER || 'no-reply@numind.co.in';
 const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL || SMTP_USER;
 
+/* Returns a Promise that RESOLVES only once the SMTP server has accepted the
+   message (the 250 reply to end-of-DATA) and REJECTS on any protocol error,
+   socket error, timeout, or premature disconnect. Previously this returned
+   undefined synchronously, so `await _sendEmail(...)` awaited nothing and every
+   send reported success even when transport failed. Callers can now await it
+   and trust the result. */
 function _sendEmail({ to, subject, text }) {
-  if (!SMTP_USER || !SMTP_PASS) throw new Error('SMTP not configured');
-  const _san = s => String(s || '').replace(/[\r\n]+/g, ' ').trim();
-  const safeTo = _san(to); const safeSub = _san(subject);
-  if (!safeTo || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeTo)) {
-    log.error('[SMTP] Rejected invalid recipient:', JSON.stringify(safeTo)); return;
-  }
-  const enc  = s => Buffer.from(s).toString('base64');
-  const CRLF = '\r\n';
-  const msg  =
-    `From: NuMind MAPS <${SMTP_FROM}>${CRLF}To: ${safeTo}${CRLF}Subject: ${safeSub}${CRLF}` +
-    `MIME-Version: 1.0${CRLF}Content-Type: text/plain; charset=utf-8${CRLF}` +
-    `Content-Transfer-Encoding: base64${CRLF}${CRLF}` + enc(text) + CRLF;
+  return new Promise((resolve, reject) => {
+    if (!SMTP_USER || !SMTP_PASS) { reject(new Error('SMTP not configured')); return; }
+    const _san = s => String(s || '').replace(/[\r\n]+/g, ' ').trim();
+    const safeTo = _san(to); const safeSub = _san(subject);
+    if (!safeTo || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(safeTo)) {
+      log.error('[SMTP] Rejected invalid recipient:', JSON.stringify(safeTo));
+      reject(new Error('Invalid recipient')); return;
+    }
+    const enc  = s => Buffer.from(s).toString('base64');
+    const CRLF = '\r\n';
+    const msg  =
+      `From: NuMind MAPS <${SMTP_FROM}>${CRLF}To: ${safeTo}${CRLF}Subject: ${safeSub}${CRLF}` +
+      `MIME-Version: 1.0${CRLF}Content-Type: text/plain; charset=utf-8${CRLF}` +
+      `Content-Transfer-Encoding: base64${CRLF}${CRLF}` + enc(text) + CRLF;
 
-  if (SMTP_PORT === 587) {
-    const socket = net.connect({ host: SMTP_HOST, port: 587 }, () => {
-      let stage = 0; let tlsSocket = null;
-      const send = s => (tlsSocket || socket).write(s + CRLF);
-      const handleData = chunk => {
+    // Settle exactly once — the first of {accept, error, timeout, close} wins.
+    let settled = false;
+    const _ok  = ()  => { if (!settled) { settled = true; resolve(); } };
+    const _err = (e) => { if (!settled) { settled = true; reject(e instanceof Error ? e : new Error(String(e))); } };
+
+    if (SMTP_PORT === 587) {
+      const socket = net.connect({ host: SMTP_HOST, port: 587 }, () => {
+        let stage = 0; let tlsSocket = null;
+        const send = s => (tlsSocket || socket).write(s + CRLF);
+        const handleData = chunk => {
+          const line = chunk.toString('utf8').trim();
+          if      (stage === 0 && line.startsWith('220'))     { send('EHLO numind.maps'); stage = 1; }
+          else if (stage === 1 && line.includes('250 '))      { send('STARTTLS'); stage = 2; }
+          else if (stage === 2 && line.startsWith('220'))     {
+            tlsSocket = tls.connect({ socket, host: SMTP_HOST, servername: SMTP_HOST }, () => {
+              tlsSocket.on('data', handleData);
+              send('EHLO numind.maps'); stage = 3;
+            });
+            tlsSocket.setTimeout(15000, () => { log.warn('[SMTP] TLS timeout →', safeTo); _err(new Error('SMTP TLS timeout')); tlsSocket.destroy(); });
+            tlsSocket.on('error', e => { log.error('[SMTP] TLS socket error:', e.message); _err(e); });
+          }
+          else if (stage === 3 && line.includes('250 '))      { send('AUTH LOGIN'); stage = 4; }
+          else if (stage === 4 && line.startsWith('334'))     { send(enc(SMTP_USER)); stage = 5; }
+          else if (stage === 5 && line.startsWith('334'))     { send(enc(SMTP_PASS)); stage = 6; }
+          else if (stage === 6 && line.startsWith('235'))     { send(`MAIL FROM:<${SMTP_FROM}>`); stage = 7; }
+          else if (stage === 7 && line.startsWith('250'))     { send(`RCPT TO:<${safeTo}>`); stage = 8; }
+          else if (stage === 8 && line.startsWith('250'))     { send('DATA'); stage = 9; }
+          else if (stage === 9 && line.startsWith('354'))     { (tlsSocket||socket).write(msg + CRLF + '.' + CRLF); stage = 10; }
+          else if (stage === 10 && line.startsWith('250'))    { _ok(); send('QUIT'); stage = 11; }
+          else if (stage === 11 && line.startsWith('221'))    { (tlsSocket||socket).destroy(); }
+          else if (line.startsWith('5') || line.startsWith('4')) { log.error('[SMTP]', line); _err(new Error('SMTP error: ' + line)); (tlsSocket||socket).destroy(); }
+        };
+        socket.on('data', handleData);
+      });
+      socket.setTimeout(15000, () => { log.warn('[SMTP] connect timeout →', safeTo); _err(new Error('SMTP connect timeout')); socket.destroy(); });
+      socket.on('error', e => { log.error('[SMTP] socket error:', e.message); _err(e); });
+      socket.on('close', () => _err(new Error('SMTP connection closed before completion')));
+      return;
+    }
+
+    const socket = tls.connect({ host: SMTP_HOST, port: SMTP_PORT, servername: SMTP_HOST }, () => {
+      const send = s => socket.write(s + CRLF);
+      let stage = 0;
+      socket.on('data', chunk => {
         const line = chunk.toString('utf8').trim();
-        if      (stage === 0 && line.startsWith('220'))     { send('EHLO numind.maps'); stage = 1; }
-        else if (stage === 1 && line.includes('250 '))      { send('STARTTLS'); stage = 2; }
-        else if (stage === 2 && line.startsWith('220'))     {
-          tlsSocket = tls.connect({ socket, host: SMTP_HOST, servername: SMTP_HOST }, () => {
-            tlsSocket.on('data', handleData);
-            send('EHLO numind.maps'); stage = 3;
-          });
-          tlsSocket.setTimeout(15000, () => { log.warn('[SMTP] TLS timeout →', safeTo); tlsSocket.destroy(); });
-          tlsSocket.on('error', e => log.error('[SMTP] TLS socket error:', e.message));
-        }
-        else if (stage === 3 && line.includes('250 '))      { send('AUTH LOGIN'); stage = 4; }
-        else if (stage === 4 && line.startsWith('334'))     { send(enc(SMTP_USER)); stage = 5; }
-        else if (stage === 5 && line.startsWith('334'))     { send(enc(SMTP_PASS)); stage = 6; }
-        else if (stage === 6 && line.startsWith('235'))     { send(`MAIL FROM:<${SMTP_FROM}>`); stage = 7; }
-        else if (stage === 7 && line.startsWith('250'))     { send(`RCPT TO:<${safeTo}>`); stage = 8; }
-        else if (stage === 8 && line.startsWith('250'))     { send('DATA'); stage = 9; }
-        else if (stage === 9 && line.startsWith('354'))     { (tlsSocket||socket).write(msg + CRLF + '.' + CRLF); stage = 10; }
-        else if (stage === 10 && line.startsWith('250'))    { send('QUIT'); stage = 11; }
-        else if (stage === 11 && line.startsWith('221'))    { (tlsSocket||socket).destroy(); }
-        else if (line.startsWith('5') || line.startsWith('4')) { log.error('[SMTP]', line); (tlsSocket||socket).destroy(); }
-      };
-      socket.on('data', handleData);
+        if      (stage === 0 && line.startsWith('220'))        { send('EHLO numind.maps'); stage = 1; }
+        else if (stage === 1 && line.includes('250 '))         { send('AUTH LOGIN'); stage = 2; }
+        else if (stage === 2 && line.startsWith('334'))        { send(enc(SMTP_USER)); stage = 3; }
+        else if (stage === 3 && line.startsWith('334'))        { send(enc(SMTP_PASS)); stage = 4; }
+        else if (stage === 4 && line.startsWith('235'))        { send(`MAIL FROM:<${SMTP_FROM}>`); stage = 5; }
+        else if (stage === 5 && line.startsWith('250'))        { send(`RCPT TO:<${safeTo}>`); stage = 6; }
+        else if (stage === 6 && line.startsWith('250'))        { send('DATA'); stage = 7; }
+        else if (stage === 7 && line.startsWith('354'))        { socket.write(msg + CRLF + '.' + CRLF); stage = 8; }
+        else if (stage === 8 && line.startsWith('250'))        { _ok(); send('QUIT'); stage = 9; }
+        else if (stage === 9 && line.startsWith('221'))        { socket.destroy(); }
+        else if (line.startsWith('5') || line.startsWith('4')){ log.error('[SMTP]', line); _err(new Error('SMTP error: ' + line)); socket.destroy(); }
+      });
     });
-    socket.setTimeout(15000, () => { log.warn('[SMTP] connect timeout →', safeTo); socket.destroy(); });
-    socket.on('error', e => log.error('[SMTP] socket error:', e.message));
-    return;
-  }
-
-  const socket = tls.connect({ host: SMTP_HOST, port: SMTP_PORT, servername: SMTP_HOST }, () => {
-    const send = s => socket.write(s + CRLF);
-    let stage = 0;
-    socket.on('data', chunk => {
-      const line = chunk.toString('utf8').trim();
-      if      (stage === 0 && line.startsWith('220'))        { send('EHLO numind.maps'); stage = 1; }
-      else if (stage === 1 && line.includes('250 '))         { send('AUTH LOGIN'); stage = 2; }
-      else if (stage === 2 && line.startsWith('334'))        { send(enc(SMTP_USER)); stage = 3; }
-      else if (stage === 3 && line.startsWith('334'))        { send(enc(SMTP_PASS)); stage = 4; }
-      else if (stage === 4 && line.startsWith('235'))        { send(`MAIL FROM:<${SMTP_FROM}>`); stage = 5; }
-      else if (stage === 5 && line.startsWith('250'))        { send(`RCPT TO:<${safeTo}>`); stage = 6; }
-      else if (stage === 6 && line.startsWith('250'))        { send('DATA'); stage = 7; }
-      else if (stage === 7 && line.startsWith('354'))        { socket.write(msg + CRLF + '.' + CRLF); stage = 8; }
-      else if (stage === 8 && line.startsWith('250'))        { send('QUIT'); stage = 9; }
-      else if (stage === 9 && line.startsWith('221'))        { socket.destroy(); }
-      else if (line.startsWith('5') || line.startsWith('4')){ log.error('[SMTP]', line); socket.destroy(); }
-    });
+    socket.setTimeout(15000, () => { log.warn('[SMTP] timeout →', safeTo); _err(new Error('SMTP timeout')); socket.destroy(); });
+    socket.on('error', e => { log.error('[SMTP] socket error:', e.message); _err(e); });
+    socket.on('close', () => _err(new Error('SMTP connection closed before completion')));
   });
-  socket.setTimeout(15000, () => { log.warn('[SMTP] timeout →', safeTo); socket.destroy(); });
-  socket.on('error', e => log.error('[SMTP] socket error:', e.message));
 }
 const _emailFn = (SMTP_USER && SMTP_PASS) ? _sendEmail : null;
 if (!_emailFn) log.info('[Email] SMTP_USER/SMTP_PASS not set — email features disabled. Set them in .env to enable OTP and reminders.');
@@ -280,6 +297,86 @@ async function _openaiReq(endpoint, body, _attempt = 0) {
     return _openaiReq(endpoint, body, _attempt + 1);
   }
   return upstream;
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   ARIA CHILD-SAFETY GATE
+   The AI counsellor serves minors (~13–17). Every student message is
+   screened BEFORE it reaches the model: a deterministic tripwire (instant,
+   dependency-free) for the highest-severity categories, plus OpenAI's
+   moderation classifier for robust coverage. Harmful/out-of-bounds input
+   gets a warm redirect; signs of distress get a caring, resource-forward
+   response. This is layered with the scope+safety system prompt.
+   ════════════════════════════════════════════════════════════════════ */
+const CRISIS_HELPLINE = process.env.CRISIS_HELPLINE || 'Tele-MANAS (India\'s free mental-health helpline) at 14416';
+
+const ARIA_SAFE_REFUSAL =
+  "That's outside what I can help you with — I'm your study and career guide, here for your NuMind MAPS results, subjects, and where you're headed. " +
+  "But I'd genuinely love to help with that. Want to explore what your assessment says about your strengths, or talk through subjects and careers?";
+
+const ARIA_SAFE_DISTRESS =
+  "It sounds like you might be carrying something really heavy right now, and I'm glad you told me. " +
+  "I'm only a study-and-career guide, so I'm not the right kind of help for this — but you deserve real support from someone who can be there with you. " +
+  "Please reach out to a trusted adult as soon as you can — a parent, a teacher, or your school counsellor. " +
+  `If you need someone to talk to right now, you can contact ${CRISIS_HELPLINE}, any time. ` +
+  "You are not alone in this. 💛";
+
+// Highest-severity patterns — caught instantly, even if moderation is unavailable.
+const _SAFETY_TRIPWIRE = [
+  /\b(detonat|grenade|molotov|napalm|\brdx\b|\btnt\b|\bied\b|pipe ?bomb|dirty bomb|ammonium nitrate|nerve agent|sarin|ricin|anthrax|bio ?weapon|gun ?powder|silencer|ghost gun|zip gun)\b/i,
+  /\bhow\s+(to|do i|can i|would i)\s+(make|build|create|synthesi[sz]e|manufacture|assemble)\s+(a|an|my|the)?\s*(bomb|explosive|weapon|gun|firearm|poison|meth|cocaine|lsd|drug)\b/i,
+  /\b(synthesi[sz]e|manufacture|cook up)\s+(meth|methamphetamine|cocaine|heroin|mdma|lsd|fentanyl)\b/i,
+  /\b(porn|pornograph|hentai|\bnsfw\b|nud(?:e|es|ity)|naked pics?|sexual (positions?|acts?)|blow ?job|hand ?job|masturbat|orgasm|sexting)\b/i,
+  /\bhow\s+(to|do i|can i)\s+(have sex|lose my virginity|send nudes)\b/i,
+];
+function _tripwireHit(text) {
+  const t = String(text || '');
+  return _SAFETY_TRIPWIRE.some(rx => rx.test(t));
+}
+
+// OpenAI omni-moderation → 'allow' | 'block' | 'selfharm'. Fails open (the
+// tripwire + system prompt still protect) so an outage never breaks chat.
+async function _moderateInput(text) {
+  if (!OPENAI_KEY) return { action: 'allow' };
+  try {
+    const up = await _openaiReqRaw('/v1/moderations', {
+      model: 'omni-moderation-latest',
+      input: String(text || '').slice(0, 4000),
+    });
+    const bodyStr = await new Promise((resolve, reject) => {
+      const c = [];
+      up.on('data', d => c.push(d));
+      up.on('end', () => resolve(Buffer.concat(c).toString()));
+      up.on('error', reject);
+    });
+    if (up.statusCode !== 200) return { action: 'allow', error: true };
+    const r = JSON.parse(bodyStr)?.results?.[0];
+    if (!r) return { action: 'allow' };
+    const c = r.categories || {};
+    // Distress first — a caring response, never a cold refusal.
+    if (c['self-harm'] || c['self-harm/intent'] || c['self-harm/instructions']) return { action: 'selfharm' };
+    const BLOCK = ['sexual', 'sexual/minors', 'hate', 'hate/threatening',
+                   'harassment/threatening', 'illicit', 'illicit/violent',
+                   'violence', 'violence/graphic'];
+    if (BLOCK.some(k => c[k])) return { action: 'block' };
+    return { action: 'allow' };
+  } catch (e) {
+    log.warn('[moderation] failed (failing open):', e.message);
+    return { action: 'allow', error: true };
+  }
+}
+
+// Send a plain-text safe reply the same way the chat stream does, and record
+// the exchange so history stays coherent and staff can see concerning patterns.
+async function _ariaSafeReply(res, { email, conversationId, message, reply }) {
+  if (!res.headersSent) {
+    res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-cache' });
+  }
+  res.end(reply);
+  let sessionId = null;
+  try { sessionId = (await cdb.getReportByEmail(email))?.session_id || null; } catch (_) {}
+  _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message })).catch(() => {});
+  _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: reply   })).catch(() => {});
 }
 
 const MIME = {
@@ -466,6 +563,10 @@ async function _handleSaveRegistration(req, res) {
       sessionId: reg.session_id,
       existing: !!reg.existing,
       testTaken: !!reg.testTaken,
+      // Journey lock: same-class retakes are blocked; a new class is a new attempt.
+      attemptsCount:      reg.attemptsCount || 0,
+      attemptedThisClass: !!reg.attemptedThisClass,
+      lastAttemptClass:   reg.lastAttemptClass || null,
     });
   } catch (err) {
     if (err instanceof QueueOverflowError || _isDbBusy(err)) {
@@ -533,6 +634,8 @@ async function _handleSaveReport(req, res) {
     if (body?.student?.email) {
       try { cdb._invalidateReportCache(body.student.email); } catch (_) {}
     }
+    // Drop the cached RAG static block so a retake's fresh report reaches Aria now.
+    try { rag.invalidateRagCache(body.sessionId); } catch (_) {}
     _json(res, 200, { ok: true });
   } catch (err) {
     if (err instanceof QueueOverflowError || _isDbBusy(err)) {
@@ -709,7 +812,9 @@ async function _jsonUnlocked(res, email, reportObj) {
     };
     const conversations   = await cdb.getConversations(email);
     const counsellorToken = await _issueCounsellorToken(email);
-    _json(res, 200, { unlocked: true, name, email, history, reportSummary, fullScores, conversations, counsellorToken });
+    let journey = null;
+    try { journey = await cdb.getJourney(email); } catch (_) { /* non-fatal */ }
+    _json(res, 200, { unlocked: true, name, email, history, reportSummary, fullScores, conversations, counsellorToken, journey });
   } catch (err) {
     log.error('[_jsonUnlocked]', err.message);
     _json(res, 500, { error: 'Server error while unlocking session.' });
@@ -1010,6 +1115,23 @@ async function _handleCounsellorChat(req, res) {
     return res.end(JSON.stringify({ error: `Rate limit reached. Wait ${Math.ceil(rl.retryAfter / 60)} min.` }));
   }
 
+  // ── Child-safety gate: screen the student's message before it reaches the
+  //    model. Tripwire (instant) first, then OpenAI moderation. Harmful/out-of
+  //    -bounds → warm redirect; distress → caring, resource-forward response.
+  let _gate = _tripwireHit(message) ? 'block' : null;
+  if (!_gate) {
+    const mod = await _moderateInput(message);
+    _gate = mod.action; // 'allow' | 'block' | 'selfharm'
+  }
+  if (_gate === 'block' || _gate === 'selfharm') {
+    log.warn(`[aria-safety] ${_gate} — message redirected for ${String(email).slice(0, 3)}***`);
+    await _ariaSafeReply(res, {
+      email, conversationId, message,
+      reply: _gate === 'selfharm' ? ARIA_SAFE_DISTRESS : ARIA_SAFE_REFUSAL,
+    });
+    return;
+  }
+
   if (_chatInFlight >= MAX_CONCURRENT_CHAT) {
     res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Aria is busy right now — please try again in a few seconds.' }));
@@ -1022,7 +1144,13 @@ async function _handleCounsellorChat(req, res) {
   try {
     const reportObj    = await cdb.getReportByEmail(email);
     const summaryRow   = conversationId ? await cdb.getConversationSummary(email, conversationId) : null;
-    const systemPrompt = rag.buildRagContext(reportObj, summaryRow ? summaryRow.summary : null);
+    let journey = null;
+    try { journey = await cdb.getJourney(email); } catch (_) { /* non-fatal */ }
+    const [customContext, milestones] = await Promise.all([
+      goals.getCustomContext(email).catch(() => null),
+      goals.getMilestones(email).catch(() => []),
+    ]);
+    const systemPrompt = rag.buildRagContext(reportObj, summaryRow ? summaryRow.summary : null, journey, { customContext, milestones });
     const sessionId    = reportObj?.session_id || null;
     const clientHistory = Array.isArray(body.history) ? body.history.slice(-20) : [];
     const lastMsg       = clientHistory[clientHistory.length - 1];
@@ -1147,7 +1275,13 @@ async function _handleCounsellorGreeting(req, res) {
 
   try {
     const reportObj    = await cdb.getReportByEmail(email);
-    const systemPrompt = rag.buildRagContext(reportObj);
+    let journey = null;
+    try { journey = await cdb.getJourney(email); } catch (_) { /* non-fatal */ }
+    const [customContext, milestones] = await Promise.all([
+      goals.getCustomContext(email).catch(() => null),
+      goals.getMilestones(email).catch(() => []),
+    ]);
+    const systemPrompt = rag.buildRagContext(reportObj, null, journey, { customContext, milestones });
     const firstName    = reportObj?.student?.firstName
                          || (reportObj?.student?.fullName || '').split(' ')[0]
                          || 'there';
@@ -1281,50 +1415,46 @@ async function _handleCounsellorQuery(req, res) {
     log.info(`[counsellor-query] ${email} id=${id}`);
 
     if (_emailFn && NOTIFICATION_EMAIL) {
-      try {
-        _emailFn({
-          to:      NOTIFICATION_EMAIL,
-          subject: `NuMind MAPS — New Student Query from ${name}`,
-          text: [
-            'A student has submitted a counsellor query.',
-            '',
-            `Name    : ${name}`,
-            `Email   : ${email}`,
-            `Date    : ${preferredDate || 'Not specified'}`,
-            `Time    : ${preferredTime || 'Not specified'}`,
-            '',
-            'Message:',
-            message,
-            '',
-            `— NuMind MAPS (query id: ${id})`,
-          ].join('\n'),
-        });
-      } catch (emailErr) {
-        log.warn('[counsellor-query] notification email failed:', emailErr.message);
-      }
+      // Fire-and-forget: the student's submit must not block on the admin
+      // notification. A rejected promise is caught here so it never surfaces
+      // as an unhandled rejection now that _emailFn is promise-returning.
+      _emailFn({
+        to:      NOTIFICATION_EMAIL,
+        subject: `NuMind MAPS — New Student Query from ${name}`,
+        text: [
+          'A student has submitted a counsellor query.',
+          '',
+          `Name    : ${name}`,
+          `Email   : ${email}`,
+          `Date    : ${preferredDate || 'Not specified'}`,
+          `Time    : ${preferredTime || 'Not specified'}`,
+          '',
+          'Message:',
+          message,
+          '',
+          `— NuMind MAPS (query id: ${id})`,
+        ].join('\n'),
+      }).catch(emailErr => log.warn('[counsellor-query] notification email failed:', emailErr.message));
     }
 
     if (_emailFn) {
-      try {
-        _emailFn({
-          to:      email,
-          subject: 'NuMind MAPS — We received your query',
-          text: [
-            `Hi ${name},`,
-            '',
-            'We have received your message and a counsellor will get back to you soon.',
-            '',
-            preferredDate ? `Your preferred slot: ${preferredDate}${preferredTime ? ' at ' + preferredTime : ''}` : '',
-            '',
-            'Your message:',
-            message,
-            '',
-            '\u2014 NuMind MAPS Team',
-          ].filter(l => l !== null).join('\n'),
-        });
-      } catch (emailErr) {
-        log.warn('[counsellor-query] confirmation email failed:', emailErr.message);
-      }
+      // Fire-and-forget confirmation to the student; same rejection handling.
+      _emailFn({
+        to:      email,
+        subject: 'NuMind MAPS — We received your query',
+        text: [
+          `Hi ${name},`,
+          '',
+          'We have received your message and a counsellor will get back to you soon.',
+          '',
+          preferredDate ? `Your preferred slot: ${preferredDate}${preferredTime ? ' at ' + preferredTime : ''}` : '',
+          '',
+          'Your message:',
+          message,
+          '',
+          '\u2014 NuMind MAPS Team',
+        ].filter(l => l !== null).join('\n'),
+      }).catch(emailErr => log.warn('[counsellor-query] confirmation email failed:', emailErr.message));
     }
 
     _json(res, 200, { ok: true, id });
@@ -1383,6 +1513,12 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/counsellor-set-pin')      return await _handleCounsellorSetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-reset-pin')    return await _handleCounsellorResetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-chat')          return await _handleCounsellorChat(req, res);
+    if (method === 'GET'    && pathname === '/api/counsellor-context')    return await goalRoutes.getContext(req, res);
+    if (method === 'PUT'    && pathname === '/api/counsellor-context')    return await goalRoutes.putContext(req, res);
+    if (method === 'GET'    && pathname === '/api/counsellor-milestones') return await goalRoutes.listMilestones(req, res);
+    if (method === 'POST'   && pathname === '/api/counsellor-milestones') return await goalRoutes.addMilestone(req, res);
+    if (method === 'PATCH'  && pathname === '/api/counsellor-milestones') return await goalRoutes.patchMilestone(req, res);
+    if (method === 'DELETE' && pathname === '/api/counsellor-milestones') return await goalRoutes.deleteMilestone(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-clear-history') return await _handleCounsellorClearHistory(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-summarise')     return await _handleCounsellorSummarise(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-query')         return await _handleCounsellorQuery(req, res);
@@ -1497,6 +1633,13 @@ async function _verifyCounsellorToken(req) {
   return token ? cdb.verifyToken(token) : null;
 }
 
+const goalRoutes = require('./counsellor-goals-routes.js')({
+  json:                  _json,
+  readBody:              _readBody,
+  verifyCounsellorToken: _verifyCounsellorToken,
+  checkToken:            _checkToken,
+});
+
 const server = http.createServer(_handleRequest);
 
 server.headersTimeout   = 10000;
@@ -1531,6 +1674,7 @@ server.listen(PORT, LISTEN_BACKLOG, () => {
     `    Log level   : ${LOG_LEVEL}\n\n`
   );
   _prewarm();
+  require('./counsellor-goals-reminders.js').startReminderScheduler({ emailFn: _emailFn, log });
   if (typeof process.send === 'function') process.send('ready');
 });
 }).catch(err => { log.error('[Server] Bootstrap failed:', err.message, err.stack); process.exit(1); });
