@@ -155,6 +155,15 @@ CREATE TABLE IF NOT EXISTS students (
   report_generated_at TIMESTAMPTZ
 );
 
+-- Access codes: staff-issued credential so bulk-imported students can start the
+-- assessment by entering school + class + name + code, instead of re-registering.
+-- Added via ALTER (not in CREATE) so existing production tables migrate in place.
+ALTER TABLE students ADD COLUMN IF NOT EXISTS access_code        TEXT;
+ALTER TABLE students ADD COLUMN IF NOT EXISTS access_code_set_at TIMESTAMPTZ;
+-- Lookup index matches the redeem query (school + class + code).
+CREATE INDEX IF NOT EXISTS idx_students_access
+  ON students (school, class, access_code) WHERE access_code IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS assessments (
   session_id            TEXT PRIMARY KEY REFERENCES students(session_id) ON DELETE CASCADE,
   saved_at              TIMESTAMPTZ NOT NULL,

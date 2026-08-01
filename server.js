@@ -1541,6 +1541,10 @@ async function _handleRequest(req, res) {
       return await dashApi.handle(req, res);
     }
     if (method === 'POST' && pathname === '/api/dashboard/insights')       return await _handleDashboardInsights(req, res);
+    // PUBLIC access-code routes for the student entry screen. Declared BEFORE the
+    // /api/dashboard catch-all so they are not swallowed by the staff auth gate.
+    if (method === 'GET'  && pathname === '/api/student-access/names')      return await dashApi.handleAccessNames(req, res);
+    if (method === 'POST' && pathname === '/api/student-access/redeem')     return await dashApi.handleAccessRedeem(req, res);
     if (pathname.startsWith('/api/dashboard'))                             return await dashApi.handle(req, res);
     if (pathname.startsWith('/api/'))                                      return _json(res, 404, { error: 'Unknown API route' });
 
@@ -1657,7 +1661,12 @@ async function _bootstrap() {
   _db = await dbModule._initDb();      // runs pg-core.initSchema() once
   await cdb.init(_db);                 // idempotent; ensures schema ready
   await require('./dashboard-db.js').init(_db); // seeds first-boot accounts
-  dashApi.init(_db, _emailFn, _dbWrite);
+  // Share the DB-backed rate limiter with dashboard-api so its PUBLIC
+  // access-code endpoints are throttled by the same mechanism.
+  dashApi.init(_db, _emailFn, _dbWrite, async (scope, key, limit) => {
+    const r = await _rlCheckDb(scope, key, limit, RL_WINDOW);
+    return !!(r && r.allowed);
+  });
 }
 
 _bootstrap().then(() => {
