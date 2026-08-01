@@ -26,11 +26,16 @@ const _cdb = require('./counsellor-db.js');
 let _sendEmail = null;
 let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 
-function init(db, sendEmailFn, dbWriteFn) {
+// Rate limiter injected by server.js (shares the DB-backed limiter used by the
+// public counsellor endpoints). Left null in tests -> limiter simply not applied.
+let _rl = null;
+
+function init(db, sendEmailFn, dbWriteFn, rateLimitFn) {
   _ddb.init(db);
   _cdb.init(db);
   _sendEmail = typeof sendEmailFn === 'function' ? sendEmailFn : null;
   if (typeof dbWriteFn === 'function') _dbWrite = dbWriteFn;
+  if (typeof rateLimitFn === 'function') _rl = rateLimitFn;
   // Purge stale sessions + reset tokens every hour — routed through write queue
   setInterval(() => {
     _dbWrite(() => _ddb.purgeExpiredSessions()).catch(e => {
@@ -137,6 +142,7 @@ async function handle(req, res) {
     if (method === 'DELETE' && url.match(/^\/api\/dashboard\/students\/[^/]+$/))         return _delStudent(req, res);
     if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/reset$/))  return _resetAssessment(req, res);
     if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/reset-pin$/)) return await _resetStudentPin(req, res);
+    if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/access-code$/)) return await _regenAccessCode(req, res);
 
     // ── Per-student detail ───────────────────────────────────────
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/reminders$/)) return _studentReminders(req, res);
@@ -415,10 +421,11 @@ async function _exportStudentsCsv(req, res) {
   const esc = v => `"${String(v||'').replace(/"/g,'""')}"`;
   // pg returns TIMESTAMPTZ as Date objects (SQLite returned ISO strings) — normalise.
   const day = v => v ? new Date(v).toISOString().slice(0,10) : '';
-  const header = ['Name','Email','School','Class','Section','Gender','Age','Status','Modules Done','Registered At','Completed At'];
+  // Access Code included so staff can print/hand out codes straight from the export.
+  const header = ['Name','Email','School','Class','Section','Gender','Age','Access Code','Status','Modules Done','Registered At','Completed At'];
   const rows = filtered.map(s => [
     esc(s.full_name), esc(s.email), esc(s.school), esc(s.class), esc(s.section),
-    esc(s.gender), esc(s.age), esc(s.status), s.modules_done,
+    esc(s.gender), esc(s.age), esc(s.access_code), esc(s.status), s.modules_done,
     esc(day(s.registered_at)),
     esc(day(s.completed_at)),
   ]);
@@ -834,6 +841,28 @@ async function _setTags(req, res) {
 
 /* Staff support path: clear a student's AI-counsellor PIN so they can go
    through first-time setup again. School-scoped; revokes active sessions. */
+// Issue or re-issue a student's access code. Same scope guard as reset-pin:
+// management may only touch students in their assigned school(s).
+async function _regenAccessCode(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const sessionId = _seg(req.url, -2);
+  const stu = await _ddb.getStudentBySessionId(sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found' });
+  if (user.role !== 'admin') {
+    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+  }
+  try {
+    const code = await _dbWrite(() => _ddb.setStudentAccessCode(sessionId));
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'regen_access_code', target: sessionId });
+    _json(res, 200, { ok: true, access_code: code });
+  } catch (e) {
+    process.stderr.write('[ERROR] [access-code] ' + e.message + '\n');
+    _json(res, 500, { error: 'Server error' });
+  }
+}
+
 async function _resetStudentPin(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
@@ -984,4 +1013,75 @@ function _seg(url, idx) {
   return idx < 0 ? segs[segs.length + idx] : segs[idx];
 }
 
-module.exports = { init, handle };
+
+/* ══════════════════════════════════════════════════════════════════
+   PUBLIC (UNAUTHENTICATED) ACCESS-CODE ENDPOINTS
+   Used by the student entry screen. These are the only dashboard-module
+   handlers that do NOT require a staff session, so they are deliberately
+   conservative: IP rate limiting, no enumeration of codes, and a single
+   generic failure message that never reveals which field was wrong.
+══════════════════════════════════════════════════════════════════ */
+
+function _publicIP(req) {
+  return (req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    || (req.socket && req.socket.remoteAddress) || 'unknown';
+}
+
+// Names for the school+class picker. Rate limited because it is a roster read.
+async function handleAccessNames(req, res) {
+  const qs = new URLSearchParams((req.url.split('?')[1]) || '');
+  const school = qs.get('school') || '';
+  const klass  = qs.get('class')  || '';
+  if (!school) return _json(res, 400, { error: 'school is required' });
+  if (_rl && !(await _rl('access-names', _publicIP(req), 60))) {
+    return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
+  }
+  try {
+    if (!klass) {
+      // No class yet: return the school's actual class list so the entry form
+      // can populate its dropdown. Imported classes are free text ("10-B"),
+      // so a hardcoded Grade 9-12 list can never match them.
+      const rows = await _ddb.listAccessClasses(school);
+      return _json(res, 200, { classes: rows.map(r => r.class).filter(Boolean) });
+    }
+    const rows = await _ddb.listAccessNames(school, klass);
+    _json(res, 200, { names: rows.map(r => r.full_name).filter(Boolean) });
+  } catch (e) {
+    process.stderr.write('[ERROR] [access-names] ' + e.message + '\n');
+    _json(res, 500, { error: 'Server error' });
+  }
+}
+
+// Redeem a code. On success returns the student profile so the client can
+// resume straight into the assessment without re-registering.
+async function handleAccessRedeem(req, res) {
+  let body;
+  try { body = await _readBody(req, 8 * 1024); }
+  catch { return _json(res, 400, { error: 'Bad request' }); }
+
+  const school = String((body && body.school) || '').trim();
+  const klass  = String((body && body.class)  || '').trim();
+  const name   = String((body && body.name)   || '').trim();
+  const code   = String((body && body.code)   || '').trim();
+  if (!school || !klass || !name || !code) {
+    return _json(res, 400, { error: 'School, class, name and access code are all required.' });
+  }
+  // Tight IP limit: 8 attempts/window. With a 30^8 keyspace this makes
+  // guessing infeasible while staying generous for a mistyped code.
+  if (_rl && !(await _rl('access-redeem', _publicIP(req), 8))) {
+    return _json(res, 429, { error: 'Too many attempts. Please wait before trying again.' });
+  }
+  try {
+    const stu = await _ddb.redeemAccessCode({ school, klass, name, code });
+    if (!stu) {
+      // Single generic message — never disclose which field failed.
+      return _json(res, 401, { error: 'Those details do not match. Please check with your teacher.' });
+    }
+    _json(res, 200, { ok: true, student: stu });
+  } catch (e) {
+    process.stderr.write('[ERROR] [access-redeem] ' + e.message + '\n');
+    _json(res, 500, { error: 'Server error' });
+  }
+}
+
+module.exports = { init, handle, handleAccessNames, handleAccessRedeem };

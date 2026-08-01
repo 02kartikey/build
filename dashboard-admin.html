@@ -1489,7 +1489,7 @@ function _renderStuPager(){
 function _renderStudents(list){
   const wrap=document.getElementById('stu-wrap');
   if(!list.length){wrap.innerHTML='<div class="empty"><div class="ei">👥</div><div class="et">No students found</div></div>';return;}
-  wrap.innerHTML='<table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" onchange="stuToggleAll(this)"></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Status</th><th>Progress</th><th>Registered</th><th>Actions</th></tr></thead><tbody>'+list.map(s=>'<tr><td><input type="checkbox" class="stu-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'" onchange="stuUpdSel()"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_esc(s.school||'')+'">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(s.email||'—')+'</td><td>'+_sbadge(s.status)+'</td><td>'+_mDots(s.modules_done||0)+'</td><td style="font-size:11px;color:var(--ink5)">'+_fmtDate(s.registered_at)+'</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')" title="View">View</button>'+(s.status==='completed'?'<button class="btn btn-ghost btn-xs" onclick="_curStuId=\''+_esc(s.session_id)+'\';drTab(4);openDrawer(\''+_esc(s.session_id)+'\')" title="Report">Report</button><button class="btn btn-ghost btn-xs" onclick="downloadStudentReportPDF(\''+_esc(s.session_id)+'\')" title="Download report PDF">⬇ PDF</button>':'')+'<button class="btn btn-ghost btn-xs" onclick="resetStuPin(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Reset counsellor PIN">PIN</button>'
+  wrap.innerHTML='<table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" onchange="stuToggleAll(this)"></th><th>Student</th><th>School</th><th>Class</th><th>Email</th><th>Access Code</th><th>Status</th><th>Progress</th><th>Registered</th><th>Actions</th></tr></thead><tbody>'+list.map(s=>'<tr><td><input type="checkbox" class="stu-chk" data-email="'+_esc(s.email)+'" data-name="'+_esc(s.full_name||'')+'" onchange="stuUpdSel()"></td><td><div class="tbl-name" onclick="openDrawer(\''+_esc(s.session_id)+'\')">'+_esc(s.full_name||s.first_name||'—')+'</div><div class="tbl-meta">'+_esc(s.gender||'')+(s.age?' · '+s.age:'')+'</div></td><td style="font-size:12px;color:var(--ink4);max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+_esc(s.school||'')+'">'+_esc(s.school||'—')+'</td><td>'+_esc(s.class||'—')+(s.section?'-'+_esc(s.section):'')+'</td><td style="font-family:var(--mono);font-size:11px;color:var(--ink5);max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+_esc(s.email||'—')+'</td><td>'+_acCell(s)+'</td><td>'+_sbadge(s.status)+'</td><td>'+_mDots(s.modules_done||0)+'</td><td style="font-size:11px;color:var(--ink5)">'+_fmtDate(s.registered_at)+'</td><td style="white-space:nowrap"><button class="btn btn-ghost btn-xs" onclick="openDrawer(\''+_esc(s.session_id)+'\')" title="View">View</button>'+(s.status==='completed'?'<button class="btn btn-ghost btn-xs" onclick="_curStuId=\''+_esc(s.session_id)+'\';drTab(4);openDrawer(\''+_esc(s.session_id)+'\')" title="Report">Report</button><button class="btn btn-ghost btn-xs" onclick="downloadStudentReportPDF(\''+_esc(s.session_id)+'\')" title="Download report PDF">⬇ PDF</button>':'')+'<button class="btn btn-ghost btn-xs" onclick="resetStuPin(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Reset counsellor PIN">PIN</button>'
 +'<button class="btn btn-ghost btn-xs" onclick="confirmDelStu(\''+_esc(s.session_id)+'\',\''+_esc(s.full_name||'Student')+'\')" title="Delete">Del</button></td></tr>').join('')+'</tbody></table>';
 }
 function stuToggleAll(cb){_stuSel.clear();document.querySelectorAll('.stu-chk').forEach(el=>{el.checked=cb.checked;if(cb.checked)_stuSel.add(el.dataset.email);});_stuBar();}
@@ -1498,6 +1498,33 @@ function stuSelectAll(){document.querySelectorAll('.stu-chk').forEach(el=>{el.ch
 function _stuBar(){const n=_stuSel.size;document.getElementById('stu-sel-info').textContent=n?n+' selected':'';document.getElementById('stu-rem-btn').style.display=n?'':'none';}
 function openReminderModal(){_remTargets=_students.filter(s=>_stuSel.has(s.email));document.getElementById('rem-to').textContent=_remTargets.length+' selected student'+(_remTargets.length!==1?'s':'');openModal('rem-modal');}
 // FIX: data-* helper avoids quote-injection when student names contain quotes.
+/* ── Access code cell + actions ──────────────────────────────────
+   The code is the student's credential for starting the assessment, so it is
+   shown in full to staff (they read it out / print it) with one-click copy and
+   a regenerate action that invalidates the old one. */
+function _acCell(s){
+  if(!s.access_code) return '<span style="font-size:11px;color:var(--ink5)">—</span>'
+    +'<button class="btn btn-ghost btn-xs" onclick="regenAccessCode(\''+_esc(s.session_id)+'\')" title="Generate access code">Generate</button>';
+  return '<span style="font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:.06em;color:var(--ink)">'+_esc(s.access_code)+'</span>'
+    +'<button class="btn btn-ghost btn-xs" onclick="copyAccessCode(this,\''+_esc(s.access_code)+'\')" title="Copy code">⧉</button>'
+    +'<button class="btn btn-ghost btn-xs" onclick="regenAccessCode(\''+_esc(s.session_id)+'\')" title="Regenerate (invalidates the current code)">↻</button>';
+}
+function copyAccessCode(btn, code){
+  try{
+    navigator.clipboard.writeText(code);
+    const o=btn.textContent; btn.textContent='✓';
+    setTimeout(()=>{btn.textContent=o;},1200);
+  }catch(e){ window.prompt('Copy this access code:', code); }
+}
+async function regenAccessCode(sid){
+  if(!confirm('Generate a new access code?\n\nThe current code will stop working immediately, so the student must be given the new one.')) return;
+  try{
+    // _api(method,url,body) — throws on non-2xx, so failures land in catch.
+    const r=await _api('POST','/api/dashboard/students/'+encodeURIComponent(sid)+'/access-code',{});
+    if(r&&r.access_code){ toast('New access code: '+r.access_code,'success'); loadStudents(); }
+    else { toast('Could not generate a code','error'); }
+  }catch(e){ toast('Error: '+(e.message||'Could not generate a code'),'error'); }
+}
 function quickRemindFromBtn(btn){quickRemind({email:btn.dataset.email||'',full_name:btn.dataset.name||''});}
 function quickRemind(s){_remTargets=[s];document.getElementById('rem-to').textContent=s.full_name||s.email||'1 student';openModal('rem-modal');}
 
@@ -1855,7 +1882,7 @@ function parseCsv(text){
     return o;
   });
 }
-async function runImport(){if(!_parsedRows.length){toast('Select a CSV file first.','error');return;}setLoad('import-lbl','import-sp','import-btn',true);try{const{imported,skipped}=await _api('POST','/api/dashboard/students/import',{rows:_parsedRows});toast('✓ Imported '+imported+' students, skipped '+skipped+'.','success');closeModal('import-modal');loadStudents();}catch(e){toast('Import error: '+e.message,'error');}finally{setLoad('import-lbl','import-sp','import-btn',false);}
+async function runImport(){if(!_parsedRows.length){toast('Select a CSV file first.','error');return;}setLoad('import-lbl','import-sp','import-btn',true);try{const{imported,skipped}=await _api('POST','/api/dashboard/students/import',{rows:_parsedRows});toast('✓ Imported '+imported+' students, skipped '+skipped+'. Access codes generated — see the Access Code column.','success');closeModal('import-modal');loadStudents();}catch(e){toast('Import error: '+e.message,'error');}finally{setLoad('import-lbl','import-sp','import-btn',false);}
 }
 function exportCsv(){const school=document.getElementById('stu-school').value,cls=document.getElementById('stu-class').value,status=document.getElementById('stu-status').value;const p=new URLSearchParams();if(school)p.set('school',school);if(cls)p.set('class',cls);if(status)p.set('status',status);fetch('/api/dashboard/students/export?'+p,{headers:{Authorization:'Bearer '+_token}}).then(r=>r.blob()).then(b=>{const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download='students.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(e=>toast('Export failed: '+e.message,'error'));}
 
@@ -1984,17 +2011,11 @@ function closeConfirm(){document.getElementById('conf-ov').classList.remove('ope
 // ── AUTO-REFRESH — pull fresh student data every 30s so in-progress
 // module counts and status changes show without the admin clicking anything
 let _autoRefreshTimer=null;
-function _startAutoRefresh(){
-  if(_autoRefreshTimer)return;
-  _autoRefreshTimer=setInterval(()=>{
-    // Only refresh if not in a modal and students section is visible
-    const overlay=document.getElementById('d-overlay');
-    if(overlay&&overlay.classList.contains('open'))return;// don't interrupt drawer
-    if(_curSection==='students'||_curSection==='overview'||_curSection==='atrisk'){
-      loadStudents();
-    }
-  },30000);
-}
+// Auto-refresh removed: the timer re-rendered the student table on a loop,
+// which read as the whole dashboard "refreshing itself" for no reason and
+// interrupted scrolling/selection. Data now reloads only on navigation or the
+// explicit refresh controls. Function kept as a no-op for old call sites.
+function _startAutoRefresh(){}
 
 // ── BOOTSTRAP ──
 

@@ -21,6 +21,7 @@
 'use strict';
 
 const pg = require('./pg-core.js');
+const nodeCrypto = require('crypto'); // NOT the global (WebCrypto) — that has no randomBytes
 
 const MODULES = [
   'cpi', 'sea', 'nmap',
@@ -73,6 +74,27 @@ async function saveRegistration(student, sessionId) {
         }
       }
 
+      // SECURITY BACKSTOP: if the client-supplied sessionId already belongs
+      // to a row registered under a DIFFERENT email, minting a server-side id
+      // instead of upserting prevents a stale/shared-browser (or malicious)
+      // client from overwriting another student's identity and absorbing
+      // their answers. The client adopts the returned session_id.
+      let effectiveSessionId = sessionId;
+      const owner = await c.query(
+        `SELECT email FROM students WHERE session_id = $1`, [sessionId]
+      );
+      if (owner.rows[0]) {
+        const ownerEmail = String(owner.rows[0].email || '').toLowerCase().trim();
+        // Mint when the incoming email differs from the row's — INCLUDING when
+        // the row has no email (bulk-imported without one): attaching a new
+        // email to an email-less row via a supplied session_id only occurs in
+        // hijack scenarios. Access-login students send their row's own email
+        // (possibly empty -> empty), so ownerEmail === norm and they pass.
+        if (norm !== ownerEmail && norm) {
+          effectiveSessionId = 'NMSRV-' + nodeCrypto.randomBytes(12).toString('hex');
+        }
+      }
+
       await c.query(
         `INSERT INTO students (
            session_id, first_name, last_name, full_name, class, section,
@@ -92,7 +114,7 @@ async function saveRegistration(student, sessionId) {
            email        = EXCLUDED.email
            -- registered_at intentionally omitted: preserved after first INSERT`,
         [
-          sessionId,
+          effectiveSessionId,
           student.firstName || '',
           student.lastName  || '',
           student.fullName  || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
@@ -138,7 +160,7 @@ async function saveRegistration(student, sessionId) {
         } catch (_) { /* schools_registry unavailable — non-fatal */ }
       }
 
-      return { session_id: sessionId, existing: false, testTaken: false, ..._lock };
+      return { session_id: effectiveSessionId, existing: false, testTaken: false, ..._lock };
     });
   } catch (e) {
     // Concurrent insert committed the same email first — reuse its row.

@@ -73,6 +73,41 @@ document.addEventListener('click', function(e) {
   }
 });
 
+// doAccessLogin / loadAccessNames — access-code entry screen handlers.
+// Same pattern as goToCounsellor below: the real implementations live in the
+// ES module (router.js via main.js), which loads deferred. A fast click — or a
+// module-graph failure, or a stale cached main.js after a deploy — otherwise
+// throws "loadAccessNames is not defined" from the inline on* attributes.
+// These shims forward to the module version once it exists, retrying briefly,
+// and surface a clear message instead of a dead button if it never arrives.
+// Build stamp — lets anyone verify in DevTools which index.html is live.
+// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-01-R3' = this build;
+// undefined = the server is still serving a stale cached copy.
+window.NM_BUILD = 'NM-BUILD-2026-08-01-R3';
+console.log('[NuMind] index.html build:', window.NM_BUILD);
+
+function _accessFwd(name, tries) {
+  var real = window['_m_' + name];              // module registers here
+  if (typeof real === 'function') return real();
+  if (tries > 0) return setTimeout(function(){ _accessFwd(name, tries - 1); }, 250);
+  var msg = 'Still loading — please refresh the page (Ctrl+Shift+R).';
+  var el = document.getElementById('ac-err');
+  // ac-err lives inside the access-code panel; if that panel is hidden (e.g.
+  // the person is on the self-register tab, or clicked the header logo), fall
+  // back to alert() so the message is never written somewhere invisible.
+  if (el && el.offsetParent !== null) { el.textContent = msg; el.style.display = 'block'; }
+  else if (el && document.getElementById('entry-code') && document.getElementById('entry-code').style.display !== 'none') { el.textContent = msg; el.style.display = 'block'; }
+  else { alert(msg); }
+}
+function doAccessLogin()   { _accessFwd('doAccessLogin', 20); }
+function loadAccessNames()   { _accessFwd('loadAccessNames', 20); }
+function loadAccessClasses() { _accessFwd('loadAccessClasses', 20); }
+// Same race exists for the other two load-time-visible controls: the
+// self-register submit and the header logo. Everything else with a module
+// handler is only reachable after module-driven navigation, so needs no shim.
+function doRegister()   { _accessFwd('doRegister', 20); }
+function navLogoClick() { _accessFwd('navLogoClick', 20); }
+
 // goToCounsellor — navigate to the AI counsellor page.
 // Called from results page and landing page "Open AI Counsellor" buttons.
 // Defined here (in a plain script) so it is available immediately,
@@ -193,6 +228,53 @@ function _regSetOptions(select, options, placeholder) {
     select.appendChild(o);
   });
 }
+
+// Entry mode switch (access code vs self-registration).
+// Declared at top level of this inline script and assigned to window
+// immediately, so the inline onclick="switchEntryMode(...)" handlers resolve
+// regardless of whether any other init function has run.
+function switchEntryMode(mode) {
+  var code = document.getElementById('entry-code');
+  var self = document.getElementById('entry-self');
+  var tc   = document.getElementById('tab-code');
+  var ts   = document.getElementById('tab-self');
+  if (!code || !self) return;
+  var isCode = mode === 'code';
+  code.style.display = isCode ? '' : 'none';
+  self.style.display = isCode ? 'none' : '';
+  if (tc) { tc.classList.toggle('active', isCode); tc.setAttribute('aria-selected', String(isCode)); }
+  if (ts) { ts.classList.toggle('active', !isCode); ts.setAttribute('aria-selected', String(!isCode)); }
+  try {
+    var acs = document.getElementById('ac-school');
+    var rs  = document.getElementById('r-sch');
+    if (isCode && acs && !acs.value && rs && rs.value && rs.value !== 'Other (type below)') acs.value = rs.value;
+  } catch (e) {}
+}
+window.switchEntryMode = switchEntryMode;
+
+// Populate the access-code screen's school suggestions from the same source the
+// registration form uses. It is a <datalist>, so it stays a free-text field —
+// a student whose school is not listed can still type it, and the server
+// matches case/whitespace-insensitively.
+function _initAccessSchoolList() {
+  var dl = document.getElementById('ac-school-list');
+  if (!dl || dl.childElementCount) return;
+  var seen = {}, names = [];
+  try {
+    Object.keys(_INDIA_DATA).forEach(function (st) {
+      Object.keys(_INDIA_DATA[st] || {}).forEach(function (city) {
+        (_INDIA_DATA[st][city] || []).forEach(function (n) {
+          if (n && n !== 'Other (type below)' && !seen[n]) { seen[n] = 1; names.push(n); }
+        });
+      });
+    });
+  } catch (e) { return; }
+  names.sort();
+  var frag = document.createDocumentFragment();
+  names.forEach(function (n) { var o = document.createElement('option'); o.value = n; frag.appendChild(o); });
+  dl.appendChild(frag);
+}
+window._initAccessSchoolList = _initAccessSchoolList;
 
 function _regHideOther() {
   var w = document.getElementById('r-sch-other-wrap');
@@ -639,10 +721,60 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="wrapsm">
     <div class="reg-hero">
       <span class="emoji">👋</span>
-      <h2>First, tell us about yourself!</h2>
-      <p>Just a few quick details to personalise your results report.</p>
+      <h2>Let’s get you started!</h2>
+      <p>If your school gave you an access code, use it below. Otherwise, register yourself.</p>
     </div>
-    <div class="card cp">
+
+    <!-- Entry mode switch: school-issued access code vs self-registration -->
+    <div class="entry-tabs" role="tablist">
+      <button class="entry-tab active" id="tab-code" role="tab" aria-selected="true"
+              onclick="switchEntryMode('code')">🔑 I have an access code</button>
+      <button class="entry-tab" id="tab-self" role="tab" aria-selected="false"
+              onclick="switchEntryMode('self')">✍️ Register myself</button>
+    </div>
+
+    <!-- ACCESS CODE ENTRY -->
+    <div class="card cp" id="entry-code">
+      <div style="font-size:13px;color:var(--ink3);line-height:1.7;margin-bottom:1.25rem">
+        Your school has already added you. Pick your school and class, find your name, then enter
+        the access code your teacher gave you.
+      </div>
+      <div class="frow">
+        <div class="field">
+          <label>School *</label>
+          <input id="ac-school" list="ac-school-list" placeholder="Type your school name"
+                 onchange="loadAccessClasses()" onblur="loadAccessClasses()" spellcheck="false">
+          <datalist id="ac-school-list"></datalist>
+        </div>
+        <div class="field">
+          <label>Class *</label>
+          <!-- Options come from the server per school (loadAccessClasses):
+               imported classes are free text, so no fixed list can match. -->
+          <select id="ac-class" onchange="loadAccessNames()">
+            <option value="">Select…</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Your Name *</label>
+        <select id="ac-name" disabled><option value="">Select your school and class first…</option></select>
+      </div>
+      <div class="field">
+        <label>Access Code *</label>
+        <input id="ac-code" placeholder="e.g. Y6UWTN3M" maxlength="12" autocapitalize="characters"
+               spellcheck="false" style="text-transform:uppercase;letter-spacing:.12em;font-weight:700">
+      </div>
+      <div class="ferr" id="ac-err" style="display:none"></div>
+      <button class="btn btn-primary btn-full" id="ac-submit" style="margin-top:8px" onclick="doAccessLogin()">
+        Start My Assessment →
+      </button>
+      <div style="text-align:center;margin-top:14px;font-size:13px;color:var(--ink3)">
+        Don’t have a code? <a href="#" onclick="switchEntryMode('self');return false"
+           style="color:var(--brand);font-weight:700;text-decoration:none">Register yourself instead</a>
+      </div>
+    </div>
+
+    <div class="card cp" id="entry-self" style="display:none">
       <div class="frow">
         <div class="field"><label>First Name *</label><input id="r-fn" placeholder="e.g. Priya"><div class="ferr" id="e-fn">Please enter your first name</div></div>
         <div class="field"><label>Last Name *</label><input id="r-ln" placeholder="e.g. Sharma"><div class="ferr" id="e-ln">Please enter your last name</div></div>
@@ -977,10 +1109,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         <!-- Zone Key Banner -->
         <div style="background:linear-gradient(90deg,#fef2f2,#fefce8,#f0fdf4);border:1px solid #e5e7eb;border-radius:10px;padding:9px 14px;margin-bottom:10px;display:flex;align-items:center;gap:18px;font-size:12px;flex-wrap:wrap">
-          <span style="font-weight:700;color:#374151;font-size:12px">📊 Score Guide (all stanine charts):</span>
-          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#ef4444;display:inline-block"></span><strong style="color:#dc2626">1–3</strong>&nbsp;Needs Attention</span>
-          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#f59e0b;display:inline-block"></span><strong style="color:#d97706">4–6</strong>&nbsp;Developing</span>
-          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#10b981;display:inline-block"></span><strong style="color:#059669">7–9</strong>&nbsp;Strength</span>
+          <span style="font-weight:700;color:#374151;font-size:12px">📊 Score Guide:</span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#ef4444;display:inline-block"></span><strong style="color:#dc2626">Focus Area</strong></span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#f59e0b;display:inline-block"></span><strong style="color:#d97706">Developing Area</strong></span>
+          <span style="display:inline-flex;align-items:center;gap:5px"><span style="width:12px;height:12px;border-radius:3px;background:#10b981;display:inline-block"></span><strong style="color:#059669">Strength Area</strong></span>
           <span style="color:#9ca3af">·</span>
           <span style="color:#6b7280">SEAA: <strong>lower bar = better</strong> &nbsp;|&nbsp; Personality · Aptitude · Interest: <strong>higher = stronger</strong></span>
         </div>
@@ -1020,47 +1152,31 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="chart-grid-2">
             <div class="chart-box">
               <div class="chart-box-title">SEAA Domain Scores</div>
-              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Good &nbsp;🟡 8-14 Moderate &nbsp;🔴 14-20 Needs Attention</div>
+              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Well-Established &nbsp;🟡 8-14 Developing &nbsp;🔴 14-20 Needs Support</div>
               <div class="chart-canvas-wrap" style="height:260px">
                 <canvas id="chart-sel-bar"></canvas>
               </div>
             </div>
             <div class="chart-box">
               <div class="chart-box-title">SEAA Readiness Gauges</div>
-              <div class="chart-box-sub">Bar colour = level · 🟢 Good &nbsp; 🟡 Moderate &nbsp; 🔴 Needs Support</div>
+              <div class="chart-box-sub">🟢 Well-Established &nbsp; 🟡 Developing &nbsp; 🔴 Needs Support</div>
               <div class="sel-gauge-row" id="chart-sel-gauges" style="margin-top:.5rem"></div>
-            </div>
-          </div>
-          <div class="chart-box" style="margin-top:1.25rem">
-            <div class="chart-box-title">SEL Profile Radar</div>
-            <div class="chart-box-sub">Inverted scores — higher on chart = better adjustment</div>
-            <div class="chart-canvas-wrap" style="height:260px;max-width:380px;margin:0 auto">
-              <canvas id="chart-sel-radar"></canvas>
             </div>
           </div>
         </div>
 
         <!-- ── NMAP Tab ── -->
         <div class="chart-panel" id="chart-panel-nmap">
-          <div class="chart-grid-2">
-            <div class="chart-box">
-              <div class="chart-box-title">Personality Radar</div>
-              <div class="chart-box-sub">9 dimensions — stanine 1–9 · outer = stronger</div>
-              <div class="chart-canvas-wrap" style="height:320px;max-width:400px;margin:0 auto">
-                <canvas id="chart-nmap-radar"></canvas>
-              </div>
-            </div>
-            <div class="chart-box">
-              <div class="chart-box-title">Dimension Stanine Scores</div>
-              <div class="chart-box-sub">Vertical bar — colour = strength band</div>
-              <div class="chart-canvas-wrap" style="height:300px">
-                <canvas id="chart-nmap-bar"></canvas>
-              </div>
+          <div class="chart-box">
+            <div class="chart-box-title">Personality Profile</div>
+            <div class="chart-box-sub">Vertical bar — colour = strength band</div>
+            <div class="chart-canvas-wrap" style="height:300px">
+              <canvas id="chart-nmap-bar"></canvas>
             </div>
           </div>
           <div class="chart-box" style="margin-top:1.25rem">
             <div class="chart-box-title">Personality Strength Bands</div>
-            <div class="chart-box-sub">Bubble size = stanine score · position shows raw score %</div>
+            <div class="chart-box-sub">Larger bubble = stronger trait</div>
             <div class="chart-canvas-wrap" style="height:200px">
               <canvas id="chart-nmap-bubble"></canvas>
             </div>
@@ -1069,47 +1185,29 @@ document.addEventListener('DOMContentLoaded', function() {
 
         <!-- ── DAAB Tab ── -->
         <div class="chart-panel" id="chart-panel-daab">
-          <div class="chart-grid-2">
-            <div class="chart-box">
-              <div class="chart-box-title">Aptitude Stanine Scores</div>
-              <div class="chart-box-sub">Stanine 1–9 scale · dashed line = average band (5)</div>
-              <div class="chart-canvas-wrap" style="height:300px">
-                <canvas id="chart-daab-bar"></canvas>
-              </div>
-            </div>
-            <div class="chart-box">
-              <div class="chart-box-title">Aptitude Radar</div>
-              <div class="chart-box-sub">Multi-dimensional view of your aptitude profile</div>
-              <div class="chart-canvas-wrap" style="height:300px;max-width:380px;margin:0 auto">
-                <canvas id="chart-daab-radar"></canvas>
-              </div>
+          <div class="chart-box">
+            <div class="chart-box-title">Aptitude Profile</div>
+            <div class="chart-box-sub">How each area compares with students of the same age · 🟢 Strength Area &nbsp; 🟡 Developing Area &nbsp; 🔴 Focus Area</div>
+            <div class="chart-canvas-wrap" style="height:300px">
+              <canvas id="chart-daab-bar"></canvas>
             </div>
           </div>
           <div class="chart-box" style="margin-top:1.25rem">
-            <div class="chart-box-title">Raw Score vs Maximum</div>
-            <div class="chart-box-sub">Stacked bar — achieved score vs remaining (per sub-test)</div>
-            <div class="chart-canvas-wrap" style="height:220px">
-              <canvas id="chart-daab-stacked"></canvas>
+            <div class="chart-box-title">How Much You Got Right</div>
+            <div class="chart-box-sub">Percentage of questions answered correctly in each area, strongest first</div>
+            <div class="chart-canvas-wrap" style="height:280px">
+              <canvas id="chart-daab-pct"></canvas>
             </div>
           </div>
         </div>
 
         <!-- ── Overview Tab ── -->
         <div class="chart-panel" id="chart-panel-overview">
-          <div class="chart-grid-2">
-            <div class="chart-box">
-              <div class="chart-box-title">All-Module Stanine Overview</div>
-              <div class="chart-box-sub">Normalised stanine (1–9) across all scored dimensions</div>
-              <div class="chart-canvas-wrap" style="height:340px">
-                <canvas id="chart-overview-bar"></canvas>
-              </div>
-            </div>
-            <div class="chart-box">
-              <div class="chart-box-title">Holistic Profile Radar</div>
-              <div class="chart-box-sub">NMAP personality + DAAB aptitude combined view</div>
-              <div class="chart-canvas-wrap" style="height:320px;max-width:400px;margin:0 auto">
-                <canvas id="chart-overview-radar"></canvas>
-              </div>
+          <div class="chart-box">
+            <div class="chart-box-title">All-Module Overview</div>
+            <div class="chart-box-sub">Comparable view across every scored dimension</div>
+            <div class="chart-canvas-wrap" style="height:340px">
+              <canvas id="chart-overview-bar"></canvas>
             </div>
           </div>
           <div class="chart-summary-row" id="chart-overview-stats"></div>
@@ -1117,55 +1215,41 @@ document.addEventListener('DOMContentLoaded', function() {
 
       </div><!-- end charts-dashboard-card -->
 
-      <!-- AI-Generated Final Report -->
+      <!-- Final Report — download only (no inline AI preview) -->
       <div class="card cp span2" id="ai-report-card">
         <div class="res-card-header">
           <div class="res-mod-icon rmi-dk" style="background:linear-gradient(135deg,#5c4fb5,#5c4fb5);color:#fff;font-size:18px">✦</div>
           <div style="flex:1">
-            <div class="res-mod-title">Your AI-Generated Insight Report</div>
-            <div class="res-mod-sub">Powered by AI · synthesising all 4 modules together</div>
-          </div>
-          <button id="ai-report-btn" onclick="generateAIReport()"
-            style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;border-radius:12px;
-            background:linear-gradient(135deg,#5c4fb5,#5c4fb5);color:#fff;border:none;cursor:pointer;
-            font-family:'Poppins',sans-serif;font-size:14px;font-weight:600;white-space:nowrap;
-            box-shadow:0 4px 14px rgba(92,79,181,.3);transition:all .2s">
-            ✦ Generate Report
-          </button>
-          <button id="ai-cancel-btn" onclick="cancelReport()"
-            style="display:none;align-items:center;gap:8px;padding:10px 18px;border-radius:12px;
-            background:#fff;color:#6b7280;border:1.5px solid #e5e7eb;cursor:pointer;
-            font-family:'Poppins',sans-serif;font-size:14px;font-weight:600;white-space:nowrap;
-            transition:all .2s">
-            ✕ Cancel
-          </button>
-        </div>
-
-        <!-- Idle state -->
-        <div id="ai-report-idle" style="text-align:center;padding:2.5rem 1rem">
-          <div style="font-size:52px;margin-bottom:1rem">🤖</div>
-          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Ready to generate your personalised report</div>
-          <div style="color:var(--ink3);font-size:14px;max-width:480px;margin:0 auto;line-height:1.7">
-            Click <strong>Generate Report</strong> above and our AI will analyse all four modules — your career interests, SEAA readiness, personality and aptitude — and write a detailed, personalised report just for you.
+            <div class="res-mod-title">Your Personalised Insight Report</div>
+            <div class="res-mod-sub">Synthesising all 4 modules into one downloadable PDF</div>
           </div>
         </div>
 
-        <!-- Loading state -->
-        <div id="ai-report-loading" style="display:none;text-align:center;padding:3rem 1rem">
+        <!-- Preparing state -->
+        <div id="ai-report-loading" style="text-align:center;padding:2.5rem 1rem">
           <div style="display:inline-block;width:48px;height:48px;border:4px solid var(--brandl);border-top-color:var(--brand);border-radius:50%;animation:ai-spin 0.9s linear infinite;margin-bottom:1.25rem"></div>
-          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Analysing your results…</div>
-          <div style="color:var(--ink3);font-size:14px" id="ai-loading-msg">Reading all four modules and crafting your personalised report…</div>
+          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Preparing your report…</div>
+          <div style="color:var(--ink3);font-size:14px" id="ai-loading-msg">Reading all four modules and writing your personalised insights…</div>
+        </div>
+
+        <!-- Ready state -->
+        <div id="ai-report-ready" style="display:none;text-align:center;padding:2.5rem 1rem">
+          <div style="font-size:52px;margin-bottom:1rem">📄</div>
+          <div style="font-family:'Nunito',sans-serif;font-size:18px;font-weight:800;color:var(--ink);margin-bottom:.5rem">Your report is ready</div>
+          <div style="color:var(--ink3);font-size:14px;max-width:480px;margin:0 auto 1.5rem;line-height:1.7">
+            We’ve analysed your career interests, SEAA readiness, personality and aptitude. Use the <strong>Download Full Report as PDF</strong> button below to save it.
+          </div>
         </div>
 
         <!-- Error state -->
         <div id="ai-report-error" style="display:none;background:var(--soft-redl);border:1.5px solid rgba(220,38,38,.2);border-radius:14px;padding:1.5rem;text-align:center">
           <div style="font-size:32px;margin-bottom:.75rem">⚠️</div>
-          <div style="font-weight:700;color:var(--soft-red);margin-bottom:.5rem">Could not generate report</div>
+          <div style="font-weight:700;color:var(--soft-red);margin-bottom:.5rem">Could not prepare your report</div>
           <div id="ai-error-msg" style="color:var(--ink3);font-size:13px;margin-bottom:1rem"></div>
           <button onclick="generateAIReport()" style="padding:10px 24px;border-radius:10px;background:var(--brand);color:#fff;border:none;cursor:pointer;font-weight:600;font-size:14px">Try Again</button>
         </div>
 
-        <!-- Report output -->
+        <!-- Retained (hidden) mount point: renderer target kept for compatibility -->
         <div id="ai-report-output" style="display:none"></div>
       </div>
 

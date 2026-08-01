@@ -323,6 +323,7 @@ async function getStudentsBySchool(schools, opts = {}) {
     `SELECT
        s.session_id, s.first_name, s.last_name, s.full_name,
        s.class, s.section, s.school, s.email, s.gender, s.age,
+       s.access_code,
        s.registered_at, s.completed_at, s.report_generated_at,
        CASE
          WHEN rs.session_id IS NOT NULL THEN 'completed'
@@ -837,18 +838,24 @@ async function upsertStudent({ session_id, first_name, last_name, full_name, ema
   const now  = new Date().toISOString();
   const norm = String(email || '').toLowerCase().trim();
 
+  // Staff-created students get an access code on creation, exactly like imported
+  // ones, so "Add Student" and "Import CSV" behave identically. COALESCE keeps
+  // any existing code intact when this is an update rather than an insert.
   const doUpsert = (c, sid) => c.query(
-    `INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    `INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at, access_code, access_code_set_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (session_id) DO UPDATE SET
        first_name   = EXCLUDED.first_name,   last_name    = EXCLUDED.last_name,
        full_name    = EXCLUDED.full_name,    email        = EXCLUDED.email,
        class        = EXCLUDED.class,        section      = EXCLUDED.section,
        school       = EXCLUDED.school,       school_state = EXCLUDED.school_state,
        school_city  = EXCLUDED.school_city,  age          = EXCLUDED.age,
-       gender       = EXCLUDED.gender`,
+       gender       = EXCLUDED.gender,
+       access_code        = COALESCE(students.access_code, EXCLUDED.access_code),
+       access_code_set_at = COALESCE(students.access_code_set_at, EXCLUDED.access_code_set_at)`,
     [sid, first_name || '', last_name || '', full_name || (first_name + ' ' + (last_name || '')).trim(),
-     norm, cls || '', section || '', school || '', school_state || '', school_city || '', age || '', gender || '', now]
+     norm, cls || '', section || '', school || '', school_state || '', school_city || '', age || '', gender || '', now,
+     generateAccessCode(), now]
   );
 
   let resultSid;
@@ -883,6 +890,104 @@ async function getStudentByEmail(email) {
 }
 
 /* Bulk import: all rows in one transaction. Returns { imported, skipped }. */
+
+/* ══════════════════════════════════════════════════════════════════
+   STUDENT ACCESS CODES
+   Staff-issued credential letting a bulk-imported student start the
+   assessment without re-registering. Codes are short and human-typable,
+   so they are deliberately scoped: a code is only ever looked up together
+   with the student's school + class + name, never on its own.
+══════════════════════════════════════════════════════════════════ */
+
+// Unambiguous alphabet — no O/0, I/1, S/5 to avoid transcription errors
+// when a code is read off a dashboard and typed by a student.
+const _CODE_ALPHABET = 'ABCDEFGHJKLMNPQRTUVWXYZ2346789';
+
+function generateAccessCode(len = 8) {
+  // rejection sampling keeps the distribution uniform (256 % 30 != 0)
+  const limit = 256 - (256 % _CODE_ALPHABET.length);
+  let out = '';
+  while (out.length < len) {
+    for (const b of crypto.randomBytes(len)) {
+      if (b < limit) { out += _CODE_ALPHABET[b % _CODE_ALPHABET.length]; if (out.length === len) break; }
+    }
+  }
+  return out;
+}
+
+// Constant-time compare so a redeem endpoint can't be timing-probed.
+function _codesEqual(a, b) {
+  const ba = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (ba.length !== bb.length || ba.length === 0) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+// Issue (or re-issue) a code for one student. Returns the new plaintext code.
+async function setStudentAccessCode(sessionId, code) {
+  const c = code || generateAccessCode();
+  // pg-core exposes exec(), not run() — run() was the better-sqlite3 API and
+  // this was the last remaining call site (caused a 500 on every regen click).
+  await pg.exec(
+    `UPDATE students SET access_code = $1, access_code_set_at = $2 WHERE session_id = $3`,
+    [c, new Date().toISOString(), sessionId]
+  );
+  return c;
+}
+
+// Redeem: school + class + name + code must ALL match one student.
+// Returns the student row on success, null otherwise. The candidate set is
+// narrowed in SQL by school/class/name; the code itself is compared in JS
+// in constant time so we never leak which field was wrong.
+async function redeemAccessCode({ school, klass, name, code }) {
+  const sc = String(school || '').trim();
+  const kl = String(klass  || '').trim();
+  const nm = String(name   || '').trim().toLowerCase();
+  const cd = String(code   || '').trim().toUpperCase();
+  if (!sc || !kl || !nm || !cd) return null;
+
+  const rows = await pg.many(
+    `SELECT session_id, first_name, last_name, full_name, class, section,
+            school, school_state, school_city, email, age, gender, access_code
+       FROM students
+      WHERE lower(btrim(school)) = lower(btrim($1))
+        AND lower(btrim(class))  = lower(btrim($2))
+        AND access_code IS NOT NULL
+        AND lower(btrim(full_name)) = $3`,
+    [sc, kl, nm]
+  );
+  for (const r of rows) {
+    if (_codesEqual(r.access_code, cd)) { delete r.access_code; return r; }
+  }
+  return null;
+}
+
+// Names available for the school+class picker on the student entry screen.
+// Only students who actually have a code are listed.
+async function listAccessNames(school, klass) {
+  return pg.many(
+    `SELECT full_name FROM students
+      WHERE lower(btrim(school)) = lower(btrim($1))
+        AND lower(btrim(class))  = lower(btrim($2))
+        AND access_code IS NOT NULL
+      ORDER BY full_name`,
+    [String(school || '').trim(), String(klass || '').trim()]
+  );
+}
+
+/* Distinct classes for a school that have at least one code-holding student.
+   Bulk import stores class as free text ("10-B", "Class 10 DS"), so the entry
+   form cannot use a fixed Grade 9-12 list — it must offer these values. */
+async function listAccessClasses(school) {
+  return pg.many(
+    `SELECT DISTINCT class FROM students
+      WHERE lower(btrim(school)) = lower(btrim($1))
+        AND access_code IS NOT NULL AND class IS NOT NULL AND btrim(class) <> ''
+      ORDER BY class`,
+    [String(school || '').trim()]
+  );
+}
+
 async function runImportTransaction(rows) {
   let imported = 0, skipped = 0;
   await pg.tx(async (c) => {
@@ -903,17 +1008,22 @@ async function runImportTransaction(rows) {
         if (!sid) sid = crypto.randomBytes(16).toString('hex');
 
         await c.query(
-          `INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+          `INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at, access_code, access_code_set_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
            ON CONFLICT (session_id) DO UPDATE SET
              first_name = EXCLUDED.first_name, last_name = EXCLUDED.last_name,
              full_name = EXCLUDED.full_name,   email = EXCLUDED.email,
              class = EXCLUDED.class,           section = EXCLUDED.section,
              school = EXCLUDED.school,         school_state = EXCLUDED.school_state,
-             school_city = EXCLUDED.school_city, age = EXCLUDED.age, gender = EXCLUDED.gender`,
+             school_city = EXCLUDED.school_city, age = EXCLUDED.age, gender = EXCLUDED.gender,
+             -- keep any code already issued so re-importing a roster never
+             -- invalidates codes already handed out to students
+             access_code = COALESCE(students.access_code, EXCLUDED.access_code),
+             access_code_set_at = COALESCE(students.access_code_set_at, EXCLUDED.access_code_set_at)`,
           [sid, fn || '', ln || '', fullName || (fn + ' ' + (ln || '')).trim(), norm,
            r.class || r.Class || '', r.section || r.Section || '', r.school || r.School || '',
-           r.school_state || '', r.school_city || '', r.age || '', r.gender || '', now]
+           r.school_state || '', r.school_city || '', r.age || '', r.gender || '', now,
+           generateAccessCode(), now]
         );
         imported++;
       } catch (_) { skipped++; }
@@ -1167,6 +1277,8 @@ module.exports = {
   countStudentsBySchool, getAllSchools,
   /* student CRUD */
   upsertStudent, deleteStudent, resetStudentAssessment, moveStudent, runImportTransaction, getStudentByEmail,
+  /* access codes */
+  generateAccessCode, setStudentAccessCode, redeemAccessCode, listAccessNames, listAccessClasses,
   /* notes & tags */
   addStudentNote, getStudentNotes, deleteStudentNote,
   setStudentTags, getStudentTags,
