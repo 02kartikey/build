@@ -44,10 +44,12 @@ function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
     'SCORES (interpret meaningfully, never just list numbers):\n' +
     'CPI top interests: ' + top5cpi + '\n' +
     'Top 3: ' + top3names + '\n' +
-    'SEAA (lower score = better adjustment; levels run Excellent → Good → Moderate → Needs Attention → Needs Support): ' + sea_line + '\n' +
+    'SEAA (lower score = better adjustment; supportive levels: Well-Established → Developing → Needs Support): ' + sea_line + '\n' +
     'NMAP personality (stanine /9): ' + nmap_line + ' | Top: ' + topP + '\n' +
     'Aptitude (stanine /9): ' + daab_line + '\n\n' +
     'WRITING RULES:\n' +
+    '- NEVER print raw scores or stanine numbers in the report. They are given to you only for interpretation. Use the band names (Strong/Emerging/Developing Trait, Strength/Developing/Focus Area, Key/Secondary/Exploring Interest, Well-Established/Developing/Needs Support).\n' +
+    '- Keep lower bands supportive, never discouraging. Where an area is low, say what can be built and include the idea that with the right support these areas can improve significantly.\n' +
     '- Use ' + st.firstName + "'s name naturally throughout.\n" +
     '- Warm, mentor voice — personal story, not data dump.\n' +
     '- Connect patterns across all four modules.\n' +

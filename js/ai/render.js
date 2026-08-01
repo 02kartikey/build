@@ -3,58 +3,58 @@
    Render AI report HTML, loading and error states.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S } from '../state.js';
+import { S, _saveSession } from '../state.js';
 import { buildReportCharts } from '../charts/report-charts.js';
 import { _aiState } from './generator.js';
+import { SEL_CAT_LABEL } from '../charts/core.js';
+
+// Panel state machine. The inline AI preview was removed (students download the
+// PDF instead), so these only toggle preparing / ready / error. Every lookup is
+// null-safe because the idle + generate/cancel buttons no longer exist.
+function _setDisp(id, val) { const el = document.getElementById(id); if (el) el.style.display = val; }
+function _setPdfBtn(enabled) {
+  const pdfBtn = document.getElementById('pdf-download-btn');
+  if (pdfBtn) { pdfBtn.disabled = !enabled; pdfBtn.classList.toggle('loading', !enabled); }
+}
 
 function showAILoading(on) {
-  document.getElementById('ai-report-idle').style.display    = on ? 'none' : 'block';
-  document.getElementById('ai-report-loading').style.display = on ? 'block' : 'none';
-  document.getElementById('ai-report-error').style.display   = 'none';
-  document.getElementById('ai-report-output').style.display  = 'none';
-  const btn       = document.getElementById('ai-report-btn');
-  const cancelBtn = document.getElementById('ai-cancel-btn');
-  if (btn) {
-    btn.disabled     = on;
-    btn.style.opacity = on ? '.45' : '1';
-    btn.style.cursor  = on ? 'not-allowed' : 'pointer';
-  }
-  if (cancelBtn) {
-    cancelBtn.style.display = on ? 'inline-flex' : 'none';
-  }
+  _setDisp('ai-report-loading', on ? 'block' : 'none');
+  _setDisp('ai-report-ready',   'none');
+  _setDisp('ai-report-error',   'none');
+  _setDisp('ai-report-output',  'none');
+  if (on) _setPdfBtn(false);
 }
 
 function showAIError(msg) {
-  document.getElementById('ai-report-idle').style.display    = 'none';
-  document.getElementById('ai-report-loading').style.display = 'none';
-  document.getElementById('ai-report-error').style.display   = 'block';
-  document.getElementById('ai-report-output').style.display  = 'none';
-  document.getElementById('ai-error-msg').textContent = msg;
-  const btn       = document.getElementById('ai-report-btn');
-  const cancelBtn = document.getElementById('ai-cancel-btn');
-  if (btn)       { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-  if (cancelBtn) { cancelBtn.style.display = 'none'; }
+  _setDisp('ai-report-loading', 'none');
+  _setDisp('ai-report-ready',   'none');
+  _setDisp('ai-report-error',   'block');
+  _setDisp('ai-report-output',  'none');
+  const m = document.getElementById('ai-error-msg');
+  if (m) m.textContent = msg;
   _aiState.generating = false; // release lock so the user can retry
   // Even if AI failed, allow the score-driven PDF to download.
-  const pdfBtn = document.getElementById('pdf-download-btn');
-  if (pdfBtn) { pdfBtn.disabled = false; pdfBtn.classList.remove('loading'); }
+  _setPdfBtn(true);
 }
 
+// Report finished. We no longer paint the report into the page — we simply
+// surface the "ready" state and enable the PDF download. The generated data
+// still lives in window._lastAIReport and is what gets baked into the PDF.
 function renderAIReport(data) {
-  document.getElementById('ai-report-idle').style.display    = 'none';
-  document.getElementById('ai-report-loading').style.display = 'none';
-  document.getElementById('ai-report-error').style.display   = 'none';
-  document.getElementById('ai-report-output').style.display  = 'block';
-  const btn       = document.getElementById('ai-report-btn');
-  const cancelBtn = document.getElementById('ai-cancel-btn');
-  if (btn)       { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
-  if (cancelBtn) { cancelBtn.style.display = 'none'; }
+  // Re-save the session now that the report exists. The snapshot written when
+  // the student first landed on results predates generation, so without this
+  // a refresh would still find no report and regenerate it.
+  try { _saveSession('results'); } catch (e) {}
+  _setDisp('ai-report-loading', 'none');
+  _setDisp('ai-report-error',   'none');
+  _setDisp('ai-report-output',  'none');
+  _setDisp('ai-report-ready',   'block');
   _aiState.generating = false; // release lock — report is done
-  // Now that the AI report is in window._lastAIReport, enable the PDF button.
-  const pdfBtn = document.getElementById('pdf-download-btn');
-  if (pdfBtn) { pdfBtn.disabled = false; pdfBtn.classList.remove('loading'); }
+  _setPdfBtn(true);
+}
 
-  /* ── XSS GUARD: escape any string before interpolating into HTML.
+function _unusedLegacyReportRenderer(data) {
+  /* ── XSS GUARD:  /* ── XSS GUARD: escape any string before interpolating into HTML.
      The AI response and the student-form values are both untrusted from
      a rendering standpoint — anything containing < > " ' & must be
      neutralised before it reaches innerHTML. ── */
@@ -174,7 +174,7 @@ function renderAIReport(data) {
     if (sea) {
       const cats = [sea.cls.E.cat, sea.cls.S.cat, sea.cls.A.cat];
       const worst = cats.sort().reverse()[0];
-      selLabel = worst==='A'?'Excellent':worst==='B'?'Good':worst==='C'?'Moderate':worst==='D'?'Unsatisfactory':'High Concern';
+      selLabel = SEL_CAT_LABEL[worst] || '—';
       selColor = worst<='B'?'#059669':worst==='C'?'#f59e0b':'#dc2626';
       selEmoji = worst<='B'?'🟢':worst==='C'?'🟡':'🔴';
     }
@@ -208,7 +208,7 @@ function renderAIReport(data) {
             ${row('🧠','Personality (NMAP)', esc(nmapLevel), nmapAvg?`Avg Stanine: ${esc(nmapAvg)}/9 · Top: ${esc(nmapTop||'—')}`:'Complete NMAP test', nmapColor, nmapEmoji)}
             ${row('⚡','Aptitude (DAAB)', esc(daabLevel), daabAvg?`Avg Stanine: ${esc(daabAvg)}/9`:'Complete DAAB test', daabColor, daabEmoji)}
             ${row('🎯','Career Interests (CPI)', esc(interestLabel), cpi?`Top: ${esc((cpi.top3||[]).slice(0,2).map(a=>a.label).join(', '))}`:'Complete CPI test', interestColor, interestEmoji)}
-            ${row('💚','Wellbeing (SEAA)', esc(selLabel), sea?`E:Cat${esc(sea.cls.E.cat)} · S:Cat${esc(sea.cls.S.cat)} · A:Cat${esc(sea.cls.A.cat)}`:'Complete SEAA test', selColor, selEmoji)}
+            ${row('💚','Wellbeing (SEAA)', esc(selLabel), sea?`Emotional: ${esc(SEL_CAT_LABEL[sea.cls.E.cat])} · Social: ${esc(SEL_CAT_LABEL[sea.cls.S.cat])} · Academic: ${esc(SEL_CAT_LABEL[sea.cls.A.cat])}`:'Complete SEAA test', selColor, selEmoji)}
           </tbody>
         </table>
       </div>
@@ -262,7 +262,7 @@ function renderAIReport(data) {
     // CONCERN (address) = SEL categories C, D, E
     const seaConcerns = sea ? Object.entries(sea.cls||{}).filter(([d,cl])=>cl.cat>='C').map(([d,cl])=>{
       const lbl = {E:'Emotional',S:'Social',A:'Academic'};
-      return `${lbl[d]} (Cat.${cl.cat} — ${cl.level})`;
+      return `${lbl[d]} (${cl.level})`;
     }) : [];
 
     const pillStyle = (col,bg) => `display:inline-block;background:${bg};color:${col};padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;margin:3px 4px 3px 0`;
@@ -333,9 +333,8 @@ function renderAIReport(data) {
     <!-- 2. APTITUDE PROFILE + DAAB Charts -->
     ${section('🔬','Aptitude Profile','#0e4f5c','#1a7f8e','#f0fafb','rgba(26,127,142,.2)',
       toHtml(data.aptitude_profile) +
-      `<div class="chart-grid-2" style="margin-top:1.25rem">
+      `<div style="margin-top:1.25rem">
         ${chartBox('chart-daab-bar-rpt','Aptitude Stanine Scores','Stanine 1–9 · dashed = average band',280,'')}
-        ${chartBox('chart-daab-radar-rpt','Aptitude Radar','Multi-dimensional aptitude view',280,'max-width:340px')}
       </div>`
     )}
 
@@ -355,8 +354,7 @@ function renderAIReport(data) {
     <!-- 5. PERSONALITY PROFILE + NMAP Charts -->
     ${section('🌟','Personality Profile','#7c6fcd','#9c8fe8','#f7f5ff','rgba(124,111,205,.2)',
       toHtml(data.personality_profile) +
-      `<div class="chart-grid-2" style="margin-top:1.25rem">
-        ${chartBox('chart-nmap-radar-rpt','Personality Radar','9 dimensions · outer = stronger',300,'max-width:360px')}
+      `<div style="margin-top:1.25rem">
         ${chartBox('chart-nmap-bar-rpt','Dimension Stanine Scores','Vertical bar · colour = strength band',280,'')}
       </div>`
     )}
@@ -368,7 +366,7 @@ function renderAIReport(data) {
         ${chartBox('chart-sel-bar-rpt','SEAA Domain Scores','Lower score = better adjustment (max 20)',240,'')}
         <div class="chart-box" style="margin-top:1.5rem">
           <div class="chart-box-title">SEAA Readiness Gauges</div>
-          <div class="chart-box-sub">Bar colour = category · 🟢 Cat A-B Good &nbsp; 🟡 Cat C Moderate &nbsp; 🔴 Cat D-E Needs Support</div>
+          <div class="chart-box-sub">🟢 Well-Established &nbsp; 🟡 Developing &nbsp; 🔴 Needs Support</div>
           <div class="sel-gauge-row" id="chart-sel-gauges-report" style="margin-top:.75rem"></div>
         </div>
       </div>`

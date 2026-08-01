@@ -112,36 +112,38 @@ function cancelReport() {
   if (_aiAbortCtrl) { _aiAbortCtrl.abort(); }
   _aiState.generating = false;
   _hidePill();
-  // Restore idle UI so the user can try again
-  document.getElementById('ai-report-idle').style.display    = 'block';
-  document.getElementById('ai-report-loading').style.display = 'none';
-  document.getElementById('ai-report-error').style.display   = 'none';
-  document.getElementById('ai-report-output').style.display  = 'none';
-  const genBtn    = document.getElementById('ai-report-btn');
-  const cancelBtn = document.getElementById('ai-cancel-btn');
-  if (genBtn)    { genBtn.disabled = false; genBtn.style.display    = 'inline-flex'; genBtn.style.opacity = '1'; }
-  if (cancelBtn) { cancelBtn.style.display = 'none'; }
+  // Surface the error state so the user can retry. Null-safe: the idle panel and
+  // the generate/cancel buttons were removed with the inline preview.
+  const _d = (id, v) => { const el = document.getElementById(id); if (el) el.style.display = v; };
+  _d('ai-report-loading', 'none');
+  _d('ai-report-ready',   'none');
+  _d('ai-report-output',  'none');
+  _d('ai-report-error',   'block');
+  const msgEl = document.getElementById('ai-error-msg');
+  if (msgEl) msgEl.textContent = 'Report preparation was cancelled.';
+  const pdfBtn = document.getElementById('pdf-download-btn');
+  if (pdfBtn) { pdfBtn.disabled = false; pdfBtn.classList.remove('loading'); }
 }
 
 /* ── Cooldown countdown: updates error message with remaining seconds ── */
 function _startCooldownCountdown(waitMs) {
-  const btn = document.getElementById('ai-report-btn');
+  const btn = document.getElementById('ai-report-btn'); // may be null (preview removed)
   const msgEl = document.getElementById('ai-error-msg');
-  if (!msgEl || !btn) return;
+  if (!msgEl) return;
 
   // Clear any previous countdown before starting a new one.
   if (window._cooldownTick) { clearInterval(window._cooldownTick); window._cooldownTick = null; }
 
   const endTime = Date.now() + waitMs;
-  btn.disabled = true; btn.style.opacity = '.45'; btn.style.cursor = 'not-allowed';
+  if (btn) { btn.disabled = true; btn.style.opacity = '.45'; btn.style.cursor = 'not-allowed'; }
 
   window._cooldownTick = setInterval(function() {
     const remaining = Math.ceil((endTime - Date.now()) / 1000);
     if (remaining <= 0) {
       clearInterval(window._cooldownTick);
       window._cooldownTick = null;
-      btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer';
-      if (msgEl) msgEl.textContent = 'You can generate a new report now.';
+      if (btn) { btn.disabled = false; btn.style.opacity = '1'; btn.style.cursor = 'pointer'; }
+      if (msgEl) msgEl.textContent = 'You can prepare a new report now.';
       return;
     }
     if (msgEl) msgEl.textContent = `Please wait ${remaining} second${remaining !== 1 ? 's' : ''} before generating another report.`;

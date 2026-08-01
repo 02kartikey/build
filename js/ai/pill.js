@@ -15,7 +15,7 @@ function _ensurePillAndToast() {
       border:2.5px solid rgba(255,255,255,.35);border-top-color:#fff;
       animation:ai-spin 0.85s linear infinite;flex-shrink:0"></span>
     <span id="ai-pill-msg" style="font-size:13px;font-weight:600;letter-spacing:.01em">
-      Generating your report…
+      Preparing your report…
     </span>
     <button onclick="cancelReport()" title="Cancel" style="
       background:rgba(255,255,255,.18);border:none;border-radius:6px;
@@ -39,11 +39,11 @@ function _ensurePillAndToast() {
   toast.id = 'ai-ready-toast';
   toast.innerHTML = `
     <span style="font-size:18px">✦</span>
-    <span style="flex:1;font-size:14px;font-weight:600">Your AI Report is ready!</span>
+    <span style="flex:1;font-size:14px;font-weight:600">Your report is ready to download!</span>
     <a id="ai-toast-link" href="#ai-report-card" style="
       background:#fff;color:#4f46e5;border-radius:8px;
       padding:6px 14px;font-size:13px;font-weight:700;
-      text-decoration:none;white-space:nowrap;flex-shrink:0">View Report ↓</a>
+      text-decoration:none;white-space:nowrap;flex-shrink:0">Download ↓</a>
     <button onclick="_dismissToast()" style="
       background:rgba(255,255,255,.2);border:none;border-radius:6px;
       color:#fff;cursor:pointer;font-size:13px;font-weight:700;

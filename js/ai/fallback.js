@@ -10,7 +10,7 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
 
   /* ── Helpers ── */
   function stanineLabel(s) { return s >= 7 ? 'Strength' : s >= 4 ? 'Developing' : 'Needs Attention'; }
-  function catLabel(c)     { return {A:'Excellent',B:'Good',C:'Moderate',D:'Unsatisfactory',E:'High Concern'}[c] || c; }
+  function catLabel(c)     { return {A:'Well-Established',B:'Well-Established',C:'Developing',D:'Needs Support',E:'Needs Support'}[c] || c; }
   // After scoring, each NMAP dim's `label` is overwritten with the stanine
   // BAND ('Very High', 'High', …). The trait title survives as `name` (full)
   // and `abbr` (short). Never fall back to `label` — that would print the band
@@ -114,8 +114,7 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   const wellbeing_guidance =
     (sea
       ? (selGood.length === 3
-          ? firstName + "'s social-emotional scores are healthy across Emotional, Social, and Academic domains — all falling in the " +
-            [(sea.cls.E||{}).cat, (sea.cls.S||{}).cat, (sea.cls.A||{}).cat].map(catLabel).join(', ') + ' categories respectively. This is a real asset.\n\n' +
+          ? firstName + "'s social-emotional scores are healthy across Emotional, Social, and Academic domains — all in the Well-Established range. This is a real asset.\n\n" +
             'Continue the habits that support this wellbeing: regular sleep, staying connected with supportive friends, and asking for help early when academic pressure builds.'
           : 'In terms of SEL readiness, ' + firstName + "'s area of greatest existing readiness is " +
             (selGood.length
