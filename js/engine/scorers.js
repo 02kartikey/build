@@ -43,11 +43,13 @@ const ENGINE = {
       A: isFemale?[2,5,7,10]:[2,4,7,10],
     };
     const T=TABLES[domain]??TABLES.E;
-    if(score<=T[0]) return {cat:'A',level:'Excellent'};
-    if(score<=T[1]) return {cat:'B',level:'Good'};
-    if(score<=T[2]) return {cat:'C',level:'Average'};
-    if(score<=T[3]) return {cat:'D',level:'Unsatisfactory'};
-    return {cat:'E',level:'Very Unsatisfactory'};
+    // Category (A–E) drives colour banding; the displayed level uses the
+    // supportive 3-tier SEAA scheme (Well-Established / Developing / Needs Support).
+    if(score<=T[0]) return {cat:'A',level:'Well-Established'};
+    if(score<=T[1]) return {cat:'B',level:'Well-Established'};
+    if(score<=T[2]) return {cat:'C',level:'Developing'};
+    if(score<=T[3]) return {cat:'D',level:'Needs Support'};
+    return {cat:'E',level:'Needs Support'};
   },
 
   scoreNMAP(answers) {
