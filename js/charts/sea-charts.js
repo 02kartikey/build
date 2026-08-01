@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    charts/sea-charts.js
-   SEAA gauges + radar.
+   SEAA gauges + bar.
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
@@ -14,7 +14,7 @@ function buildSELCharts() {
   const doms = ['E', 'S', 'A'];
 
   // Bar colours come from category severity (A=green … E=red).
-  // Using shared constants so gauges, bar, radar, and report charts all stay in sync.
+  // Using shared constants so gauges, bar, and report charts all stay in sync.
   const barColors = doms.map(d => SEL_CAT_COLOR[sea.cls[d].cat] || '#6b7280');
 
   // ── 1. Grouped bar — bar height = problem score, colour = category severity ──
@@ -45,7 +45,7 @@ function buildSELCharts() {
                 const cl  = sea.cls[d];
                 const col = SEL_CAT_COLOR[cl.cat] || '#6b7280';
                 return {
-                  text: `${SEL_DOM_INFO[d].label}: Cat ${cl.cat} — ${cl.level}`,
+                  text: `${SEL_DOM_INFO[d].label}: ${cl.level}`,
                   fillStyle: col + 'cc',
                   strokeStyle: col,
                   fontColor: '#374151',
@@ -60,7 +60,7 @@ function buildSELCharts() {
               afterLabel: ctx => {
                 const d  = doms[ctx.dataIndex];
                 const cl = sea.cls[d];
-                return [` Category ${cl.cat}: ${cl.level}`, ` ↑ Higher bar = more difficulty`];
+                return [` Readiness: ${cl.level}`, ` ↑ Higher bar = more difficulty`];
               },
             },
           },
@@ -103,63 +103,6 @@ function buildSELCharts() {
     }, 300);
   }
 
-  // ── 3. Radar (inverted: higher on chart = BETTER adjustment) ──
-  // Each point is coloured by the domain's actual category so it matches the bar + gauges.
-  destroyChart('sel-radar');
-  const radarCtx = document.getElementById('chart-sel-radar');
-  if (radarCtx) {
-    const invertedScores  = doms.map(d => 20 - sea.domScores[d]);
-    const pointColors     = doms.map(d => SEL_CAT_COLOR[sea.cls[d].cat] || '#6b7280');
-    // Average category colour for the fill/border
-    const avgScore        = sea.domScores['E'] + sea.domScores['S'] + sea.domScores['A'];
-    const avgCat          = avgScore <= 24 ? 'A' : avgScore <= 30 ? 'B' : avgScore <= 36 ? 'C' : avgScore <= 42 ? 'D' : 'E';
-    const radarBorder     = SEL_CAT_COLOR[avgCat];
-    const radarFill       = radarBorder + '26'; // ~15% opacity
-    CHARTS['sel-radar'] = new Chart(radarCtx, {
-      type: 'radar',
-      data: {
-        labels: ['Emotional\nAdjustment', 'Social\nAdjustment', 'Academic\nAdjustment'],
-        datasets: [{
-          label: 'Adjustment (↑ Higher = Better)',
-          data: invertedScores,
-          backgroundColor: radarFill,
-          borderColor: radarBorder,
-          pointBackgroundColor: pointColors,  // each point = that domain's category colour
-          pointBorderColor: '#fff',
-          pointRadius: 6,
-          borderWidth: 2.5,
-        }],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                const d  = doms[ctx.dataIndex];
-                const cl = sea.cls[d];
-                const raw = sea.domScores[d];
-                return [
-                  ` Raw score: ${raw}/20 (lower = better)`,
-                  ` Category ${cl.cat}: ${cl.level}`,
-                ];
-              },
-            },
-          },
-        },
-        scales: {
-          r: {
-            min: 0, max: 20,
-            ticks: { stepSize: 5, font: { size: 10 } },
-            pointLabels: { font: { family: 'Poppins', size: 11, weight: '600' }, color: '#2d3348' },
-            grid: { color: 'rgba(0,0,0,0.07)' },
-            angleLines: { color: 'rgba(0,0,0,0.08)' },
-          },
-        },
-      },
-    });
-  }
 }
 
 /* ═══════════════════════════════════════

@@ -108,11 +108,16 @@ function buildCPICharts() {
   const statsEl = document.getElementById('chart-cpi-stats');
   if (statsEl && cpi.top3.length) {
     const total = cpi.ranked.reduce((s,a)=>s+a.score,0);
+    // Tiles speak in the tracker's interest bands (Key / Secondary / Exploring),
+    // never raw numbers: "Top Score 11" and "0 Strong Areas" read as failure to
+    // a parent when they are simply a moderate profile.
+    const topBand = cpi.top3[0].score >= 15 ? 'Key Interest' : cpi.top3[0].score >= 8 ? 'Secondary Interest' : 'Exploring';
+    const keyCount = cpi.ranked.filter(a => a.score >= 15).length;
     statsEl.innerHTML = [
       { num: cpi.top3[0].label.split(' ')[0], lbl: 'Top Interest' },
-      { num: cpi.top3[0].score, lbl: 'Top Score' },
-      { num: cpi.ranked.filter(a=>a.level==='Strong').length, lbl: 'Strong Areas' },
-      { num: total, lbl: 'Total Selections' },
+      { num: topBand, lbl: 'Top Interest Band' },
+      { num: keyCount > 0 ? keyCount + ' Key' : 'Exploring', lbl: keyCount > 0 ? 'Key Interest Areas' : 'Interest Stage' },
+      { num: cpi.ranked.length, lbl: 'Areas Explored' },
     ].map(s =>
       `<div class="chart-stat-pill">
         <div class="chart-stat-num">${s.num}</div>

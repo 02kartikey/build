@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    charts/overview-charts.js
-   Overview combined charts (radar + bar).
+   Overview combined charts (bar).
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
@@ -8,7 +8,7 @@ import { CPI_AREAS } from '../engine/cpi.js';
 import { NMAP_DIMS } from '../engine/nmap.js';
 import { DAAB_SUBS } from '../engine/daab.js';
 import { SEA_DOMAINS } from '../engine/sea.js';
-import { CHARTS, destroyChart, stanineColor, CHART_ALPHA } from './core.js';
+import { CHARTS, destroyChart, stanineColor, CHART_ALPHA, SEL_CAT_LABEL } from './core.js';
 
 function buildOverviewCharts() {
   const nmap = S.nmap.scores;
@@ -43,7 +43,7 @@ function buildOverviewCharts() {
       data: {
         labels: allLabels,
         datasets: [{
-          label: 'Stanine Score',
+          label: 'Score',
           data: allStanines,
           backgroundColor: allColors.map(c => CHART_ALPHA(c, 0.8)),
           borderColor: allColors,
@@ -62,67 +62,20 @@ function buildOverviewCharts() {
         plugins: {
           legend: { position: 'bottom', labels: { font: { family:'Inter', size:11 }, boxWidth:12, generateLabels: (chart) => [
             ...Chart.defaults.plugins.legend.labels.generateLabels(chart),
-            { text: '🔴 1–3 Needs Attention · 🟡 4–6 Developing · 🟢 7–9 Strength', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280' }
+            { text: '🔴 Focus Area · 🟡 Developing Area · 🟢 Strength Area', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280' }
           ]}},
           tooltip: {
             callbacks: {
               title: ctx => `${ctx[0].label} (${allGroups[ctx[0].dataIndex]})`,
               label: ctx => ctx.datasetIndex === 0
-                ? ` Stanine: ${ctx.raw} — ${ctx.raw<=3?'🔴 Needs Attention':ctx.raw<=6?'🟡 Developing':'🟢 Strength'}`
+                ? ` ${ctx.raw<=3?'🔴 Focus Area':ctx.raw<=6?'🟡 Developing Area':'🟢 Strength Area'}`
                 : ' Average'
             }
           }
         },
         scales: {
-          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { stepSize: 1 } },
+          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { stepSize: 3, callback: v => ({3:'Focus',6:'Developing',9:'Strength'}[v] || ''), font: { family:'Poppins', size:10, weight:'600' } } },
           x: { grid: { display: false }, ticks: { font: { family:'Poppins', size: 9, weight: '600' }, maxRotation: 45 } }
-        }
-      }
-    });
-  }
-
-  // ── 2. Combined personality + aptitude radar ──
-  destroyChart('overview-radar');
-  const ovRadCtx = document.getElementById('chart-overview-radar');
-  if (ovRadCtx && nmap && available.length) {
-    const top5personality = nmap.sorted.slice(0, 5);
-    const topAptitude = available.slice(0, 5);
-    const radarLabels = [...top5personality.map(d => d.abbr), ...topAptitude.map(k => subLabels[k])];
-    CHARTS['overview-radar'] = new Chart(ovRadCtx, {
-      type: 'radar',
-      data: {
-        labels: radarLabels,
-        datasets: [{
-          label: 'Personality (Top 5)',
-          data: [...top5personality.map(d => d.stanine), ...Array(topAptitude.length).fill(null)],
-          backgroundColor: 'rgba(124,58,237,0.12)',
-          borderColor: '#7c3aed',
-          pointBackgroundColor: '#7c3aed',
-          pointBorderColor: '#fff',
-          pointRadius: 5, borderWidth: 2.5, fill: true,
-          spanGaps: false,
-        }, {
-          label: 'Aptitude',
-          data: [...Array(top5personality.length).fill(null), ...topAptitude.map(k => S.daab[k].scores.stanine)],
-          backgroundColor: 'rgba(245,158,11,0.1)',
-          borderColor: '#f59e0b',
-          pointBackgroundColor: '#f59e0b',
-          pointBorderColor: '#fff',
-          pointRadius: 5, borderWidth: 2.5, fill: true,
-          spanGaps: false,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { position: 'bottom', labels: { font: { family:'Inter', size:11 }, boxWidth:12 } } },
-        scales: {
-          r: {
-            min: 0, max: 9,
-            ticks: { stepSize: 3, font: { size: 9 }, callback: v => v===3?'🔴Low':v===6?'🟡Avg':v===9?'🟢High':'' },
-            pointLabels: { font: { family:'Poppins', size:10, weight:'700' }, color:'#2d3348' },
-            grid: { color: 'rgba(0,0,0,0.06)' },
-            angleLines: { color: 'rgba(0,0,0,0.07)' },
-          }
         }
       }
     });
@@ -140,7 +93,7 @@ function buildOverviewCharts() {
     const sea = S.sea.scores;
     const cpi = S.cpi.scores;
     const seaSummary = sea
-      ? `E: Cat${sea.cls.E.cat} · S: Cat${sea.cls.S.cat} · A: Cat${sea.cls.A.cat}`
+      ? `E: ${SEL_CAT_LABEL[sea.cls.E.cat]} · S: ${SEL_CAT_LABEL[sea.cls.S.cat]} · A: ${SEL_CAT_LABEL[sea.cls.A.cat]}`
       : '—';
     const cpiTop = cpi && cpi.top3.length ? cpi.top3.slice(0,2).map(a=>a.abbr).join(', ') : '—';
     statsEl.innerHTML = `
@@ -150,19 +103,21 @@ function buildOverviewCharts() {
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #f59e0b">
         <div class="chart-stat-num" style="color:#f59e0b">${mid}</div>
-        <div class="chart-stat-lbl">🟡 Developing</div>
+        <div class="chart-stat-lbl">🟡 Developing Areas</div>
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #ef4444">
         <div class="chart-stat-num" style="color:#ef4444">${low}</div>
-        <div class="chart-stat-lbl">🔴 Needs Attention</div>
+        <div class="chart-stat-lbl">🔴 Focus Areas</div>
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #1a7f8e">
-        <div class="chart-stat-num" style="color:#1a7f8e">${avg}</div>
-        <div class="chart-stat-lbl">Avg Stanine</div>
+        <!-- Band word only. The tile was renamed from "Avg Stanine" earlier but
+             still printed the numeric average — a label/value mismatch. -->
+        <div class="chart-stat-num" style="color:#1a7f8e;font-size:15px">${avg === '-' ? '—' : (parseFloat(avg) >= 6.5 ? 'Strength' : parseFloat(avg) >= 4 ? 'Developing' : 'Focus')}</div>
+        <div class="chart-stat-lbl">Overall Band</div>
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #7c6fcd;min-width:200px">
         <div class="chart-stat-num" style="font-size:13px;color:#7c6fcd">${seaSummary}</div>
-        <div class="chart-stat-lbl">SEAA Categories</div>
+        <div class="chart-stat-lbl">SEAA Readiness</div>
       </div>
       <div class="chart-stat-pill" style="border-left:4px solid #4f46e5;min-width:140px">
         <div class="chart-stat-num" style="font-size:13px;color:#4f46e5">${cpiTop}</div>

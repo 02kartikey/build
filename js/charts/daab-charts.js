@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    charts/daab-charts.js
-   DAAB bar + radar.
+   DAAB bar.
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
@@ -30,7 +30,7 @@ function buildDAAbCharts() {
       data: {
         labels,
         datasets: [{
-          label: 'Stanine',
+          label: 'Aptitude',
           data: stanines,
           backgroundColor: colors.map(c => CHART_ALPHA(c, 0.8)),
           borderColor: colors,
@@ -55,7 +55,7 @@ function buildDAAbCharts() {
           tooltip: {
             callbacks: {
               label: ctx => ctx.datasetIndex === 0
-                ? ` Stanine ${ctx.raw} (${S.daab[available[ctx.dataIndex]].scores.label}) — ${ctx.raw<=3?'🔴 Needs Attention':ctx.raw<=6?'🟡 Developing':'🟢 Strength'}`
+                ? ` ${S.daab[available[ctx.dataIndex]].scores.label} — ${ctx.raw<=3?'🔴 Focus Area':ctx.raw<=6?'🟡 Developing Area':'🟢 Strength Area'}`
                 : ' Average'
             }
           }
@@ -68,92 +68,7 @@ function buildDAAbCharts() {
     });
   }
 
-  // ── 2. Radar ──
-  // Derive a representative fill colour from the average stanine so the shape
-  // colour reflects the overall aptitude zone rather than always being amber.
-  destroyChart('daab-radar');
-  const radCtx = document.getElementById('chart-daab-radar');
-  if (radCtx) {
-    const avgStanine = Math.round(stanines.reduce((a, b) => a + b, 0) / stanines.length);
-    const radarBorderColor = stanineColor(avgStanine);
-    const radarFillColor   = stanineColor(avgStanine, 0.12);
-    CHARTS['daab-radar'] = new Chart(radCtx, {
-      type: 'radar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Stanine',
-          data: stanines,
-          backgroundColor: radarFillColor,
-          borderColor: radarBorderColor,
-          pointBackgroundColor: colors,   // each point keeps its own stanine colour
-          pointBorderColor: '#fff',
-          pointRadius: 6,
-          borderWidth: 2.5, fill: true,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          r: {
-            min: 0, max: 9,
-            ticks: { stepSize: 3, font: { size: 10 }, callback: v => v === 3 ? '🔴Low' : v === 6 ? '🟡Avg' : v === 9 ? '🟢High' : '' },
-            pointLabels: { font: { family:'Poppins', size:10, weight:'700' }, color:'#2d3348' },
-            grid: { color: 'rgba(0,0,0,0.06)' },
-            angleLines: { color: 'rgba(0,0,0,0.07)' },
-          }
-        }
-      }
-    });
-  }
-
   // ── 3. Stacked bar: raw vs remaining ──
-  destroyChart('daab-stacked');
-  const stkCtx = document.getElementById('chart-daab-stacked');
-  if (stkCtx) {
-    CHARTS['daab-stacked'] = new Chart(stkCtx, {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Correct',
-          data: raws,
-          backgroundColor: colors.map(c => CHART_ALPHA(c, 0.8)),
-          borderColor: colors,
-          borderWidth: 2, borderRadius: 0, borderSkipped: false,
-          stack: 'a',
-        }, {
-          label: 'Missed',
-          data: available.map((k,i) => maxes[i] - raws[i]),
-          backgroundColor: 'rgba(156,163,175,0.18)',
-          borderColor: 'rgba(156,163,175,0.35)',
-          borderWidth: 1, borderRadius: 0, borderSkipped: false,
-          stack: 'a',
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: {
-          legend: { position: 'bottom', labels: { font: { family:'Inter', size:11 }, boxWidth:12 } },
-          tooltip: {
-            callbacks: {
-              label: ctx => {
-                const k = available[ctx.dataIndex];
-                return ctx.datasetIndex === 0
-                  ? ` Correct: ${ctx.raw} / ${maxes[ctx.dataIndex]}`
-                  : ` Missed: ${ctx.raw}`;
-              }
-            }
-          }
-        },
-        scales: {
-          x: { stacked: true, grid: { display: false }, ticks: { font: { family:'Poppins', size:11 } } },
-          y: { stacked: true, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size:11 } } }
-        }
-      }
-    });
-  }
 }
 
 

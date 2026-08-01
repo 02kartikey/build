@@ -46,48 +46,15 @@ function buildReportCharts() {
           plugins: {
             legend:{ position:'bottom', labels:{ font:{ family:'Inter', size:11 }, boxWidth:12, generateLabels: (chart) => [
               ...Chart.defaults.plugins.legend.labels.generateLabels(chart),
-              { text:'🔴 1–3 Needs Attention · 🟡 4–6 Developing · 🟢 7–9 Strength', fillStyle:'transparent', strokeStyle:'transparent', fontColor:'#6b7280' }
+              { text:'🔴 Focus Area · 🟡 Developing Area · 🟢 Strength Area', fillStyle:'transparent', strokeStyle:'transparent', fontColor:'#6b7280' }
             ]}},
             tooltip:{ callbacks:{ label: ctx => ctx.datasetIndex===0
-              ? ` Stanine ${ctx.raw} (${S.daab[avail[ctx.dataIndex]].scores.label}) — ${ctx.raw<=3?'🔴 Needs Attention':ctx.raw<=6?'🟡 Developing':'🟢 Strength'}` : ' Average' } }
+              ? ` ${S.daab[avail[ctx.dataIndex]].scores.label} — ${ctx.raw<=3?'🔴 Focus Area':ctx.raw<=6?'🟡 Developing Area':'🟢 Strength Area'}` : ' Average' } }
           },
           scales: {
-            y:{ min:0, max:9, ticks:{ stepSize:1 }, grid:{ color:'rgba(0,0,0,0.05)' } },
+            y:{ min:0, max:9, grid:{ color:'rgba(0,0,0,0.05)' }, ticks:{ stepSize:3, callback: v => ({3:'Focus',6:'Developing',9:'Strength'}[v] || ''), font:{ family:'Poppins', size:10, weight:'600' } } },
             x:{ grid:{ display:false }, ticks:{ font:{ family:'Poppins', size:11, weight:'600' } } }
           }
-        }
-      });
-    }
-  }
-
-  /* ═══ 2. DAAB radar ═══ */
-  destroyChart('daab-radar-rpt');
-  const daabRadEl = document.getElementById('chart-daab-radar-rpt');
-  if (daabRadEl) {
-    const avail   = ['va','pa','na','lsa','hma','ar','ma','sa'].filter(k => S.daab[k].scores);
-    if (avail.length) {
-      const labels   = avail.map(k => subLabels[k]);
-      const stanines = avail.map(k => S.daab[k].scores.stanine);
-      const colors   = stanines.map(stanineColor);
-      const avgStn   = Math.round(stanines.reduce((a,b)=>a+b,0)/stanines.length);
-      CHARTS['daab-radar-rpt'] = new Chart(daabRadEl, {
-        type:'radar',
-        data: {
-          labels,
-          datasets:[{ label:'Stanine', data:stanines,
-            backgroundColor: stanineColor(avgStn, 0.12),
-            borderColor:     stanineColor(avgStn),
-            pointBackgroundColor:colors, pointBorderColor:'#fff',
-            pointRadius:6, borderWidth:2.5, fill:true }]
-        },
-        options:{
-          responsive:true, maintainAspectRatio:false,
-          plugins:{ legend:{ display:false } },
-          scales:{ r:{ min:0, max:9,
-            ticks:{ stepSize:3, font:{size:10}, callback: v => v===3?'🔴Low':v===6?'🟡Avg':v===9?'🟢High':'' },
-            pointLabels:{ font:{ family:'Poppins', size:10, weight:'700' }, color:'#2d3348' },
-            grid:{ color:'rgba(0,0,0,0.06)' }, angleLines:{ color:'rgba(0,0,0,0.07)' }
-          }}
         }
       });
     }
@@ -145,36 +112,6 @@ function buildReportCharts() {
     ).join('');
   }
 
-  /* ═══ 5. NMAP radar ═══ */
-  destroyChart('nmap-radar-rpt');
-  const nmapRadEl = document.getElementById('chart-nmap-radar-rpt');
-  if (nmapRadEl && S.nmap.scores) {
-    const dims     = S.nmap.scores.dims;
-    const stanines = dims.map(d => d.stanine);
-    const colors   = stanines.map(stanineColor);
-    const avgStn   = Math.round(stanines.reduce((a,b)=>a+b,0)/stanines.length);
-    CHARTS['nmap-radar-rpt'] = new Chart(nmapRadEl, {
-      type:'radar',
-      data:{
-        labels: dims.map(d => d.abbr),
-        datasets:[{ label:'Stanine', data:stanines,
-          backgroundColor: stanineColor(avgStn, 0.12),
-          borderColor:     stanineColor(avgStn),
-          pointBackgroundColor:colors, pointBorderColor:'#fff',
-          pointRadius:7, borderWidth:2.5, fill:true }]
-      },
-      options:{
-        responsive:true, maintainAspectRatio:false,
-        plugins:{ legend:{ display:false } },
-        scales:{ r:{ min:0, max:9,
-          ticks:{ stepSize:3, font:{size:10}, callback: v => v===3?'🔴Low':v===6?'🟡Avg':v===9?'🟢High':'' },
-          pointLabels:{ font:{ family:'Poppins', size:10, weight:'700' }, color:'#2d3348' },
-          grid:{ color:'rgba(0,0,0,0.06)' }, angleLines:{ color:'rgba(0,0,0,0.07)' }
-        }}
-      }
-    });
-  }
-
   /* ═══ 6. NMAP bar ═══ */
   destroyChart('nmap-bar-rpt');
   const nmapBarEl = document.getElementById('chart-nmap-bar-rpt');
@@ -200,13 +137,13 @@ function buildReportCharts() {
         plugins:{
           legend:{ position:'bottom', labels:{ font:{ family:'Inter', size:11 }, boxWidth:12, generateLabels: (chart) => [
             ...Chart.defaults.plugins.legend.labels.generateLabels(chart),
-            { text:'🔴 1–3 Needs Attention · 🟡 4–6 Developing · 🟢 7–9 Strength', fillStyle:'transparent', strokeStyle:'transparent', fontColor:'#6b7280' }
+            { text:'🔴 Focus Area · 🟡 Developing Area · 🟢 Strength Area', fillStyle:'transparent', strokeStyle:'transparent', fontColor:'#6b7280' }
           ]}},
           tooltip:{ callbacks:{ label: ctx => ctx.datasetIndex===0
-            ? ` Stanine ${ctx.raw}: ${dims[ctx.dataIndex].label} — ${ctx.raw<=3?'🔴 Needs Attention':ctx.raw<=6?'🟡 Developing':'🟢 Strength'}` : ' Average band' } }
+            ? ` ${dims[ctx.dataIndex].label} — ${ctx.raw<=3?'🔴 Focus Area':ctx.raw<=6?'🟡 Developing Area':'🟢 Strength Area'}` : ' Average band' } }
         },
         scales:{
-          y:{ min:0, max:9, grid:{ color:'rgba(0,0,0,0.05)' }, ticks:{ font:{ size:11 } } },
+          y:{ min:0, max:9, grid:{ color:'rgba(0,0,0,0.05)' }, ticks:{ stepSize:3, callback: v => ({3:'Focus',6:'Developing',9:'Strength'}[v] || ''), font:{ family:'Poppins', size:10, weight:'600' } } },
           x:{ grid:{ display:false }, ticks:{ font:{ family:'Poppins', size:10, weight:'600' } } }
         }
       }
@@ -239,7 +176,7 @@ function buildReportCharts() {
             generateLabels: () => doms.map(d => {
               const cl  = sea.cls[d];
               const col = SEL_CAT_COLOR[cl.cat] || '#6b7280';
-              return { text:`${SEL_DOM_INFO[d].label}: Cat ${cl.cat} — ${cl.level}`,
+              return { text:`${SEL_DOM_INFO[d].label}: ${cl.level}`,
                 fillStyle:col+'cc', strokeStyle:col, fontColor:'#374151', lineWidth:1.5 };
             }),
           }},
@@ -247,7 +184,7 @@ function buildReportCharts() {
             label: ctx => ` Score: ${ctx.raw}/20`,
             afterLabel: ctx => {
               const d = doms[ctx.dataIndex]; const cl = sea.cls[d];
-              return [` Category ${cl.cat}: ${cl.level}`, ` ↑ Higher = more difficulty`];
+              return [` Readiness: ${cl.level}`, ` ↑ Higher = more difficulty`];
             }
           }}
         },

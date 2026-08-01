@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    charts/nmap-charts.js
-   NMAP radar + bar.
+   NMAP bar.
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
@@ -17,46 +17,6 @@ function buildNMAPCharts() {
   const pcts = dims.map(d => d.pct);
   const colors = dims.map(d => stanineColor(d.stanine));
 
-  // ── 1. Radar ──
-  // Derive representative fill from average stanine so colour reflects actual zone.
-  destroyChart('nmap-radar');
-  const radarCtx = document.getElementById('chart-nmap-radar');
-  if (radarCtx) {
-    const avgStanine     = Math.round(stanines.reduce((a, b) => a + b, 0) / stanines.length);
-    const radarBorder    = stanineColor(avgStanine);
-    const radarFill      = stanineColor(avgStanine, 0.12);
-    CHARTS['nmap-radar'] = new Chart(radarCtx, {
-      type: 'radar',
-      data: {
-        labels: labels,
-        datasets: [{
-          label: 'Stanine',
-          data: stanines,
-          backgroundColor: radarFill,
-          borderColor: radarBorder,
-          pointBackgroundColor: colors,   // each point keeps its own stanine colour
-          pointBorderColor: '#fff',
-          pointRadius: 7,
-          borderWidth: 2.5,
-          fill: true,
-        }]
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          r: {
-            min: 0, max: 9,
-            ticks: { stepSize: 3, font: { size: 10 }, callback: v => v === 3 ? '🔴Low' : v === 6 ? '🟡Avg' : v === 9 ? '🟢High' : '' },
-            pointLabels: { font: { family: 'Poppins', size: 10, weight: '700' }, color: '#2d3348' },
-            grid: { color: 'rgba(0,0,0,0.06)' },
-            angleLines: { color: 'rgba(0,0,0,0.07)' },
-          }
-        }
-      }
-    });
-  }
-
   // ── 2. Vertical bar ──
   destroyChart('nmap-bar');
   const barCtx = document.getElementById('chart-nmap-bar');
@@ -66,7 +26,7 @@ function buildNMAPCharts() {
       data: {
         labels: labels,
         datasets: [{
-          label: 'Stanine',
+          label: 'Trait strength',
           data: stanines,
           backgroundColor: colors.map(c => CHART_ALPHA(c, 0.73)),
           borderColor: colors,
@@ -92,7 +52,7 @@ function buildNMAPCharts() {
           tooltip: {
             callbacks: {
               label: ctx => ctx.datasetIndex === 0
-                ? ` Stanine ${ctx.raw}: ${dims[ctx.dataIndex].label} — ${ctx.raw<=3?'🔴 Needs Attention':ctx.raw<=6?'🟡 Developing':'🟢 Strength'}`
+                ? ` ${dims[ctx.dataIndex].label} — ${ctx.raw<=3?'🔴 Focus Area':ctx.raw<=6?'🟡 Developing Area':'🟢 Strength Area'}`
                 : ` Average band`
             }
           }
@@ -126,7 +86,7 @@ function buildNMAPCharts() {
           legend: { display: false },
           tooltip: {
             callbacks: {
-              label: ctx => ` ${ctx.dataset.label}: ${ctx.raw.y}% · stanine ${dims[ctx.datasetIndex].stanine}`
+              label: ctx => ` ${ctx.dataset.label}: ${dims[ctx.datasetIndex].label}`
             }
           }
         },
@@ -134,7 +94,7 @@ function buildNMAPCharts() {
           x: { display: false, min: 0, max: 10 },
           y: {
             min: 0, max: 100,
-            title: { display: true, text: 'Raw Score %', font: { size: 11 } },
+            title: { display: true, text: 'Trait strength', font: { size: 11 } },
             grid: { color: 'rgba(0,0,0,0.05)' },
             ticks: { callback: v => v + '%', font: { size: 10 } }
           }

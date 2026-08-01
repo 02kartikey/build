@@ -62,6 +62,17 @@ const SEL_CAT_COLOR = {
   E: '#ef4444',   // red
 };
 
+// SEAA readiness labels — supportive 3-tier scheme shown to students/parents.
+// Five internal categories (A–E) collapse to three positive labels; colour
+// banding still comes from SEL_CAT_COLOR so A/B stay visually distinct.
+const SEL_CAT_LABEL = {
+  A: 'Well-Established',
+  B: 'Well-Established',
+  C: 'Developing',
+  D: 'Needs Support',
+  E: 'Needs Support',
+};
+
 /** Domain meta for E / S / A */
 const SEL_DOM_INFO = {
   E: { label: 'Emotional', color: '#1e3a5f', light: '#e4eef8' },
@@ -73,4 +84,4 @@ const SEL_DOM_INFO = {
    CPI CHARTS
 ═══════════════════════════════════════ */
 
-export { CHARTS, destroyChart, switchChartTab, CHART_ALPHA, stanineColor, stanineZoneLabel, SEL_CAT_COLOR, SEL_DOM_INFO };
+export { CHARTS, destroyChart, switchChartTab, CHART_ALPHA, stanineColor, stanineZoneLabel, SEL_CAT_COLOR, SEL_CAT_LABEL, SEL_DOM_INFO };
