@@ -166,6 +166,10 @@ function _saveSession(activePage) {
         currentSub: S.daab.currentSub,
       },
       activePage: activePage || null,
+      // Persist the prepared report. Without this, refreshing on the results
+      // page fires a fresh OpenAI generation every time — an API call per
+      // refresh, and a report that can differ from the PDF already downloaded.
+      aiReport: (typeof window !== 'undefined' && window._lastAIReport) || null,
       savedAt: Date.now(),
     };
     localStorage.setItem(_SESSION_KEY, JSON.stringify(snap));
@@ -189,6 +193,7 @@ function _restoreSession() {
     }
     S.student   = snap.student   || {};
     S.sessionId = snap.sessionId || null;
+    if (snap.aiReport && typeof window !== 'undefined') window._lastAIReport = snap.aiReport;
 
     if (snap.cpi) {
       if (Array.isArray(snap.cpi.answers)) {

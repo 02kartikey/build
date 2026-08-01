@@ -18,7 +18,7 @@ import { showDbStatus } from './db-status.js';
 
 // ── Routing & registration ──
 import { navLogoClick, goPage, _showResumeOverlay, _doResume, _goPageReal,
-         doRegister, PIP_IDX } from './router.js';
+         doRegister, PIP_IDX, doAccessLogin, loadAccessNames, loadAccessClasses } from './router.js';
 
 // Expose routing functions immediately after router loads — before remaining
 // imports — so inline onclick="goPage(...)" buttons never see "not defined"
@@ -29,6 +29,20 @@ window._goPageReal   = _goPageReal;
 window._showResumeOverlay = _showResumeOverlay;
 window._doResume     = _doResume;
 window.doRegister    = doRegister;
+// _m_-prefixed copies are what the inline-script shims in index.html forward
+// to (see _accessFwd there). The unprefixed globals are kept for any direct
+// callers. Registering both means the entry buttons work whether the module
+// loads before or after the first click.
+window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-01-R3';
+console.log('[NuMind] main.js build:', window.NM_MAIN_BUILD);
+window._m_doAccessLogin   = doAccessLogin;
+window._m_loadAccessNames = loadAccessNames;
+window._m_loadAccessClasses = loadAccessClasses;
+window._m_doRegister      = doRegister;
+window._m_navLogoClick    = navLogoClick;
+window.doAccessLogin   = doAccessLogin;
+window.loadAccessNames = loadAccessNames;
+window.loadAccessClasses = loadAccessClasses;
 
 // ── Engine constants & scorers ──
 import { CPI_AREAS, CPI_QS } from './engine/cpi.js';
@@ -80,6 +94,7 @@ import { installPatches } from './dom-patches.js';
 Object.assign(window, {
   // routing
   navLogoClick, goPage, _showResumeOverlay, _doResume, _goPageReal, doRegister,
+  doAccessLogin, loadAccessNames, loadAccessClasses,
   // assessment entry / nav
   startCPI, cpiSel, cpiNav, cpiJump, submitCPI,
   startNSEAAS, seaAns, trySeaNextPage, seaPageNav, trySubmitNSEAAS,
@@ -111,7 +126,18 @@ document.addEventListener('DOMContentLoaded', function _initSession() {
     const midPages = ['nmap','daab','cpi','nseaas','transition','transition2','transition3'];
     if (savedPage && midPages.includes(savedPage)) {
       _showResumeOverlay(savedPage);
-    } else if (savedPage === 'ready' || savedPage === 'results') {
+    } else if (savedPage === 'results') {
+      // Rebuild the results/report page from the restored scores before showing
+      // it — _goPageReal alone would reveal an empty shell, since all result
+      // content is rendered by buildResults().
+      const hasScores = S && S.cpi && (S.cpi.scores || (S.sea && S.sea.scores));
+      if (hasScores) {
+        try { buildResults(); } catch (e) { console.warn('[NM] rebuild results failed:', e); }
+        _goPageReal('results');
+      } else {
+        _goPageReal('landing');
+      }
+    } else if (savedPage === 'ready') {
       _goPageReal(savedPage);
     }
   } catch (e) {
@@ -121,6 +147,10 @@ document.addEventListener('DOMContentLoaded', function _initSession() {
   // Init registration UI (state/city dropdowns).
   if (typeof initStateDropdown === 'function') {
     try { initStateDropdown(); } catch (e) {}
+  }
+  // Populate school suggestions on the access-code entry screen.
+  if (typeof window._initAccessSchoolList === 'function') {
+    try { window._initAccessSchoolList(); } catch (e) {}
   }
 });
 

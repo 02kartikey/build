@@ -804,16 +804,16 @@ function goToCounsellor() {
 
 function goBackFromCounsellor() {
   // Determine whether we have in-memory assessment data to show results.
-  // S is exposed on window by main.js. If scores are populated in memory,
-  // buildResults() will work even though _clearSession() already cleared
-  // localStorage (it fires when first navigating to results).
+  // S is exposed on window by main.js. Scores in memory are enough for
+  // buildResults(); the results snapshot is now also retained in localStorage
+  // (it used to be cleared on entering results, which broke refresh).
   const S = window.S;
   const hasScores = S && S.cpi && S.cpi.scores !== null &&
                     S.nmap && S.nmap.scores !== null;
 
   if (hasScores) {
     // Scores exist in memory — (re)build results and navigate there.
-    // _goPageReal avoids re-triggering _clearSession (goPage would).
+    // _goPageReal keeps this out of the session-save path.
     if (typeof window.buildResults === 'function') window.buildResults();
     if (typeof window._goPageReal === 'function') window._goPageReal('results');
   } else {

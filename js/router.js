@@ -34,7 +34,10 @@ function goPage(id) {
   // Don't persist counsellor page to session — it's not an assessment page
   // and would incorrectly trigger the resume overlay on next load.
   if (id !== 'counsellor') _saveSession(id);
-  if (id === 'results') _clearSession();
+  // NOTE: the results snapshot is deliberately KEPT. It used to be cleared here,
+  // which meant refreshing on the report page wiped the session and dropped the
+  // student back on the landing page with no way back to their report. main.js
+  // restores 'results' directly (no resume overlay), so keeping it is safe.
 }
 
 // NOTE: DOMContentLoaded boot sequence is handled exclusively in main.js.
@@ -167,6 +170,145 @@ function _goPageReal(id) {
 
 var _registering = false;
 
+/* ══════════════════════════════════════════════════════════════════
+   ACCESS-CODE LOGIN
+   Path for students created by staff (bulk import / dashboard add).
+   They pick school -> class -> their name, type the code the school gave
+   them, and go straight into the assessment. No re-registration.
+══════════════════════════════════════════════════════════════════ */
+
+let _accessBusy = false;
+
+// Populate the name dropdown once school + class are chosen.
+/* Populate the Class dropdown from the server for the typed school. The old
+   hardcoded Grade 9-12 options could never match free-text imported classes
+   like "10-B", which made every such student unreachable from this form. */
+async function loadAccessClasses() {
+  const sch = document.getElementById('ac-school');
+  const cls = document.getElementById('ac-class');
+  const sel = document.getElementById('ac-name');
+  const err = document.getElementById('ac-err');
+  if (!sch || !cls) return;
+  const school = (sch.value || '').trim();
+  cls.innerHTML = '<option value="">Select\u2026</option>';
+  if (sel) { sel.innerHTML = '<option value="">Select your school and class first\u2026</option>'; sel.disabled = true; }
+  if (!school) return;
+  try {
+    const r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school));
+    const j = await r.json();
+    const classes = (j && j.classes) || [];
+    if (!classes.length) {
+      if (err) { err.textContent = 'No students with access codes found for that school. Please check the spelling with your teacher.'; err.style.display = 'block'; }
+      return;
+    }
+    if (err) err.style.display = 'none';
+    classes.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; cls.appendChild(o); });
+  } catch (_) {
+    if (err) { err.textContent = 'Could not load classes. Please check your connection.'; err.style.display = 'block'; }
+  }
+}
+
+async function loadAccessNames() {
+  const sch = document.getElementById('ac-school');
+  const cls = document.getElementById('ac-class');
+  const sel = document.getElementById('ac-name');
+  const err = document.getElementById('ac-err');
+  if (!sch || !cls || !sel) return;
+  const school = (sch.value || '').trim(), klass = (cls.value || '').trim();
+  sel.innerHTML = '<option value="">Select your name…</option>';
+  sel.disabled = true;
+  if (!school || !klass) return;
+  try {
+    const r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school) +
+                          '&class=' + encodeURIComponent(klass));
+    const j = await r.json();
+    const names = (j && j.names) || [];
+    if (!names.length) {
+      if (err) { err.textContent = 'No students found for that school and class. Please check with your teacher.'; err.style.display = 'block'; }
+      return;
+    }
+    if (err) err.style.display = 'none';
+    names.forEach(n => {
+      const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
+    });
+    sel.disabled = false;
+  } catch (_) {
+    if (err) { err.textContent = 'Could not load names. Please check your connection.'; err.style.display = 'block'; }
+  }
+}
+
+async function doAccessLogin() {
+  if (_accessBusy) return;
+  const err = document.getElementById('ac-err');
+  const btn = document.getElementById('ac-submit');
+  const school = (document.getElementById('ac-school') || {}).value || '';
+  const klass  = (document.getElementById('ac-class')  || {}).value || '';
+  const name   = (document.getElementById('ac-name')   || {}).value || '';
+  const code   = ((document.getElementById('ac-code')  || {}).value || '').trim().toUpperCase();
+
+  if (!school || !klass || !name || !code) {
+    if (err) { err.textContent = 'Please fill in all four fields.'; err.style.display = 'block'; }
+    return;
+  }
+  _accessBusy = true;
+  if (btn) { btn.disabled = true; btn.style.opacity = '.6'; }
+  if (err) err.style.display = 'none';
+
+  try {
+    const r = await fetch('/api/student-access/redeem', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ school, class: klass, name, code }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.ok || !j.student) {
+      if (err) { err.textContent = j.error || 'Those details do not match. Please check with your teacher.'; err.style.display = 'block'; }
+      return;
+    }
+
+    const st = j.student;
+    // SECURITY: wipe whatever the previous browser user left in S before
+    // adopting this student's identity — otherwise their answers prefill and
+    // would be saved under this student's session on submit.
+    resetAssessmentState();
+    S.aiReport = null;
+    if (typeof window !== 'undefined') window._lastAIReport = null;
+    // Adopt the staff-created session so every save lands on the existing row.
+    S.sessionId = st.session_id;
+    S.student = {
+      firstName: st.first_name || (st.full_name || '').split(' ')[0] || '',
+      lastName:  st.last_name  || (st.full_name || '').split(' ').slice(1).join(' '),
+      fullName:  st.full_name  || ((st.first_name || '') + ' ' + (st.last_name || '')).trim(),
+      class: st.class || klass, section: st.section || '',
+      school: st.school || school,
+      schoolState: st.school_state || '', schoolCity: st.school_city || '',
+      schoolLocation: [st.school_city, st.school_state].filter(Boolean).join(', '),
+      age: st.age || '', gender: st.gender || '', email: st.email || '',
+      registeredAt: new Date().toISOString(),
+    };
+
+    // Reuse the normal registration save so the growth-journey / retake locks
+    // behave identically to a self-registered student.
+    const { data } = await DB.saveRegistration(S.student, S.sessionId);
+    if (data && data.sessionId && data.sessionId !== S.sessionId) S.sessionId = data.sessionId;
+
+    if (data && data.attemptedThisClass) {
+      window.alert('You have already completed the NuMind MAPS assessment for ' + (S.student.class || 'this class') + '.\n\n' +
+        'We will take you to your AI Counsellor, where you can view your report and track your progress.');
+      _saveSession('register');
+      if (typeof goPage === 'function') goPage('counsellor');
+      return;
+    }
+
+    _saveSession('register');
+    startNMAP();
+  } catch (_) {
+    if (err) { err.textContent = 'Connection error. Please try again.'; err.style.display = 'block'; }
+  } finally {
+    _accessBusy = false;
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  }
+}
+
 async function doRegister() {
   if (_registering) return;
 
@@ -209,12 +351,18 @@ async function doRegister() {
       gender:gen, email:email,
       registeredAt:new Date().toISOString(),
     };
-    // Only mint a new sessionId if we don't already have one (e.g. from a
-    // restored session). Re-generating on every submit was the root cause of
-    // duplicate student rows — each retry created a brand-new PK.
-    if (!S.sessionId) {
-      S.sessionId = 'NMSUITE-'+Date.now()+'-'+Math.random().toString(36).substr(2,6).toUpperCase();
-    }
+    // SECURITY: registration is an explicit new-identity claim, so ALWAYS
+    // mint a fresh sessionId and wipe any assessment state left in this
+    // browser by a previous student. Reusing a restored sessionId here let a
+    // new registrant inherit — and overwrite — the previous student's row and
+    // answers on shared machines (the ON CONFLICT(session_id) upsert). The
+    // legitimate "same person returns" case is handled by the server's email
+    // match, whose returned sessionId we adopt below; the legitimate "resume
+    // my own attempt" case is the resume overlay, never this path.
+    resetAssessmentState();
+    S.aiReport = null;
+    if (typeof window !== 'undefined') window._lastAIReport = null;
+    S.sessionId = 'NMSUITE-'+Date.now()+'-'+Math.random().toString(36).substr(2,6).toUpperCase();
     showDbStatus('saving','Saving your details…');
     const { data, error } = await DB.saveRegistration(S.student, S.sessionId);
 
@@ -316,4 +464,4 @@ async function doRegister() {
   }
 }
 
-export { navLogoClick, goPage, _showResumeOverlay, _doResume, PIP_IDX, _goPageReal, doRegister, _registering };
+export { navLogoClick, goPage, _showResumeOverlay, _doResume, PIP_IDX, _goPageReal, doRegister, _registering, doAccessLogin, loadAccessNames, loadAccessClasses };
