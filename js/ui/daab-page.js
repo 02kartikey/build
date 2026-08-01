@@ -144,10 +144,45 @@ const DAAB_EXAMPLES = {
                    <div class="daab-eg-opts"><span>A. Harder</span><span class="daab-eg-correct">B. Easier ✓</span></div>
                    <div class="daab-eg-why">A longer lever needs less effort, so lifting is easier — B.</div>` },
   sa:  { measures: 'how you picture and rotate shapes in your mind',
-         example: `<div class="daab-eg-q">Compare each Test Figure with the Sample Figure:</div>
-                   <div class="daab-eg-pair">Same shape, just turned → <span class="daab-eg-correct">Same orientation (S) ✓</span></div>
-                   <div class="daab-eg-pair">A mirror image → <span class="daab-eg-correct">Reversed (R) ✓</span></div>` },
+         // Uses the real row-1 question image rather than an invented text-only
+         // example, so the layout the student sees here matches the test itself.
+         example: `<div class="daab-eg-q">The first figure on the left is the <strong>Sample</strong>. Compare each Test Figure with it:</div>
+                   <img class="daab-eg-sa-img" src="data:image/jpeg;base64,${DAAB_SA_ROW_IMAGES[0]}" alt="Example row: one sample figure followed by four test figures"/>
+                   <div class="daab-eg-sa-legend">
+                     <span class="daab-eg-sa-s">S = Same orientation</span>
+                     <span class="daab-eg-sa-r">R = Reversed (mirror image)</span>
+                   </div>
+                   <div class="daab-eg-why">If a test figure is the same shape simply turned around, choose <strong>S</strong>. If it is flipped into a mirror image, choose <strong>R</strong>. You answer S or R for every test figure in the row.</div>` },
 };
+
+/* Per-dimension plain-language interpretation for students and parents.
+   Deliberately supportive: a lower band describes what to build, never a deficit.
+   Raw and stanine numbers are no longer surfaced to the student anywhere. */
+const _DAAB_INTERP_TEXT = {
+  VA:  ['understanding and using words confidently', 'reading widely and noting new words'],
+  PA:  ['spotting details quickly and accurately',   'practising spot-the-difference and proofreading tasks'],
+  NA:  ['working with numbers and calculations',     'regular short number practice'],
+  LSA: ['reasoning through language-based problems', 'puzzles, riddles and comprehension work'],
+  HMA: ['recalling and organising information',      'memory games and summarising what you read'],
+  AR:  ['spotting patterns and logical sequences',   'sequence and pattern puzzles'],
+  MA:  ['understanding how practical things work',   'hands-on building and how-things-work videos'],
+  SA:  ['picturing and rotating shapes mentally',    'drawing, model-building and rotation puzzles'],
+};
+// Takes the stanine (1-9) and derives the band itself. It previously took
+// sc.label ('Average', 'High', ...) and compared it to band names that never
+// matched, so every area rendered as a focus area.
+function _daabBand(stanine) {
+  const n = Number(stanine) || 5;
+  return n >= 7 ? 'Strength Area' : n >= 4 ? 'Developing Area' : 'Focus Area';
+}
+function _daabInterp(abbr, stanine) {
+  const t = _DAAB_INTERP_TEXT[abbr];
+  if (!t) return '';
+  const band = _daabBand(stanine);
+  if (band === 'Strength Area')  return `This is a strength — you are comfortable ${t[0]}. Keep using it.`;
+  if (band === 'Developing Area') return `You are developing here. ${t[1].charAt(0).toUpperCase() + t[1].slice(1)} will build it further.`;
+  return `An area to focus on: ${t[0]}. With the right support and ${t[1]}, this can improve significantly.`;
+}
 
 function renderDAABSub(idx, skipTimer) {
   S.daab.currentSub = idx;
@@ -711,20 +746,15 @@ function buildDAABResults() {
       </div>
       <div class="daab-dim-scores">
         <div class="daab-score-box">
-          <div class="daab-score-label">Raw Score</div>
-          <div class="daab-score-val">${sc.raw}</div>
-          <div class="daab-score-max">out of ${sc.max}</div>
-        </div>
-        <div class="daab-score-box stanine">
-          <div class="daab-score-label">Stanine</div>
-          <div class="daab-score-val">${sc.stanine}</div>
-          <div class="daab-score-max">out of 9</div>
+          <div class="daab-score-label">Your Score</div>
+          <div class="daab-score-val">${Math.round((sc.raw / (sc.max || 1)) * 100)}%</div>
+          <div class="daab-score-max">of questions correct</div>
         </div>
       </div>
       <div class="daab-stanine-bar">
         <div class="daab-stanine-track">${segs}</div>
-        <div class="daab-stanine-lbl">Stanine 1 (lowest) → 9 (highest)</div>
-        <div class="daab-stanine-interp">${sc.label}</div>
+        <div class="daab-stanine-interp">${_daabBand(sc.stanine)}</div>
+        <div class="daab-dim-interp">${_daabInterp(sub.abbr, sc.stanine)}</div>
       </div>
     </div>`;
   }).join('');
@@ -946,7 +976,7 @@ function renderSA(area, sub, mod) {
           <span class="daab-sa-qlbl">Sample Figure → Test Figures</span>
           <span class="daab-sa-badge" ${rowDone?'':'style="display:none"'} id="sa-badge-${qi}">✓ Complete</span>
         </div>
-        <img class="daab-sa-row-img" src="data:image/png;base64,${DAAB_SA_ROW_IMAGES[q.row]}" alt="Row ${qi+1} figures"/>
+        <img class="daab-sa-row-img" src="data:image/jpeg;base64,${DAAB_SA_ROW_IMAGES[q.row]}" alt="Row ${qi+1} figures"/>
         <div class="daab-sa-answers-grid">${gridHtml}</div>
       </div>`;
     }).join('');

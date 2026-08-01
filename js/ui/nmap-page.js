@@ -45,7 +45,8 @@ function renderNMAPIntro() {
       <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
         <div class="daab-eg-label">Example — this is how each one looks</div>
         <div class="daab-eg-q">“I enjoy meeting new people.”</div>
-        <div class="daab-eg-opts"><span>Always</span><span>Sometimes</span><span>Never</span></div>
+        <div class="daab-eg-opts"><span>Always</span><span class="eg-picked">Sometimes ✓</span><span>Never</span></div>
+        <div class="daab-eg-pick-note">Here "Sometimes" is picked just to show how a choice looks — there's no right or wrong answer.</div>
       </div>
       <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
       <button class="btn btn-lg nmap-intro-btn" onclick="beginNMAP()">Begin Personality Assessment →</button>
@@ -105,8 +106,7 @@ function renderNMAPPage() {
     <div class="nmap-section-hdr">
       <div class="nmap-section-emoji">${dim.emoji}</div>
       <div>
-        <div class="nmap-section-title">${dim.label}</div>
-        <div class="nmap-section-desc">${dim.desc}</div>
+        <div class="nmap-section-title">Dimension ${di+1}</div>
       </div>
     </div>
     <div style="font-size:13px;font-weight:700;color:var(--m3);margin-bottom:14px">${NMAP_ENCOURAGE[di]}</div>

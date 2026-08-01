@@ -9,6 +9,7 @@ import { NMAP_DIMS } from '../engine/nmap.js';
 import { DAAB_SUBS } from '../engine/daab.js';
 import { buildCPICharts } from '../charts/cpi-charts.js';
 import { buildSELCharts } from '../charts/sea-charts.js';
+import { SEL_CAT_LABEL } from '../charts/core.js';
 import { buildNMAPCharts } from '../charts/nmap-charts.js';
 import { buildDAAbCharts } from '../charts/daab-charts.js';
 import { buildOverviewCharts } from '../charts/overview-charts.js';
@@ -29,7 +30,7 @@ function buildResults() {
 
   // Safe accessors for sea.cls domain fields (defaults if missing)
   const seaCat = d => (sea.cls && sea.cls[d] && sea.cls[d].cat)   || 'A';
-  const seaLvl = d => (sea.cls && sea.cls[d] && sea.cls[d].level) || 'Excellent';
+  const seaLvl = d => (sea.cls && sea.cls[d] && sea.cls[d].level) || 'Well-Established';
 
   document.getElementById('res-name').textContent = st.fullName;
   document.getElementById('res-meta').textContent = st.class+(st.section?' '+st.section:'')+' · '+st.school+(st.schoolLocation?' · '+st.schoolLocation:'');
@@ -81,31 +82,20 @@ function buildResults() {
   // Build interactive charts after scores are set
   setTimeout(buildCharts, 120);
 
-  const idle = document.getElementById('ai-report-idle');
-  const out  = document.getElementById('ai-report-output');
-  const err  = document.getElementById('ai-report-error');
-  const load = document.getElementById('ai-report-loading');
-  const btn  = document.getElementById('ai-report-btn');
+  // Report panel: no inline preview — we prepare the report in the background
+  // and then surface a "ready" state whose only action is the PDF download.
+  const _d = (id, v) => { const el = document.getElementById(id); if (el) el.style.display = v; };
 
-  if (window._lastAIReport && out) {
-    // Already generated this session — just re-render.
-    if (idle) idle.style.display = 'none';
-    if (err)  err.style.display  = 'none';
-    if (load) load.style.display = 'none';
-    if (btn)  { btn.disabled = false; btn.style.opacity = '1'; }
+  if (window._lastAIReport) {
+    // Already prepared this session — go straight to the ready state.
     renderAIReport(window._lastAIReport);
   } else {
-    // Auto-generate the AI report as soon as the assessment completes.
-    // No manual trigger — the loading state appears immediately on the
-    // results page, then renders itself.
-    if (idle) idle.style.display = 'none';
-    if (out)  out.style.display  = 'none';
-    if (err)  err.style.display  = 'none';
-    if (load) load.style.display = 'block';
-    // Also hide the now-unnecessary trigger button if it exists.
-    if (btn)  { btn.style.display = 'none'; }
-    // Disable the PDF download button until the AI report finishes —
-    // we want all 8 AI fields baked into the PDF.
+    // Prepare automatically as soon as the assessment completes.
+    _d('ai-report-ready',   'none');
+    _d('ai-report-error',   'none');
+    _d('ai-report-output',  'none');
+    _d('ai-report-loading', 'block');
+    // Hold the PDF button until the report is ready — we want all AI fields baked in.
     const pdfBtn = document.getElementById('pdf-download-btn');
     if (pdfBtn) { pdfBtn.disabled = true; pdfBtn.classList.add('loading'); }
     setTimeout(function () {
@@ -141,9 +131,9 @@ function buildInterp(cpi, sea) {
   }
 
   const notes=[];
-  if(!emoOk) notes.push({cls:'cls-E',icon:'💙',title:'Emotional Support Could Help',msg:`Your emotional score is ${sea.domScores.E}/20 (Category ${seaCat('E')}). Talking to a counsellor or a trusted teacher about any stress or worries at school can make a real difference.`});
-  if(!socOk) notes.push({cls:'cls-D',icon:'🤝',title:'Building Social Connections',msg:`Your social score is ${sea.domScores.S}/20 (Category ${seaCat('S')}). Joining clubs, group activities or team projects can be a great way to feel more connected at school.`});
-  if(!acaOk) notes.push({cls:'cls-D',icon:'📚',title:'Academic Engagement Tip',msg:`Your academic score is ${sea.domScores.A}/20 (Category ${seaCat('A')}). Trying different study strategies or asking a teacher for extra help could really boost your confidence.`});
+  if(!emoOk) notes.push({cls:'cls-E',icon:'💙',title:'Emotional Support Could Help',msg:`Your emotional readiness is ${SEL_CAT_LABEL[seaCat('E')]} (${sea.domScores.E}/20). Talking to a counsellor or a trusted teacher about any stress or worries at school can make a real difference.`});
+  if(!socOk) notes.push({cls:'cls-D',icon:'🤝',title:'Building Social Connections',msg:`Your social readiness is ${SEL_CAT_LABEL[seaCat('S')]} (${sea.domScores.S}/20). Joining clubs, group activities or team projects can be a great way to feel more connected at school.`});
+  if(!acaOk) notes.push({cls:'cls-D',icon:'📚',title:'Academic Engagement Tip',msg:`Your academic readiness is ${SEL_CAT_LABEL[seaCat('A')]} (${sea.domScores.A}/20). Trying different study strategies or asking a teacher for extra help could really boost your confidence.`});
   if(badCount===0) notes.push({cls:'cls-A',icon:'✅',title:'You\'re Well Adjusted!',msg:'Healthy scores across all three school dimensions. Keep up the great work — you\'re in a brilliant position to explore your future!'});
 
   document.getElementById('r-interp').innerHTML = `
@@ -156,7 +146,7 @@ function buildInterp(cpi, sea) {
       <div class="iscard">
         <div class="eyebrow">SEAA Readiness Summary</div>
         <div class="iscard-title"><span class="bar-bdg ${adjustCls}" style="display:inline-block;margin-bottom:5px">${adjustMsg.split('—')[0].split('!')[0].trim()}</span></div>
-        <div class="iscard-sub">Emotional: Cat.${seaCat('E')} &nbsp;·&nbsp; Social: Cat.${seaCat('S')} &nbsp;·&nbsp; Academic: Cat.${seaCat('A')}</div>
+        <div class="iscard-sub">Emotional: ${SEL_CAT_LABEL[seaCat('E')]} &nbsp;·&nbsp; Social: ${SEL_CAT_LABEL[seaCat('S')]} &nbsp;·&nbsp; Academic: ${SEL_CAT_LABEL[seaCat('A')]}</div>
       </div>
     </div>
     <div class="narrative-block">${narrative}</div>
