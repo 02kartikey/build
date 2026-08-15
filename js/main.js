@@ -33,7 +33,7 @@ window.doRegister    = doRegister;
 // to (see _accessFwd there). The unprefixed globals are kept for any direct
 // callers. Registering both means the entry buttons work whether the module
 // loads before or after the first click.
-window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-01-R3';
+window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-15-R2';
 console.log('[NuMind] main.js build:', window.NM_MAIN_BUILD);
 window._m_doAccessLogin   = doAccessLogin;
 window._m_loadAccessNames = loadAccessNames;
@@ -170,3 +170,41 @@ document.addEventListener('nm:section-save-failed', (e) => {
 });
 
 console.log('[NuMind] modules loaded');
+
+/* ── Interactive worked examples ─────────────────────────────────────────
+   Every module intro shows a worked example. They used to be static with the
+   answer pre-ticked — nothing to tap, nothing to learn. Now the options are
+   real buttons: quiz-style examples (aptitude) reveal correct/incorrect
+   feedback on tap; preference-style ones (personality / wellbeing /
+   interests) accept any tap and reinforce "no right or wrong". One document-
+   level delegated listener covers every page, including ones re-rendered
+   later, with nothing to rebind. */
+document.addEventListener('click', function (ev) {
+  const opt = ev.target.closest('.eg-try');
+  if (!opt) return;
+  const scope = opt.closest('.eg-scope') || opt.closest('.daab-eg');
+  if (!scope) return;
+  const isQuiz = !!scope.querySelector('.eg-try[data-ok]');
+  const multi  = scope.hasAttribute('data-eg-multi');
+
+  if (isQuiz) {
+    if (scope.classList.contains('eg-answered')) return; // locked after first try
+    scope.classList.add('eg-answered');
+    const right = opt.hasAttribute('data-ok');
+    opt.classList.add(right ? 'eg-ok' : 'eg-no');
+    scope.querySelectorAll('.eg-try[data-ok]').forEach(o => o.classList.add('eg-ok'));
+    const fb = scope.querySelector('.eg-fb');
+    if (fb) {
+      fb.textContent = (right ? '✓ Correct! ' : '✗ Not quite — the highlighted one is right. ') + (fb.dataset.why || '');
+      fb.classList.add(right ? 'eg-fb-ok' : 'eg-fb-no');
+      fb.style.display = 'block';
+    }
+    return;
+  }
+
+  // preference mode: any answer is a good answer
+  if (multi) opt.classList.toggle('eg-sel');
+  else { scope.querySelectorAll('.eg-try').forEach(o => o.classList.remove('eg-sel')); opt.classList.add('eg-sel'); }
+  const fb = scope.querySelector('.eg-fb');
+  if (fb) { fb.style.display = 'block'; fb.classList.add('eg-fb-ok'); }
+});

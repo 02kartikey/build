@@ -106,8 +106,9 @@
     }
   }
 
-  function field(id, label, ph) {
-    return '<label class="nmg-lbl">' + esc(label) + '</label>' +
+  function field(id, label, ph, hint) {
+    return '<label class="nmg-lbl" for="' + id + '">' + esc(label) + '</label>' +
+           (hint ? '<div class="nmg-hint">' + esc(hint) + '</div>' : '') +
            '<input class="nmg-in" id="' + id + '" placeholder="' + esc(ph) + '" maxlength="600">';
   }
 
@@ -123,28 +124,40 @@
         '</div>' +
         '<div class="nmg-scroll">' +
 
+          '<div class="nmg-intro">' +
+            '<div class="nmg-intro-h">Make Aria\u2019s advice about <em>you</em></div>' +
+            '<p class="nmg-intro-p">Until you fill this in, Aria is guiding a stranger. Tell her your goal, your strengths and what\u2019s worrying you, and every answer she gives \u2014 which stream to pick, which careers fit, what to do next \u2014 becomes personal to your report and your life. Takes about 2 minutes, and only you can see it.</p>' +
+            '<div class="nmg-intro-steps">' +
+              '<span><b>1 \u00b7 Milestones</b> your next small steps</span>' +
+              '<span><b>2 \u00b7 About me</b> who you are, so advice fits</span>' +
+            '</div>' +
+          '</div>' +
+
           '<section class="nmg-sec">' +
             '<div class="nmg-sec-h">My milestones</div>' +
-            '<p class="nmg-sec-sub">Your next steps. Aria suggests these in chat — accept one and it appears here. You can add your own too.</p>' +
+            '<p class="nmg-sec-sub">Milestones are small goals with a target date. Aria suggests them while you chat \u2014 tap <strong>Add</strong> to keep one here. You can also write your own below.</p>' +
             '<div id="nmg-mlist" class="nmg-mlist"></div>' +
             '<div class="nmg-add">' +
-              '<input class="nmg-in" id="nmg-newtitle" placeholder="Add your own milestone…" maxlength="120">' +
+              '<label class="nmg-lbl" for="nmg-newtitle">Add your own milestone</label>' +
+              '<input class="nmg-in" id="nmg-newtitle" placeholder="e.g. Finish the NCERT Physics chapter" maxlength="120">' +
               '<div class="nmg-add-row">' +
-                '<input class="nmg-in nmg-date" id="nmg-newdate" type="date" aria-label="Target date">' +
+                '<input class="nmg-in nmg-date" id="nmg-newdate" type="date" aria-label="Target date (optional)">' +
                 '<button type="button" class="nmg-btn nmg-btn-primary" id="nmg-add-btn">Add</button>' +
               '</div>' +
+              '<div class="nmg-hint">Set a target date (optional), then tap Add.</div>' +
             '</div>' +
           '</section>' +
 
           '<section class="nmg-sec">' +
             '<div class="nmg-sec-h">About me</div>' +
-            '<p class="nmg-sec-sub">Aria reads this to give you more personal advice. Only you can see it.</p>' +
-            field('nmg-goal', 'My goal', 'e.g. Become a doctor') +
-            field('nmg-dream', 'A career I dream about', 'e.g. Cardiologist') +
-            field('nmg-strengths', "Things I'm good at", 'e.g. Biology, helping people') +
-            field('nmg-constraints', 'Worries / constraints', 'e.g. Family wants engineering') +
-            '<label class="nmg-lbl">Anything else Aria should know</label>' +
-            '<textarea class="nmg-in nmg-ta" id="nmg-notes" rows="3" placeholder="In your own words…" maxlength="4000"></textarea>' +
+            '<p class="nmg-sec-sub">Tell Aria a little about yourself so her advice fits you. This is private \u2014 only you can see it, and you can change it anytime.</p>' +
+            field('nmg-goal', 'My main goal right now', 'e.g. Get into a good science college', 'What you are working towards at the moment.') +
+            field('nmg-dream', 'A career I dream about', 'e.g. Cardiologist, game designer, IAS officer', 'Even if you are not sure yet \u2014 a rough idea helps.') +
+            field('nmg-strengths', 'What I am good at', 'e.g. Biology, explaining things, sports', 'Subjects, skills, or things people say you do well.') +
+            field('nmg-constraints', 'Worries or things in my way', 'e.g. Family wants engineering, weak in maths', 'Anything making the choice hard \u2014 marks, money, family.') +
+            '<label class="nmg-lbl" for="nmg-notes">Anything else Aria should know</label>' +
+            '<div class="nmg-hint">Hobbies, dreams, doubts \u2014 write in your own words.</div>' +
+            '<textarea class="nmg-in nmg-ta" id="nmg-notes" rows="3" placeholder="In your own words\u2026" maxlength="4000"></textarea>' +
             '<div class="nmg-saverow">' +
               '<button type="button" class="nmg-btn nmg-btn-primary" id="nmg-save">Save</button>' +
               '<span class="nmg-saved" id="nmg-saved"></span>' +
@@ -210,7 +223,7 @@
   }
   function renderList(list) {
     var wrap = document.getElementById('nmg-mlist'); if (!wrap) return;
-    if (!list.length) { wrap.innerHTML = '<div class="nmg-empty">No milestones yet — ask Aria <em>"what should I do next?"</em></div>'; return; }
+    if (!list.length) { wrap.innerHTML = '<div class="nmg-empty">No milestones yet. Ask Aria <em>\u201cwhat should I do next?\u201d</em> and save her suggestion here \u2014 or add your own below.</div>'; return; }
     wrap.innerHTML = '';
     list.forEach(function (m) {
       var done = m.status === 'completed';
@@ -321,18 +334,27 @@
       '.nmg-x:hover{background:var(--sbb,rgba(96,84,196,.12));color:#2a3050}' +
       '.nmg-scroll{flex:1;overflow-y:auto;padding:20px 22px 40px}' +
 
+      '.nmg-intro{background:linear-gradient(135deg,rgba(106,95,199,.10),rgba(139,127,224,.06));border:1px solid var(--sbb,rgba(96,84,196,.16));border-radius:14px;padding:15px 16px;margin-bottom:26px}' +
+      '.nmg-intro-h{font-size:15px;font-weight:800;color:var(--sbt,#3a4166);line-height:1.3}' +
+      '.nmg-intro-h em{font-style:normal;color:var(--v,#6a5fc7)}' +
+      '.nmg-intro-p{font-size:12.5px;line-height:1.55;color:var(--sbm,#5b608a);margin:7px 0 0}' +
+      '.nmg-intro-steps{display:flex;flex-direction:column;gap:5px;margin-top:11px}' +
+      '.nmg-intro-steps span{font-size:11.5px;color:var(--sbm,#5b608a);line-height:1.4}' +
+      '.nmg-intro-steps b{color:var(--sbt,#3a4166);font-weight:700}' +
+
       '.nmg-sec{margin-bottom:30px}' +
       '.nmg-sec-h{font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;color:var(--v2,#a99bef);margin-bottom:4px}' +
       '.nmg-sec-sub{font-size:12px;line-height:1.5;color:var(--sbm,#a89fc9);margin:0 0 14px}' +
 
       '.nmg-lbl{display:block;font-size:11.5px;font-weight:600;color:var(--sbt,#e8e4f5);margin:14px 0 5px}' +
+      '.nmg-hint{font-size:11px;line-height:1.45;color:var(--sbm,#8a80ad);margin:-2px 0 6px}' +
       '.nmg-in{width:100%;box-sizing:border-box;background:#fff;' +
         'border:1px solid var(--sbb,rgba(255,255,255,.12));border-radius:9px;padding:9px 11px;font-size:13px;' +
         'font-family:inherit;color:var(--sbt,#fff);transition:border-color .12s,background .12s}' +
       '.nmg-in::placeholder{color:var(--sbm,#8a80ad)}' +
       '.nmg-in:focus{outline:none;border-color:var(--v2,#8b7fe0);background:#fff;box-shadow:0 0 0 3px rgba(139,127,224,.12)}' +
       '.nmg-ta{resize:vertical;min-height:64px;line-height:1.5}' +
-      '.nmg-date{color-scheme:dark}' +
+      '.nmg-date{color-scheme:light}' +
 
       '.nmg-saverow{display:flex;align-items:center;gap:12px;margin-top:16px}' +
       '.nmg-saved{font-size:11.5px;color:#0f9d76;opacity:0;transition:opacity .2s}' +

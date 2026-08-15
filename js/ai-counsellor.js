@@ -177,17 +177,16 @@ function _lockStep(step, opts) {
     wrap.id = 'acp-step-pin'; /* reuse slot id so step cleanup removes it */
     var descV = document.createElement('p');
     descV.textContent = (opts && opts.purpose === 'reset')
-      ? 'To reset your PIN, confirm two details from your registration.'
-      : 'Confirm two details from your registration to set up your PIN.';
+      ? 'To reset your PIN, confirm the name and class you used when you registered.'
+      : 'This is your first time here. Confirm the name and class you used when you registered, and we\u2019ll set up your PIN.';
     descV.style.cssText = 'font-size:13px;color:#29505c;margin:0 0 14px;line-height:1.5';
     wrap.appendChild(descV);
     var nameIn = document.createElement('input');
-    nameIn.id = 'acp-vid-name'; nameIn.type = 'text'; nameIn.placeholder = 'Full name (as registered)';
+    nameIn.id = 'acp-vid-name'; nameIn.type = 'text'; nameIn.placeholder = 'Your full name';
     nameIn.style.cssText = 'width:100%;padding:12px 14px;background:#f4f8f9;border:1.5px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:14px;box-sizing:border-box;outline:none;margin-bottom:10px';
     wrap.appendChild(nameIn);
     var classIn = document.createElement('input');
-    classIn.id = 'acp-vid-class'; classIn.type = 'text'; classIn.placeholder = 'Class (e.g. 10)';
-    classIn.setAttribute('inputmode', 'numeric');
+    classIn.id = 'acp-vid-class'; classIn.type = 'text'; classIn.placeholder = 'Your class (e.g. 10 or 10-B)';
     classIn.style.cssText = nameIn.style.cssText;
     classIn.addEventListener('keydown', function(e){ if (e.key === 'Enter') _acVerifyIdentity(); });
     wrap.appendChild(classIn);
@@ -246,7 +245,10 @@ async function acUnlock() {
   try {
     var resp = await fetch('/api/counsellor-unlock', {
       method: 'POST', headers: _acHeaders(),
-      body: JSON.stringify({ email: email }),
+      body: JSON.stringify({ email: email,
+        // Session-first unlock: the server verifies possession of the live
+        // session that produced the report and skips the OTP round-trip.
+        sessionId: (window.S && window.S.sessionId) || '' }),
     });
     var data = await resp.json();
 
@@ -779,6 +781,44 @@ function goToCounsellor() {
   // Show loading spinner immediately to avoid lock screen flash, then
   // pre-fill the email and auto-trigger unlock so they skip the gate.
   const email = window.S && window.S.student && window.S.student.email;
+  const sid   = window.S && window.S.sessionId;
+  // Email-less students (imported via access code without an email) could
+  // previously NEVER pass this gate — the email form was a dead end for
+  // them. A live session is sufficient; try it silently first.
+  if (!email && sid && !_AC.unlocked) {
+    setTimeout(function() {
+      const lockLoader = document.getElementById('acp-lock-loading');
+      const lockCard   = document.getElementById('acp-lock-card');
+      if (lockLoader && lockCard && !_AC.unlocked) {
+        lockLoader.style.display = 'flex';
+        lockCard.style.display   = 'none';
+      }
+    }, 0);
+    setTimeout(async function() {
+      if (_AC.unlocked) return;
+      try {
+        const resp = await fetch('/api/counsellor-unlock', {
+          method: 'POST', headers: _acHeaders(),
+          body: JSON.stringify({ sessionId: sid }),
+        });
+        const data = await resp.json();
+        const lockLoader = document.getElementById('acp-lock-loading');
+        const lockCard   = document.getElementById('acp-lock-card');
+        if (lockLoader) lockLoader.style.display = 'none';
+        if (lockCard)   lockCard.style.display   = '';
+        if (data.unlocked) { _acApplySession(data); return; }
+        // fall back to the email form (visible again) with the server's note
+        var errEl = _acEl('acp-email-err');
+        if (errEl && data.error) { errEl.textContent = data.error; errEl.style.display = 'block'; }
+      } catch (_) {
+        const lockLoader = document.getElementById('acp-lock-loading');
+        const lockCard   = document.getElementById('acp-lock-card');
+        if (lockLoader) lockLoader.style.display = 'none';
+        if (lockCard)   lockCard.style.display   = '';
+      }
+    }, 80);
+    return;
+  }
   if (email && !_AC.unlocked) {
     // Show spinner immediately — user should never see the email form
     // when arriving from their own results page.
@@ -835,76 +875,6 @@ function _acInputKeydown(e) {
   }
   _acResizeTextarea(e.target);
 }
-
-/* ── Cross-device verification form ─────────────────────────────── */
-// Shown when sessionId is absent or wrong (new device, incognito, mobile).
-// Student proves ownership with name + class — both entered at registration.
-function _acShowVerificationForm(email) {
-  const lockCard = _acEl('acp-lock-card');
-  if (!lockCard) return;
-  // Inject the verification step if not already there
-  if (!document.getElementById('acp-verify-section')) {
-    const div = document.createElement('div');
-    div.id = 'acp-verify-section';
-    div.style.cssText = 'margin-top:16px;padding-top:16px;border-top:1px solid rgba(12,53,64,0.1)';
-    div.innerHTML = `
-      <p style="font-size:12.5px;color:#29505c;margin:0 0 12px;line-height:1.5">
-        <strong style="color:#0c3540">New device detected.</strong><br>
-        Please confirm two details from your registration to access your report.
-      </p>
-      <div style="margin-bottom:10px">
-        <input id="acp-verify-name" type="text" placeholder="Full name (as you registered)"
-          style="width:100%;padding:10px 12px;background:#f4f8f9;border:1px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:13px;box-sizing:border-box;outline:none">
-      </div>
-      <div style="margin-bottom:14px">
-        <input id="acp-verify-class" type="text" placeholder="Class (e.g. 10, 11, 12)"
-          style="width:100%;padding:10px 12px;background:#f4f8f9;border:1px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:13px;box-sizing:border-box;outline:none">
-      </div>
-      <div id="acp-verify-err" style="display:none;color:#dc2626;font-size:12px;margin-bottom:8px"></div>
-      <button onclick="acUnlockVerify()" id="acp-verify-btn"
-        style="width:100%;padding:11px;background:linear-gradient(135deg,#4a3f9e,#5c4fb5);border:none;border-radius:10px;color:#fff;font-size:13px;font-weight:700;cursor:pointer">
-        Verify & Unlock
-      </button>`;
-    lockCard.appendChild(div);
-  }
-  // Store email for the verify step
-  document.getElementById('acp-verify-section').dataset.email = email;
-  document.getElementById('acp-verify-section').style.display = 'block';
-}
-
-async function acUnlockVerify() {
-  var section  = document.getElementById('acp-verify-section');
-  var email    = section ? section.dataset.email : '';
-  var fullName = (document.getElementById('acp-verify-name')  || {value:''}).value.trim();
-  var cls      = (document.getElementById('acp-verify-class') || {value:''}).value.trim();
-  var errEl    = document.getElementById('acp-verify-err');
-  var btn      = document.getElementById('acp-verify-btn');
-  if (!fullName || !cls) {
-    if (errEl) { errEl.textContent = 'Please fill in both fields.'; errEl.style.display = 'block'; }
-    return;
-  }
-  if (btn) { btn.disabled = true; btn.textContent = 'Checking\u2026'; }
-  if (errEl) errEl.style.display = 'none';
-  try {
-    var resp = await fetch('/api/counsellor-verify-name', {
-      method: 'POST', headers: _acHeaders(),
-      body: JSON.stringify({ email: email, fullName: fullName, class: cls }),
-    });
-    var data = await resp.json();
-    if (!data.unlocked) {
-      if (errEl) { errEl.textContent = data.error || 'Details do not match. Please check your name and class.'; errEl.style.display = 'block'; }
-      if (btn) { btn.disabled = false; btn.textContent = 'Verify & Unlock'; }
-      return;
-    }
-    _LOCK.email = email;
-    _acApplySession(data);
-  } catch (_) {
-    if (errEl) { errEl.textContent = 'Connection error. Please try again.'; errEl.style.display = 'block'; }
-    if (btn) { btn.disabled = false; btn.textContent = 'Verify & Unlock'; }
-  }
-}
-window.acUnlockVerify = acUnlockVerify;
-
 
 /* ── Rolling summary trigger ────────────────────────────────────── */
 const _AC_SUMMARY_INTERVAL = 20;
