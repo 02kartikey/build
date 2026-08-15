@@ -24,6 +24,13 @@
 const _ddb = require('./dashboard-db.js');
 const _cdb = require('./counsellor-db.js');
 const _core = require('./db.js'); // shared class-matching helper (single source of truth)
+
+/* School names are free text and can carry stray whitespace (bulk imports,
+   hand-typed entries). Every SQL comparison uses LOWER(BTRIM(school)), so JS
+   comparisons must normalise identically — otherwise a padded name silently
+   fails a permission check and a legitimate user is denied. One helper so the
+   two sides can never drift apart. */
+const _schoolKey = (v) => String(v || '').trim().toLowerCase();
 let _sendEmail = null;
 let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 
@@ -465,12 +472,12 @@ async function _sendReminder(req, res) {
   // arbitrary addresses (including ones with no corresponding student at all).
   let inScope = students;
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(_schoolKey);
     // Resolve each student's school first (async), then filter synchronously.
     const checked = await Promise.all(students.map(async (st) => {
       if (!st.email) return null;
       const stu = _ddb.getStudentByEmail ? await _ddb.getStudentByEmail(st.email) : null;
-      return (stu && schools.includes((stu.school || '').toLowerCase())) ? st : null;
+      return (stu && schools.includes(_schoolKey(stu.school))) ? st : null;
     }));
     inScope = checked.filter(Boolean);
     if (!inScope.length) {
@@ -670,8 +677,8 @@ async function _createStudent(req, res) {
   if (!first_name || !school) return _json(res, 400, { error: 'first_name and school required' });
   // Scope guard: management may only create students under their assigned school(s)
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes(String(school).toLowerCase())) {
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(school))) {
       return _json(res, 403, { error: 'You can only add students to your assigned school(s).' });
     }
   }
@@ -690,8 +697,8 @@ async function _updateStudent(req, res) {
   if (user.role !== 'admin') {
     const stu = await _ddb.getStudentBySessionId(sessionId);
     if (!stu) return _json(res, 404, { error: 'Student not found' });
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) {
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
@@ -731,9 +738,9 @@ async function _importStudents(req, res) {
   // is visible to the caller via the existing skipped counter.
   let scopeRejected = 0;
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
+    const schools = (await _userSchools(user)).map(_schoolKey);
     const before = rows.length;
-    rows = rows.filter(r => schools.includes(String(r.school || '').toLowerCase()));
+    rows = rows.filter(r => schools.includes(String_schoolKey(r.school)));
     scopeRejected = before - rows.length;
     if (!rows.length) {
       return _json(res, 403, { error: 'None of the rows match your assigned school(s).' });
@@ -769,8 +776,8 @@ async function _studentReminders(req, res) {
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   // IDOR guard: verify this student belongs to the requesting user's schools
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) {
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
@@ -785,8 +792,8 @@ async function _getNotes(req, res) {
   const stu = await _ddb.getStudentBySessionId(sessionId);
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) {
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) {
       return _json(res, 403, { error: 'Forbidden' });
     }
   }
@@ -804,8 +811,8 @@ async function _addNote(req, res) {
   if (user.role !== 'admin') {
     const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const _schools = (await _userSchools(user)).map(_schoolKey);
+    if (!_schools.includes(_schoolKey(_stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   const body = await _readBody(req, 8 * 1024);
   const { note } = body || {};
@@ -832,8 +839,8 @@ async function _setTags(req, res) {
   if (user.role !== 'admin') {
     const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const _schools = (await _userSchools(user)).map(_schoolKey);
+    if (!_schools.includes(_schoolKey(_stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   const body = await _readBody(req, 4 * 1024);
   await _ddb.setStudentTags(sessionId, Array.isArray((body||{}).tags) ? body.tags : [], user.id);
@@ -851,8 +858,8 @@ async function _regenAccessCode(req, res) {
   const stu = await _ddb.getStudentBySessionId(sessionId);
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   try {
     const code = await _dbWrite(() => _ddb.setStudentAccessCode(sessionId));
@@ -871,8 +878,8 @@ async function _resetStudentPin(req, res) {
   const stu = await _ddb.getStudentBySessionId(sessionId);
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   if (!stu.email) return _json(res, 400, { error: 'Student has no email on record.' });
   try {
@@ -901,8 +908,8 @@ async function _studentInsights(req, res) {
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   // IDOR guard: non-admins may only inspect students in their assigned schools
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   if (!stu.email) {
     return _json(res, 200, { insights: { totalQuestions: 0, questions: [], themes: [], summaries: [], lastActivity: null } });
@@ -923,8 +930,8 @@ async function _studentJourney(req, res) {
   const stu = await _ddb.getStudentBySessionId(sessionId);
   if (!stu) return _json(res, 404, { error: 'Student not found' });
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!schools.includes((stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const schools = (await _userSchools(user)).map(_schoolKey);
+    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   if (!stu.email) {
     return _json(res, 200, { journey: { attempts: [], deltas: [], has_journey: false } });
@@ -942,8 +949,8 @@ async function _studentReport(req, res) {
   if (user.role !== 'admin') {
     const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const _schools = (await _userSchools(user)).map(_schoolKey);
+    if (!_schools.includes(_schoolKey(_stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   // Look up by session_id directly — email indirection broke on duplicate
   // or whitespace-padded emails and 404'd on students without reports.
@@ -966,8 +973,8 @@ async function _studentReportPdfData(req, res) {
   if (user.role !== 'admin') {
     const _stu = await _ddb.getStudentBySessionId(sessionId);
     if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = (await _userSchools(user)).map(s => s.toLowerCase());
-    if (!_schools.includes((_stu.school || '').toLowerCase())) return _json(res, 403, { error: 'Forbidden' });
+    const _schools = (await _userSchools(user)).map(_schoolKey);
+    if (!_schools.includes(_schoolKey(_stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
   let data = null;
   try { data = await _ddb.getReportPdfData(sessionId); } catch (_) {}

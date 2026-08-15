@@ -266,13 +266,20 @@ async function getUserByEmail(email) {
 ══════════════════════════════════════════════════════════════════ */
 
 /* Build a school IN clause with positional params starting at $start.
-   students.school is plain TEXT → compare LOWER(s.school) IN (lowercased list). */
+   students.school is plain TEXT → compare LOWER(BTRIM(s.school)) against a
+   trimmed+lowered list, so padding on either side cannot drop rows. */
 function _schoolClause(schools, start = 1) {
   const list = (Array.isArray(schools) ? schools : [schools]).filter(Boolean);
   return {
     list,
     ph:     list.map((_, i) => `$${start + i}`).join(','),
-    params: list.map(x => x.toLowerCase()),
+    // Every query compares against LOWER(BTRIM(s.school)), so the parameter
+    // must be trimmed as well as lower-cased. It previously was not: school
+    // names carrying stray whitespace (getAllSchools returns MIN(school), the
+    // RAW name, and imports can introduce padding) matched zero rows, so the
+    // school appeared in the schools list but ALL of its students vanished
+    // from every count, funnel and chart.
+    params: list.map(x => String(x).trim().toLowerCase()),
   };
 }
 
@@ -381,7 +388,8 @@ async function getGenderStats(schools) {
 }
 
 async function listCounsellorsForSchools(schools) {
-  const list = (schools || []).map(s => String(s).toLowerCase());
+  // Trim + lower so the parameter matches LOWER(BTRIM(us.school)) below.
+  const list = (schools || []).map(s => String(s).trim().toLowerCase());
   if (!list.length) return [];
   const ph = list.map((_, i) => `$${i + 1}`).join(',');
   const rows = await pg.many(
@@ -389,7 +397,7 @@ async function listCounsellorsForSchools(schools) {
      FROM dashboard_users u
      JOIN dashboard_user_schools us ON us.user_id = u.id
      WHERE u.role = 'counsellor' AND u.active = TRUE
-       AND LOWER(us.school) IN (${ph})
+       AND LOWER(BTRIM(us.school)) IN (${ph})
      ORDER BY u.name`,
     list
   );
@@ -398,7 +406,8 @@ async function listCounsellorsForSchools(schools) {
     const srows = await pg.many('SELECT school FROM dashboard_user_schools WHERE user_id = $1 ORDER BY school', [r.id]);
     out.push({
       id: r.id, name: r.name, email: r.email, last_login: r.last_login,
-      schools: srows.map(x => x.school).filter(s => list.includes(String(s).toLowerCase())),
+      // `list` is trimmed+lowered, so normalise this side identically.
+      schools: srows.map(x => x.school).filter(s => list.includes(String(s).trim().toLowerCase())),
     });
   }
   return out;
@@ -439,7 +448,8 @@ async function getSchoolSummaries(schools) {
   const list = (Array.isArray(schools) ? schools : [schools]).filter(Boolean);
   if (!list.length) return [];
   const ph     = list.map((_, i) => `$${i + 1}`).join(',');
-  const params = list.map(x => x.toLowerCase());
+  // Must match LOWER(BTRIM(s.school)) used below.
+  const params = list.map(x => String(x).trim().toLowerCase());
 
   const rows = await pg.many(
     `SELECT
@@ -792,13 +802,14 @@ async function getReminderLog({ sentBy, studentEmail, schools, limit = 100 } = {
   }
   if (Array.isArray(schools) && schools.length) {
     const ph = schools.map((_, i) => `$${i + 1}`).join(',');
-    const params = schools.map(s => s.toLowerCase());
+    // Must match LOWER(BTRIM(st.school)) used below.
+    const params = schools.map(s => String(s).trim().toLowerCase());
     return pg.many(
       `SELECT rl.*, du.name AS sent_by_name
        FROM reminder_log rl
        LEFT JOIN dashboard_users du ON du.id = rl.sent_by
        JOIN students st ON LOWER(st.email) = LOWER(rl.student_email)
-       WHERE LOWER(st.school) IN (${ph})
+       WHERE LOWER(BTRIM(st.school)) IN (${ph})
        ORDER BY rl.sent_at DESC LIMIT $${params.length + 1}`,
       [...params, limit]
     );

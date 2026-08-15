@@ -43,7 +43,7 @@ async function saveQuery({ name, email, message, preferredDate, preferredTime })
      RETURNING id`,
     [
       String(name  || '').slice(0, 200),
-      String(email || '').toLowerCase().slice(0, 200),
+      String(email || '').trim().toLowerCase().slice(0, 200), // trim: every read uses .trim().toLowerCase()
       String(message || '').slice(0, 4000),
       preferredDate ? String(preferredDate).slice(0, 50) : null,
       preferredTime ? String(preferredTime).slice(0, 50) : null,
@@ -60,7 +60,10 @@ async function listQueries({ status, limit = 200, offset = 0, schools } = {}) {
   // the stored school name and the caller's assigned-school list silently drops
   // queries. Mirrors dashboard-db.js's `LOWER(s.school) IN (lowercased list)`.
   if (Array.isArray(schools) && schools.length) {
-    const lowered = schools.map(s => String(s).toLowerCase());
+    // Trim as well as lower-case: students.school is free text and can carry
+    // padding from imports, and the caller's assigned-school list comes from a
+    // different table, so the two sides must be normalised identically.
+    const lowered = schools.map(s => String(s).trim().toLowerCase());
     // Build positional placeholders for the school list.
     if (status) {
       const ph = lowered.map((_, i) => `$${i + 1}`).join(',');
@@ -68,7 +71,7 @@ async function listQueries({ status, limit = 200, offset = 0, schools } = {}) {
       return pg.many(
         `SELECT cq.* FROM counsellor_queries cq
          JOIN students st ON st.email = cq.email
-         WHERE LOWER(st.school) IN (${ph})
+         WHERE LOWER(BTRIM(st.school)) IN (${ph})
            AND cq.status = $${lowered.length + 1}
          ORDER BY cq.submitted_at DESC
          LIMIT $${lowered.length + 2} OFFSET $${lowered.length + 3}`,
@@ -80,7 +83,7 @@ async function listQueries({ status, limit = 200, offset = 0, schools } = {}) {
     return pg.many(
       `SELECT cq.* FROM counsellor_queries cq
        JOIN students st ON st.email = cq.email
-       WHERE LOWER(st.school) IN (${ph})
+       WHERE LOWER(BTRIM(st.school)) IN (${ph})
        ORDER BY cq.submitted_at DESC
        LIMIT $${lowered.length + 1} OFFSET $${lowered.length + 2}`,
       params
@@ -422,7 +425,7 @@ async function saveMessage({ email, sessionId, conversationId, role, content }) 
      VALUES ($1,$2,$3,$4,$5,$6)
      RETURNING id`,
     [
-      String(email || '').toLowerCase().slice(0, 200),
+      String(email || '').trim().toLowerCase().slice(0, 200), // trim: every read uses .trim().toLowerCase()
       sessionId      ? String(sessionId).slice(0, 64)      : null,
       conversationId ? String(conversationId).slice(0, 64) : null,
       role === 'assistant' ? 'assistant' : 'user',
