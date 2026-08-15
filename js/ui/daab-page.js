@@ -735,11 +735,16 @@ function renderMCQ(area, sub, mod, questions) {
 function buildDAABResults() {
   const grid = document.getElementById('r-daab-grid');
   if (!grid) return;
-  if (!S.daab.va.scores) { grid.innerHTML = '<p style="color:var(--ink3);font-size:13px">DAAB data not available.</p>'; return; }
+  // Render every subtest the student actually completed. Previously this was
+  // gated on va.scores alone, so if Verbal was missing (or scored later) the
+  // entire DAAB section collapsed to "not available" and hid the other seven.
+  const done = DAAB_SUBS.filter(sub => S.daab[sub.key] && S.daab[sub.key].scores);
+  if (!done.length) { grid.innerHTML = '<p style="color:var(--ink3);font-size:13px">DAAB data not available.</p>'; return; }
 
-  grid.innerHTML = DAAB_SUBS.map(sub => {
+  grid.innerHTML = done.map(sub => {
     const sc = S.daab[sub.key].scores;
-    if (!sc) return '';
+    const max = sc.max || 1;
+    const pct = Math.round((sc.raw / max) * 100);
     const segs = Array.from({length:9}, (_,i) =>
       `<div class="daab-stanine-seg ${i < sc.stanine ? 'filled' : ''}"></div>`).join('');
     return `<div class="daab-dim-card">
@@ -753,8 +758,8 @@ function buildDAABResults() {
       <div class="daab-dim-scores">
         <div class="daab-score-box">
           <div class="daab-score-label">Your Score</div>
-          <div class="daab-score-val">${Math.round((sc.raw / (sc.max || 1)) * 100)}%</div>
-          <div class="daab-score-max">of questions correct</div>
+          <div class="daab-score-val">${sc.raw} of ${sc.max}</div>
+          <div class="daab-score-max">questions correct (${pct}%)</div>
         </div>
       </div>
       <div class="daab-stanine-bar">
