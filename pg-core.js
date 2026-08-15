@@ -556,6 +556,27 @@ async function close() {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════
+   NORMALISED FREE-TEXT COMPARISON (SQL fragments)
+
+   students.school / class / section are plain TEXT and can carry stray
+   whitespace or case variance from bulk imports. School comparisons were
+   already trimmed+lowered everywhere; class/section were not, which let a
+   single class ("10-B" vs "10-B ") split rollups and let an exact-equality
+   filter drop every row when the picked value differed only by padding/case.
+
+   These return SQL text (not values) so a single normalisation rule is shared
+   by every filter, GROUP BY and DISTINCT that touches free-text columns. They
+   are EXACT (case+whitespace-insensitive) equality on purpose: picking "10-B"
+   must return 10-B, not all of grade 10. The grade-tolerant identity match
+   (db.js classMatches, used by verify-identity and the retake lock) is a
+   deliberately different, richer rule that lives at the JS layer.
+
+   `col` and `ph` are trusted SQL fragments supplied by call sites in this
+   codebase (column names / positional placeholders), never user input. */
+function normKey(col) { return `LOWER(BTRIM(${col}))`; }
+function normEq(col, ph) { return `${normKey(col)} = ${normKey(ph)}`; }
+
 module.exports = {
   pool,
   q,
@@ -567,4 +588,6 @@ module.exports = {
   ping,
   close,
   SCHEMA,
+  normKey,
+  normEq,
 };
