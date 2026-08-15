@@ -33,7 +33,7 @@ window.doRegister    = doRegister;
 // to (see _accessFwd there). The unprefixed globals are kept for any direct
 // callers. Registering both means the entry buttons work whether the module
 // loads before or after the first click.
-window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-15-R2';
+window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-15-R3';
 console.log('[NuMind] main.js build:', window.NM_MAIN_BUILD);
 window._m_doAccessLogin   = doAccessLogin;
 window._m_loadAccessNames = loadAccessNames;

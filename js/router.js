@@ -362,7 +362,29 @@ async function doRegister() {
     resetAssessmentState();
     S.aiReport = null;
     if (typeof window !== 'undefined') window._lastAIReport = null;
-    S.sessionId = 'NMSUITE-'+Date.now()+'-'+Math.random().toString(36).substr(2,6).toUpperCase();
+    // Session id must be unguessable: /api/counsellor-unlock treats possession
+    // of a valid session id as proof of identity (session-first unlock), so a
+    // predictable id would expose another student's report and Aria. Date.now()
+    // plus Math.random() is neither uniform nor cryptographically secure, so
+    // use the platform CSPRNG and fall back only if it is unavailable.
+    S.sessionId = 'NMSUITE-' + (function () {
+      try {
+        // getRandomValues is available in non-secure contexts too, whereas
+        // randomUUID is HTTPS-only — try the broader one first so the weak
+        // fallback below is effectively unreachable on any supported browser.
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+          const a = new Uint8Array(16); crypto.getRandomValues(a);
+          return Array.from(a, b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+        }
+        if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+          return crypto.randomUUID().replace(/-/g, '').toUpperCase();
+        }
+      } catch (_) { /* fall through */ }
+      // Last resort only (no Web Crypto at all). Weaker, so make it loud
+      // rather than silent — a predictable id is a security regression.
+      try { console.warn('[NM] Web Crypto unavailable — session id entropy is degraded.'); } catch (_) {}
+      return Date.now() + '-' + Math.random().toString(36).substr(2, 6).toUpperCase();
+    })();
     showDbStatus('saving','Saving your details…');
     const { data, error } = await DB.saveRegistration(S.student, S.sessionId);
 

@@ -148,6 +148,23 @@ function _lockStep(step, opts) {
     resend.addEventListener('click', _acResendOtp);
     p3.appendChild(resend);
     wrap.appendChild(p3);
+    // Escape hatch: the identity route used to be reachable ONLY when the
+    // server failed to SEND the OTP. If the mail is accepted but never
+    // arrives (blocked SMTP ports, spam filtering, wrong address), the student
+    // was stranded on this screen with no way forward. Offer it explicitly.
+    var p3b = document.createElement('p');
+    p3b.style.cssText = 'font-size:11.5px;color:#93aab1;text-align:center;margin:8px 0 0';
+    p3b.appendChild(document.createTextNode("Can't access your email? "));
+    var viaDetails = document.createElement('a');
+    viaDetails.href = 'javascript:void(0)';
+    viaDetails.textContent = 'Verify with your details instead';
+    viaDetails.style.color = '#5c4fb5';
+    viaDetails.style.fontWeight = '600';
+    viaDetails.addEventListener('click', function () {
+      _lockStep('verify-identity', { email: _LOCK.email, purpose: _LOCK.purpose || 'register' });
+    });
+    p3b.appendChild(viaDetails);
+    wrap.appendChild(p3b);
     container.appendChild(wrap);
     setTimeout(function(){ var i = document.getElementById('acp-otp-input'); if (i) i.focus(); }, 100);
   }
