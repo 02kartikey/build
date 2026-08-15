@@ -369,7 +369,8 @@ async function _callAPIWithStream(prompt, firstName, signal) {
       ...(APP_TOKEN ? { 'X-App-Token': APP_TOKEN } : {}),
     },
     body: JSON.stringify({
-      model: 'gpt-4o',
+      // Model is chosen server-side from OPENAI_MODEL (server.js); sending it
+      // here was dead and could misreport the model if the env differs.
       temperature: 0.65,
       max_tokens: 6000,
       stream: true,
