@@ -53,8 +53,9 @@ function renderSEAIntro() {
       <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
         <div class="daab-eg-label">Example — this is how each one looks</div>
         <div class="daab-eg-q">“I feel comfortable asking a teacher for help when I'm stuck.”</div>
-        <div class="daab-eg-opts"><span class="eg-picked">YES ✓</span><span>NO</span></div>
-        <div class="daab-eg-pick-note">Here "YES" is picked just to show how a choice looks — answer with whatever is true for you.</div>
+        <div class="daab-eg-opts"><span class="eg-try">YES</span><span class="eg-try">NO</span></div>
+        <div class="eg-hint">Tap the one that's true for you — try it.</div>
+        <div class="eg-fb">That's it — answer honestly and there is no wrong choice.</div>
         <div class="daab-eg-why">Just answer honestly — your responses stay private and help build your profile.</div>
       </div>
       <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>

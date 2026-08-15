@@ -1,3 +1,5 @@
+window.NM_CHARTS_BUILD = 'NM-BUILD-2026-08-15-R2';
+console.log('[NuMind] charts build:', window.NM_CHARTS_BUILD);
 /* ════════════════════════════════════════════════════════════════════
    charts/core.js
    Chart.js registry + colour helpers. NO chart-builder imports here — buildCharts is in ui/results.js. This avoids cyclic imports.

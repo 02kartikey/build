@@ -117,32 +117,38 @@ function renderDAABSideNav() {
 const DAAB_EXAMPLES = {
   va:  { measures: 'your word knowledge and verbal reasoning',
          example: `<div class="daab-eg-q">Which word means the <strong>same</strong> as “RAPID”?</div>
-                   <div class="daab-eg-opts"><span>A. Slow</span><span class="daab-eg-correct">B. Quick ✓</span><span>C. Heavy</span></div>
-                   <div class="daab-eg-why">“Quick” means the same as “Rapid”, so B is correct.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try">A. Slow</span><span class="eg-try" data-ok>B. Quick</span><span class="eg-try">C. Heavy</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="“Quick” means the same as “Rapid”."></div>` },
   pa:  { measures: 'how quickly and accurately you spot differences',
-         example: `<div class="daab-eg-q">Are the two codes the <strong>Same</strong> or <strong>Different</strong>?</div>
-                   <div class="daab-eg-pair">Z8K4T&nbsp;&nbsp;&nbsp;Z8K4T → <span class="daab-eg-correct">Same (S) ✓</span></div>
-                   <div class="daab-eg-pair">Z8K4T&nbsp;&nbsp;&nbsp;Z8K9T → <span class="daab-eg-correct">Different (D) ✓</span></div>` },
+         example: `<div class="daab-eg-q">Are the two codes the <strong>Same</strong> or <strong>Different</strong>? Tap to answer:</div>
+                   <div class="daab-eg-pair eg-scope">Z8K4T&nbsp;&nbsp;&nbsp;Z8K4T &nbsp; <span class="eg-try" data-ok>Same (S)</span><span class="eg-try">Different (D)</span><div class="eg-fb" data-why="The two codes match exactly."></div></div>
+                   <div class="daab-eg-pair eg-scope">Z8K4T&nbsp;&nbsp;&nbsp;Z8K9T &nbsp; <span class="eg-try">Same (S)</span><span class="eg-try" data-ok>Different (D)</span><div class="eg-fb" data-why="The 4 became a 9 — one character differs."></div></div>` },
   na:  { measures: 'your speed and accuracy with numbers',
          example: `<div class="daab-eg-q">15 × 4 = ?</div>
-                   <div class="daab-eg-opts"><span>A. 45</span><span class="daab-eg-correct">B. 60 ✓</span><span>C. 75</span></div>
-                   <div class="daab-eg-why">15 multiplied by 4 is 60, so B is correct.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try">A. 45</span><span class="eg-try" data-ok>B. 60</span><span class="eg-try">C. 75</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="15 multiplied by 4 is 60."></div>` },
   lsa: { measures: 'your reading, logic and reasoning',
          example: `<div class="daab-eg-q">“A valid contract needs consent. This agreement was signed with full consent.” Is the consent requirement met?</div>
-                   <div class="daab-eg-opts"><span class="daab-eg-correct">A. Yes ✓</span><span>B. No</span></div>
-                   <div class="daab-eg-why">Consent is clearly present, so the requirement is met — A.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try" data-ok>A. Yes</span><span class="eg-try">B. No</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="Consent is clearly present, so the requirement is met."></div>` },
   hma: { measures: 'your grasp of basic health and biology',
          example: `<div class="daab-eg-q">Which organ pumps blood around the body?</div>
-                   <div class="daab-eg-opts"><span>A. Lungs</span><span class="daab-eg-correct">B. Heart ✓</span><span>C. Liver</span></div>
-                   <div class="daab-eg-why">The heart pumps blood, so B is correct.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try">A. Lungs</span><span class="eg-try" data-ok>B. Heart</span><span class="eg-try">C. Liver</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="The heart pumps blood around the body."></div>` },
   ar:  { measures: 'your ability to spot patterns and rules',
          example: `<div class="daab-eg-q">What comes next?&nbsp;&nbsp; ○&nbsp;&nbsp; ○○&nbsp;&nbsp; ○○○&nbsp;&nbsp; ?</div>
-                   <div class="daab-eg-opts"><span>A. ○</span><span>B. ○○</span><span class="daab-eg-correct">C. ○○○○ ✓</span></div>
-                   <div class="daab-eg-why">Each step adds one circle, so four circles come next — C.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try">A. ○</span><span class="eg-try">B. ○○</span><span class="eg-try" data-ok>C. ○○○○</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="Each step adds one circle, so four circles come next."></div>` },
   ma:  { measures: 'your understanding of how things work',
          example: `<div class="daab-eg-q">Using a <strong>longer</strong> lever to lift a load makes the job…</div>
-                   <div class="daab-eg-opts"><span>A. Harder</span><span class="daab-eg-correct">B. Easier ✓</span></div>
-                   <div class="daab-eg-why">A longer lever needs less effort, so lifting is easier — B.</div>` },
+                   <div class="daab-eg-opts"><span class="eg-try">A. Harder</span><span class="eg-try" data-ok>B. Easier</span></div>
+                   <div class="eg-hint">Tap an answer to try it — this one is just practice.</div>
+                   <div class="eg-fb" data-why="A longer lever needs less effort."></div>` },
   sa:  { measures: 'how you picture and rotate shapes in your mind',
          // Uses the real row-1 question image rather than an invented text-only
          // example, so the layout the student sees here matches the test itself.

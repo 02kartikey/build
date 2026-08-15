@@ -6,14 +6,14 @@
 import { S } from '../state.js';
 
 const DAAB_SUBS = [
-  { key:'va',  label:'Verbal Ability',          abbr:'VA',  emoji:'📝', time: 4*60, total: 20 },
-  { key:'pa',  label:'Perceptual Ability',       abbr:'PA',  emoji:'👁',  time: 3*60, total: 50 },
-  { key:'na',  label:'Numerical Ability',        abbr:'NA',  emoji:'🔢', time: 5*60, total: 20 },
-  { key:'lsa', label:'Legal Studies Ability',    abbr:'LSA', emoji:'⚖️', time: 4*60, total: 20 },
-  { key:'hma', label:'Health & Medical Aptitude',abbr:'HMA', emoji:'🏥', time: 5*60, total: 20 },
-  { key:'ar',  label:'Abstract Reasoning',          abbr:'AR',  emoji:'🔷', time: 4*60, total: 20 },
-  { key:'ma',  label:'Mechanical Ability',           abbr:'MA',  emoji:'⚙️', time: 8*60, total: 20 },
-  { key:'sa',  label:'Spatial Ability',             abbr:'SA',  emoji:'🧩', time: 3*60, total: 20 },
+  { key:'va',  label:'Verbal Ability',          short:'Verbal',     abbr:'VA',  emoji:'📝', time: 4*60, total: 20 },
+  { key:'pa',  label:'Perceptual Ability',       short:'Perceptual', abbr:'PA',  emoji:'👁',  time: 3*60, total: 50 },
+  { key:'na',  label:'Numerical Ability',        short:'Numerical',  abbr:'NA',  emoji:'🔢', time: 5*60, total: 20 },
+  { key:'lsa', label:'Legal Studies Ability',    short:'Legal',      abbr:'LSA', emoji:'⚖️', time: 4*60, total: 20 },
+  { key:'hma', label:'Health & Medical Aptitude',short:'Health',     abbr:'HMA', emoji:'🏥', time: 5*60, total: 20 },
+  { key:'ar',  label:'Abstract Reasoning',          short:'Abstract',   abbr:'AR',  emoji:'🔷', time: 4*60, total: 20 },
+  { key:'ma',  label:'Mechanical Ability',           short:'Mechanical', abbr:'MA',  emoji:'⚙️', time: 8*60, total: 20 },
+  { key:'sa',  label:'Spatial Ability',             short:'Spatial',    abbr:'SA',  emoji:'🧩', time: 3*60, total: 20 },
 ];
 
 /* ── Answer Keys ── */

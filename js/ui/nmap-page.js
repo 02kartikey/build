@@ -45,8 +45,9 @@ function renderNMAPIntro() {
       <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
         <div class="daab-eg-label">Example — this is how each one looks</div>
         <div class="daab-eg-q">“I enjoy meeting new people.”</div>
-        <div class="daab-eg-opts"><span>Always</span><span class="eg-picked">Sometimes ✓</span><span>Never</span></div>
-        <div class="daab-eg-pick-note">Here "Sometimes" is picked just to show how a choice looks — there's no right or wrong answer.</div>
+        <div class="daab-eg-opts"><span class="eg-try">Always</span><span class="eg-try">Sometimes</span><span class="eg-try">Never</span></div>
+        <div class="eg-hint">Tap whichever feels most like you — try it.</div>
+        <div class="eg-fb">Nice — that's all there is to it. There's no right or wrong answer here, only what's true for you.</div>
       </div>
       <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
       <button class="btn btn-lg nmap-intro-btn" onclick="beginNMAP()">Begin Personality Assessment →</button>

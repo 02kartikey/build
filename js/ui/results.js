@@ -217,7 +217,7 @@ function buildNMAPResults(nmap) {
     return `<div class="nmap-dim-card">
       <div class="ndc-emoji">${d.emoji}</div>
       <div class="ndc-name">${d.abbr}</div>
-      <div class="ndc-stanine">${d.stanine}<span style="font-size:14px;color:var(--ink4)">/9</span></div>
+      <div class="ndc-stanine">${barPct}<span style="font-size:14px;color:var(--ink4)">%</span></div>
       <div class="ndc-interp ${d.cls}">${d.label}</div>
       <div class="ndc-bar-wrap"><div class="ndc-bar-fill" data-pct="${barPct}" style="width:0%"></div></div>
     </div>`;
@@ -232,9 +232,9 @@ function buildNMAPResults(nmap) {
   const low   = nmap.sorted.slice(-2).filter(d => d.stanine <= 4);
 
   let narrative = `<div class="narrative-block" style="margin-bottom:1rem">
-    Your strongest personality traits are <strong>${top3[0].emoji} ${top3[0].abbr}</strong> (Stanine ${top3[0].stanine} — ${top3[0].label}), 
-    <strong>${top3[1].emoji} ${top3[1].abbr}</strong> (Stanine ${top3[1].stanine}), 
-    and <strong>${top3[2].emoji} ${top3[2].abbr}</strong> (Stanine ${top3[2].stanine}). `;
+    Your strongest personality traits are <strong>${top3[0].emoji} ${top3[0].abbr}</strong> (${top3[0].label}), 
+    <strong>${top3[1].emoji} ${top3[1].abbr}</strong> (${top3[1].label}), 
+    and <strong>${top3[2].emoji} ${top3[2].abbr}</strong> (${top3[2].label}). `;
 
   if (top3[0].stanine >= 7) {
     narrative += `These are genuine strengths to lean on as you explore your future. 💪`;
@@ -263,11 +263,16 @@ function buildNMAPResults(nmap) {
       return `<div class="note-row" style="margin-bottom:8px">
         <div class="note-icon">${d.emoji}</div>
         <div>
-          <div class="note-title">Growing your ${d.abbr} (Stanine ${d.stanine})</div>
+          <div class="note-title">Growing your ${d.abbr}</div>
           <div class="note-msg">${tips[d.id] || 'Focus on this dimension with small daily habits — growth is always possible!'}</div>
         </div>
       </div>`;
-    }).join('');
+    }).join('') +
+      // Requested supportive closer so lower-scoring traits never read as a verdict.
+      `<div class="note-row" style="margin-top:10px">
+        <div class="note-icon">🌱</div>
+        <div><div class="note-msg"><strong>With the right support, these areas can improve significantly.</strong></div></div>
+      </div>`;
   }
 
   // Personality-career alignment note

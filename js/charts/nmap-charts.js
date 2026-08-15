@@ -47,7 +47,7 @@ function buildNMAPCharts() {
         plugins: {
           legend: { position: 'bottom', labels: { font: { family: 'Inter', size: 11 }, boxWidth: 12, generateLabels: (chart) => [
             ...Chart.defaults.plugins.legend.labels.generateLabels(chart),
-            { text: '🔴 1–3 Needs Attention · 🟡 4–6 Developing · 🟢 7–9 Strength', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280', textDecoration: 'none' }
+            { text: '🔴 Focus Area · 🟡 Developing Area · 🟢 Strength Area', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280', textDecoration: 'none' }
           ]}},
           tooltip: {
             callbacks: {
@@ -58,7 +58,7 @@ function buildNMAPCharts() {
           }
         },
         scales: {
-          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { font: { size: 11 } } },
+          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { stepSize: 3, callback: v => ({3:'Focus',6:'Developing',9:'Strength'}[v] || ''), font: { family:'Poppins', size:10, weight:'600' } } },
           x: { grid: { display: false }, ticks: { font: { family: 'Poppins', size: 10, weight: '600' } } }
         }
       }

@@ -8,14 +8,16 @@ import { DAAB_SUBS } from '../engine/daab.js';
 import { CHARTS, destroyChart, stanineColor, CHART_ALPHA } from './core.js';
 
 function buildDAAbCharts() {
-  const daabSubs = ['va','pa','na','lsa','hma','ar','ma','sa'];
-  const subLabels = { va:'Verbal', pa:'Perceptual', na:'Numerical', lsa:'Legal', hma:'Health', ar:'Abstract', ma:'Mechanical', sa:'Spatial' };
-  const subEmoji  = { va:'📝', pa:'👁️', na:'🔢', lsa:'⚖️', hma:'🏥', ar:'🔷', ma:'⚙️', sa:'📐' };
+  // Order, short labels and emoji all come from the canonical DAAB_SUBS —
+  // no hardcoded per-chart maps (they had drifted: Spatial showed 📐 here but
+  // 🧩 everywhere else in the app).
+  const SUB = Object.fromEntries(DAAB_SUBS.map(s => [s.key, s]));
+  const daabSubs = DAAB_SUBS.map(s => s.key);
 
   const available = daabSubs.filter(k => S.daab[k].scores);
   if (!available.length) return;
 
-  const labels   = available.map(k => subLabels[k]);
+  const labels   = available.map(k => SUB[k].short);
   const stanines = available.map(k => S.daab[k].scores.stanine);
   const raws     = available.map(k => S.daab[k].scores.raw);
   const maxes    = available.map(k => S.daab[k].scores.max);
@@ -37,7 +39,7 @@ function buildDAAbCharts() {
           borderWidth: 2, borderRadius: 8, borderSkipped: false,
         }, {
           type: 'line',
-          label: 'Average (5)',
+          label: 'Typical range',
           data: Array(available.length).fill(5),
           borderColor: 'rgba(107,114,128,0.55)',
           borderDash: [6,4],
@@ -50,7 +52,7 @@ function buildDAAbCharts() {
         plugins: {
           legend: { position: 'bottom', labels: { font: { family:'Inter', size:11 }, boxWidth:12, generateLabels: (chart) => [
             ...Chart.defaults.plugins.legend.labels.generateLabels(chart),
-            { text: '🔴 1–3 Needs Attention · 🟡 4–6 Developing · 🟢 7–9 Strength', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280' }
+            { text: '🔴 Focus Area · 🟡 Developing Area · 🟢 Strength Area', fillStyle: 'transparent', strokeStyle: 'transparent', fontColor: '#6b7280' }
           ]}},
           tooltip: {
             callbacks: {
@@ -61,14 +63,60 @@ function buildDAAbCharts() {
           }
         },
         scales: {
-          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' }, ticks: { stepSize: 1 } },
+          // Axis still driven by the stanine (the normative signal) but ticks
+          // read as band words — students/parents never see a 1-9 number.
+          y: { min: 0, max: 9, grid: { color: 'rgba(0,0,0,0.05)' },
+               ticks: { stepSize: 3, callback: v => ({3:'Focus',6:'Developing',9:'Strength'}[v] || ''),
+                        font: { family:'Poppins', size:10, weight:'600' } } },
           x: { grid: { display: false }, ticks: { font: { family:'Poppins', size:11, weight:'600' } } }
         }
       }
     });
   }
 
-  // ── 3. Stacked bar: raw vs remaining ──
+  // ── 2. "How much you got right" — replaces the removed Raw Score vs Maximum
+  // stacked chart. Horizontal, sorted strongest-first, coloured by band. Answers
+  // the question a parent actually asks without exposing a raw tally or stanine.
+  destroyChart('daab-pct');
+  const pctCtx = document.getElementById('chart-daab-pct');
+  if (pctCtx) {
+    const rows = available.map((k, i) => ({
+      label: SUB[k].emoji + ' ' + SUB[k].short,
+      pct: Math.round((raws[i] / (maxes[i] || 1)) * 100),
+      band: S.daab[k].scores.label,
+      color: colors[i],
+    })).sort((a, b) => b.pct - a.pct);
+
+    CHARTS['daab-pct'] = new Chart(pctCtx, {
+      type: 'bar',
+      data: {
+        labels: rows.map(r => r.label),
+        datasets: [{
+          label: 'Questions correct',
+          data: rows.map(r => r.pct),
+          backgroundColor: rows.map(r => CHART_ALPHA(r.color, 0.85)),
+          borderColor: rows.map(r => r.color),
+          borderWidth: 2, borderRadius: 8, borderSkipped: false,
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: {
+            label: ctx => ` ${ctx.raw}% of questions correct`,
+            afterLabel: ctx => ` ${rows[ctx.dataIndex].band}`,
+          }}
+        },
+        scales: {
+          x: { min: 0, max: 100, grid: { color: 'rgba(0,0,0,0.05)' },
+               ticks: { callback: v => v + '%', font: { size: 10 } } },
+          y: { grid: { display: false }, ticks: { font: { family:'Poppins', size:11, weight:'600' } } }
+        }
+      }
+    });
+  }
 }
 
 

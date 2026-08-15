@@ -12,8 +12,10 @@ import { CHARTS, destroyChart, stanineColor, CHART_ALPHA, SEL_CAT_LABEL } from '
 
 function buildOverviewCharts() {
   const nmap = S.nmap.scores;
-  const daabSubs = ['va','pa','na','lsa','hma','ar','ma','sa'];
-  const subLabels = { va:'Verbal', pa:'Percept.', na:'Numer.', lsa:'Legal', hma:'Health', ar:'Abstract', ma:'Mechan.', sa:'Spatial' };
+  // DAAB order + short labels from canonical DAAB_SUBS (was a hardcoded map
+  // that used its own truncations, e.g. "Percept."/"Numer.").
+  const SUB = Object.fromEntries(DAAB_SUBS.map(s => [s.key, s]));
+  const daabSubs = DAAB_SUBS.map(s => s.key);
   const available = daabSubs.filter(k => S.daab[k].scores);
 
   // Build a combined array of all stanine dimensions
@@ -28,7 +30,7 @@ function buildOverviewCharts() {
     });
   }
   available.forEach(k => {
-    allLabels.push(subLabels[k]);
+    allLabels.push(SUB[k].short);
     allStanines.push(S.daab[k].scores.stanine);
     allColors.push(stanineColor(S.daab[k].scores.stanine));
     allGroups.push('Aptitude');

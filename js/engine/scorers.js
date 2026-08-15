@@ -36,7 +36,11 @@ const ENGINE = {
     return { domScores, total, cls, itemLog, gender };
   },
   _classify(score, gender, domain) {
-    const isFemale=gender==='Female';
+    // Match DAAB/db gender handling: tolerant first-char, case-insensitive.
+    // Was `gender === 'Female'`, which mis-scored any non-exact value
+    // ('F', 'female', 'FEMALE' from bulk CSV imports) with male norms while
+    // DAAB scored the same student female — the two modules disagreed.
+    const isFemale=String(gender||'').trim().charAt(0).toUpperCase()==='F';
     const TABLES={
       E: isFemale?[1,5,7,10]:[1,4,7,10],
       S: isFemale?[2,5,7,10]:[2,4,7,10],

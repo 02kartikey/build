@@ -50,11 +50,12 @@ function renderCPIIntro() {
       <div class="nmap-intro-how">
         For each question, pick up to <strong>3</strong> options that appeal to you most. There are no right or wrong answers — choose what genuinely interests you.
       </div>
-      <div class="daab-eg" style="max-width:460px;margin:0 auto 18px">
-        <div class="daab-eg-label">Example — this is how each one looks</div>
+      <div class="daab-eg" data-eg-multi style="max-width:460px;margin:0 auto 18px">
+        <div class="daab-eg-label">Example — try it yourself</div>
         <div class="daab-eg-q">Which of these would you enjoy doing? <strong>(pick up to 3)</strong></div>
-        <div class="daab-eg-opts"><span class="daab-eg-correct">Build a robot ✓</span><span class="daab-eg-correct">Write a story ✓</span><span>Manage a budget</span></div>
-        <div class="daab-eg-why">Choose the few that feel most like you — one, two, or three is fine.</div>
+        <div class="daab-eg-opts"><span class="eg-try">Build a robot</span><span class="eg-try">Write a story</span><span class="eg-try">Manage a budget</span></div>
+        <div class="eg-hint">Tap one or more — tap again to unpick.</div>
+        <div class="eg-fb">Exactly like that — choose the few that feel most like you; one, two, or three is fine.</div>
       </div>
       <p class="nmap-intro-note">There's no strict time limit — the timer just helps you keep a steady pace, and it starts when you begin.</p>
       <button class="btn btn-lg nmap-intro-btn" id="cpi-begin-btn" type="button">Start Interest Discovery →</button>
