@@ -318,11 +318,21 @@ function buildNMAPResults(nmap) {
 // buildCharts — moved here from charts/core.js to avoid cyclic imports.
 function buildCharts() {
   requestAnimationFrame(() => {
-    buildCPICharts();
-    buildSELCharts();
-    buildNMAPCharts();
-    buildDAAbCharts();
-    buildOverviewCharts();
+    // Isolate each builder: a throw in one (e.g. a restored/server-loaded
+    // scores object with an unexpected shape) must NOT blank the other four.
+    // Failures are logged with the offending module so the real cause is
+    // visible instead of a silent empty charts card.
+    const steps = [
+      ['CPI',      buildCPICharts],
+      ['SEAA',     buildSELCharts],
+      ['NMAP',     buildNMAPCharts],
+      ['DAAB',     buildDAAbCharts],
+      ['Overview', buildOverviewCharts],
+    ];
+    steps.forEach(([name, fn]) => {
+      try { fn(); }
+      catch (e) { console.error('[buildCharts] ' + name + ' chart failed:', e); }
+    });
   });
 }
 
