@@ -1,4 +1,4 @@
-window.NM_CHARTS_BUILD = 'NM-BUILD-2026-08-15-R2';
+window.NM_CHARTS_BUILD = 'NM-BUILD-2026-08-15-R3';
 console.log('[NuMind] charts build:', window.NM_CHARTS_BUILD);
 /* ════════════════════════════════════════════════════════════════════
    charts/core.js
