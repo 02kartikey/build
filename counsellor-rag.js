@@ -17,32 +17,34 @@
 /* ── System prompt cache ─────────────────────────────────────────────
    buildRagContext is called on every chat message, greeting, and
    summarise request — it joins ~300 lines of strings from the report
-   object every time. Since the report never changes after generation,
-   the static sections (student profile, scores, narratives, careers)
-   can be cached. Only the rolling summary block varies per-call.
+   object every time, so the static sections are worth caching.
 
-   Cache key: session_id from reportObj (unique per student).
-   TTL: 8 hours — matches the counsellor session token TTL.
-   Max: 500 entries (one per active student).
+   The block is derived entirely from the report object, so its validity is
+   decided by the report itself, not by elapsed time: the entry is stamped with
+   the report's generated_at and rebuilt the moment that moves. That stays
+   correct across worker processes (an invalidate call only reaches the worker
+   that handled it), so no TTL guess is needed to bound staleness — the TTL
+   below is only memory hygiene for students who never return.
 ─────────────────────────────────────────────────────────────────── */
-const _RAG_CACHE_TTL = 8 * 60 * 60 * 1000;
+const _RAG_CACHE_TTL = parseInt(process.env.COUNSELLOR_RAG_CACHE_MS || String(8 * 60 * 60 * 1000), 10);
 const _RAG_CACHE_MAX = 500;
-const _ragCache      = new Map(); // session_id → { staticBlock, cachedAt }
+const _ragCache      = new Map(); // session_id → { staticBlock, stamp, cachedAt }
 
-function _ragCacheGet(sessionId) {
+function _ragCacheGet(sessionId, stamp) {
   const e = _ragCache.get(sessionId);
   if (!e) return undefined;
   if (Date.now() - e.cachedAt > _RAG_CACHE_TTL) { _ragCache.delete(sessionId); return undefined; }
+  if (e.stamp !== stamp) { _ragCache.delete(sessionId); return undefined; } // report regenerated
   return e.staticBlock;
 }
 
-function _ragCacheSet(sessionId, staticBlock) {
+function _ragCacheSet(sessionId, staticBlock, stamp) {
   if (_ragCache.size >= _RAG_CACHE_MAX) _ragCache.delete(_ragCache.keys().next().value);
-  _ragCache.set(sessionId, { staticBlock, cachedAt: Date.now() });
+  _ragCache.set(sessionId, { staticBlock, stamp, cachedAt: Date.now() });
 }
 
-/* Drop a cached static block so a freshly-generated report (e.g. a retake in a
-   new class) is reflected in Aria's context immediately rather than after TTL. */
+/* Drop a cached static block explicitly. Revalidation above already prevents
+   stale reads; this simply frees the entry sooner after a known regeneration. */
 function invalidateRagCache(sessionId) {
   if (sessionId) _ragCache.delete(sessionId);
 }
@@ -477,9 +479,11 @@ function buildRagContext(reportObj, conversationSummary, journey, extras) {
   const { student, report, personality, aptitude, interests, seaa, careers, session_id } = reportObj;
   const firstName = student ? (student.firstName || (student.fullName || '').split(' ')[0] || 'there') : 'there';
 
-  // Cache the static block (built from immutable report data) keyed by session_id.
-  // Only the summaryBlock changes per-call, so we combine it with the cached static portion.
-  let staticBlock = session_id ? _ragCacheGet(session_id) : undefined;
+  // Cache the static block keyed by session_id, stamped with the report's own
+  // generated_at so a regenerated report (retake, re-run) rebuilds it on the
+  // next message rather than waiting for an expiry.
+  const _ragStamp = String((report && report.generated_at) || '');
+  let staticBlock = session_id ? _ragCacheGet(session_id, _ragStamp) : undefined;
 
   if (staticBlock === undefined) {
     staticBlock = [
@@ -547,7 +551,7 @@ function buildRagContext(reportObj, conversationSummary, journey, extras) {
       'When giving a roadmap, use a clear heading like "## Your Roadmap to [Career]" so it renders visually.',
     ].join('\n');
 
-    if (session_id) _ragCacheSet(session_id, staticBlock);
+    if (session_id) _ragCacheSet(session_id, staticBlock, _ragStamp);
   }
 
   // Inject the summary block at the correct position — between comm guidelines and data sections.

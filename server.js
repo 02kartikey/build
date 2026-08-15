@@ -415,10 +415,18 @@ function _injectToken(html) {
     `<meta name="app-token" content=${JSON.stringify(APP_TOKEN)}>\n</head>`);
 }
 
+// Code assets (JS/CSS) previously used `public, max-age=3600`, which tells the
+// browser NOT to revalidate for an hour — so after a deploy students kept
+// running the old bundle (and the ETag was never consulted). Serve them
+// `no-cache` instead: the browser still caches, but revalidates on every load
+// and gets a cheap 304 when nothing changed, so a deploy takes effect at once.
+// Genuinely immutable assets (images, fonts) keep the long cache.
+const _REVALIDATE_EXT = new Set(['.html', '.js', '.mjs', '.css', '.json', '.map']);
+
 function _buildHeaders(ext, etag, useGzip) {
   const h = {
     'Content-Type':  MIME[ext] || 'application/octet-stream',
-    'Cache-Control': ext === '.html' ? 'no-cache' : 'public, max-age=3600',
+    'Cache-Control': _REVALIDATE_EXT.has(ext) ? 'no-cache' : 'public, max-age=3600',
     'ETag':          etag,
     'Vary':          'Accept-Encoding',
   };
@@ -644,6 +652,10 @@ async function _handleSaveReport(req, res) {
     if (body?.student?.email) {
       try { cdb._invalidateReportCache(body.student.email); } catch (_) {}
     }
+    // Also sweep by session: imported students have no email (Aria keys them by
+    // a synthetic session identity), and the posted email can differ in case or
+    // be absent, so an email-only invalidation would leave a stale report.
+    try { cdb._invalidateReportCacheBySession(body?.sessionId); } catch (_) {}
     // Drop the cached RAG static block so a retake's fresh report reaches Aria now.
     try { rag.invalidateRagCache(body.sessionId); } catch (_) {}
     _json(res, 200, { ok: true });

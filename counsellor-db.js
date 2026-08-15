@@ -114,28 +114,61 @@ async function updateQuery(id, { status, adminNote } = {}) {
   await pg.exec(`UPDATE counsellor_queries SET ${fields.join(', ')} WHERE id = $${n}`, vals);
 }
 
-/* ─── Report cache (in-memory, not DB-bound; unchanged) ─────────── */
-const _REPORT_CACHE_TTL = 8 * 60 * 60 * 1000;
-const _REPORT_CACHE_MAX = 500;
-const _reportCache      = new Map(); // norm_email → { report, cachedAt }
+/* ─── Report cache (in-memory, per-process, DB-validated) ────────────
+   This Map lives inside ONE node process, so an invalidate call can only ever
+   clear the worker that handled it — under PM2 cluster / multi-worker every
+   other worker would keep serving its own copy. Rather than guessing a TTL
+   short enough to hide that (which only ever shortens the window of serving
+   wrong data), every read revalidates against the database.
 
-function _reportCacheGet(norm) {
+   Building a report payload costs 6 queries; validating costs 1 indexed
+   lookup of the freshness stamp the save path already maintains
+   (students.report_generated_at). So we keep the expensive assembly cached
+   while remaining correct across processes: if the stamp moved, the entry is
+   rebuilt. Correctness comes from the stamp, not from expiry — the TTL below
+   is only memory hygiene for students who never return. */
+const _REPORT_CACHE_TTL = parseInt(process.env.COUNSELLOR_REPORT_CACHE_MS || String(8 * 60 * 60 * 1000), 10);
+const _REPORT_CACHE_MAX = 500;
+const _reportCache      = new Map(); // norm_email → { report, stamp, cachedAt }
+
+/* The value the cache is validated against. Uses the report timestamp when
+   present and falls back to the session id so a brand-new attempt on the same
+   email (different row, no report yet) is never mistaken for the old one. */
+function _freshnessStamp(sessionId, generatedAt) {
+  return String(sessionId || '') + '|' + String(generatedAt || '');
+}
+
+function _reportCacheGet(norm, stamp) {
   const entry = _reportCache.get(norm);
   if (!entry) return undefined;
   if (Date.now() - entry.cachedAt > _REPORT_CACHE_TTL) { _reportCache.delete(norm); return undefined; }
+  if (entry.stamp !== stamp) { _reportCache.delete(norm); return undefined; } // report changed
   return entry.report;
 }
 
-function _reportCacheSet(norm, report) {
+function _reportCacheSet(norm, report, stamp) {
   if (_reportCache.size >= _REPORT_CACHE_MAX) {
     _reportCache.delete(_reportCache.keys().next().value); // evict oldest
   }
-  _reportCache.set(norm, { report, cachedAt: Date.now() });
+  _reportCache.set(norm, { report, stamp, cachedAt: Date.now() });
 }
 
 function _invalidateReportCache(email) {
   if (!email) return;
   _reportCache.delete(String(email).toLowerCase().trim());
+}
+
+/* Clear every cached entry belonging to a session. The email key is not always
+   known at save time (imported students have no email, and the synthetic
+   session identity is built in server.js). Revalidation already prevents stale
+   reads; this simply frees the entry sooner. */
+function _invalidateReportCacheBySession(sessionId) {
+  const sid = String(sessionId || '').trim();
+  if (!sid) return;
+  for (const [key, entry] of _reportCache) {
+    const rep = entry && entry.report;
+    if (rep && String(rep.session_id || '').trim() === sid) _reportCache.delete(key);
+  }
 }
 
 /* Shared SELECT for a student + joined report_summary. */
@@ -168,17 +201,31 @@ async function getReportByEmail(email) {
   const norm = String(email || '').toLowerCase().trim();
   if (!norm) return null;
 
-  const cached = _reportCacheGet(norm);
+  // One indexed lookup establishes both which row is current and whether the
+  // report has changed since we cached it. Cheap next to the 6-query payload
+  // assembly below, and correct even when another worker regenerated it.
+  const head = await pg.one(
+    `SELECT session_id, report_generated_at
+       FROM students
+      WHERE email = $1
+      ORDER BY registered_at DESC
+      LIMIT 1`,
+    [norm]
+  );
+  if (!head) { _reportCache.delete(norm); return null; }
+
+  const stamp  = _freshnessStamp(head.session_id, head.report_generated_at);
+  const cached = _reportCacheGet(norm, stamp);
   if (cached !== undefined) return cached;
 
   const student = await pg.one(
-    `${_REPORT_SELECT} WHERE s.email = $1 ORDER BY s.registered_at DESC LIMIT 1`,
-    [norm]
+    `${_REPORT_SELECT} WHERE s.session_id = $1 LIMIT 1`,
+    [head.session_id]
   );
-  if (!student) { _reportCacheSet(norm, null); return null; }
+  if (!student) { _reportCache.delete(norm); return null; }
 
   const result = await _buildReportPayload(student);
-  _reportCacheSet(norm, result);
+  _reportCacheSet(norm, result, stamp);
   return result;
 }
 
@@ -662,6 +709,7 @@ module.exports = {
   init,
   saveQuery, listQueries, updateQuery,
   getReportByEmail, getReportBySessionId, hasCompletedAssessment, _invalidateReportCache,
+  _invalidateReportCacheBySession,
   getJourney, getStudentInsights,
   saveMessage, getHistory, getConversations, clearHistory,
   saveConversationSummary, getConversationSummary,

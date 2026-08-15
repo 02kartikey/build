@@ -969,10 +969,15 @@ function _deriveAptitude(assessments) {
   return DAAB_DISPLAY_ORDER.map((key, i) => {
     const sub = daab[key] || (assessments && assessments['daab_' + key]) || {};
     const sc  = sub.scores || {};
-    const stn = (typeof sc.stanine === 'number' && sc.stanine > 0) ? sc.stanine : 5;
+    // An unattempted sub-test used to be stamped with stanine 5 / "Average",
+    // which meant the report, the dashboards and Aria all quoted a score the
+    // student never earned. Mark it as not attempted instead.
+    const attempted = (typeof sc.stanine === 'number' && sc.stanine > 0);
     return {
-      position: i, key, name: DAAB_LABELS[key], stanine: stn,
-      band: sc.label || _stanineBand(stn),
+      position: i, key, name: DAAB_LABELS[key],
+      stanine: attempted ? sc.stanine : null,
+      band: attempted ? (sc.label || _stanineBand(sc.stanine)) : 'Not attempted',
+      attempted,
       raw_score: (typeof sc.raw === 'number') ? sc.raw : null,
       max_score: (typeof sc.max === 'number') ? sc.max : null,
     };
@@ -1138,7 +1143,10 @@ function _deriveCareers(report, derivedInterests) {
 
 function _deriveSummary(personality, aptitude, interests, seaa, careers, report) {
   const avgPers = personality.length ? personality.reduce((s,d) => s + d.stanine, 0) / personality.length : 5;
-  const avgApt  = aptitude.length    ? aptitude.reduce((s,d) => s + d.stanine, 0)    / aptitude.length    : 5;
+  // Only attempted sub-tests carry a stanine now (unattempted are null), so
+  // average across those; fall back to the neutral mid-point if none exist.
+  const _aptDone = (aptitude || []).filter(a => typeof a.stanine === 'number' && a.stanine > 0);
+  const avgApt  = _aptDone.length ? _aptDone.reduce((s,d) => s + d.stanine, 0) / _aptDone.length : 5;
   const topInterestScore = (interests[0] && interests[0].score) || 0;
 
   const _pct = (s) => ((s - 1) / 8) * 100;

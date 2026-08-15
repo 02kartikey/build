@@ -10,7 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <!-- Supabase SDK removed — DB layer uses plain fetch() instead -->
-<link rel="stylesheet" href="styles.css?v=20260815">
+<link rel="stylesheet" href="styles.css?v=20260816">
 </head>
 <body>
 
@@ -82,9 +82,9 @@ document.addEventListener('click', function(e) {
 // These shims forward to the module version once it exists, retrying briefly,
 // and surface a clear message instead of a dead button if it never arrives.
 // Build stamp — lets anyone verify in DevTools which index.html is live.
-// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-15-R2' = this build;
+// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-15-R3' = this build;
 // undefined = the server is still serving a stale cached copy.
-window.NM_BUILD = 'NM-BUILD-2026-08-15-R2';
+window.NM_BUILD = 'NM-BUILD-2026-08-15-R3';
 console.log('[NuMind] index.html build:', window.NM_BUILD);
 
 function _accessFwd(name, tries) {
@@ -2167,7 +2167,7 @@ document.addEventListener('DOMContentLoaded', function() {
   display:flex; align-items:center; justify-content:space-between;
   padding:8px 0; border-bottom:1px solid var(--sb2); font-size:13px; color:var(--sbt);
 }
-.arp-kv strong { color:#fff; font-weight:700; }
+.arp-kv strong { color:var(--sbt); font-weight:700; }
 .arp-kv em { font-style:normal; color:var(--v2); }
 .arp-bar-row {
   display:grid; grid-template-columns:84px 1fr 44px; align-items:center; gap:8px;
@@ -2827,8 +2827,8 @@ document.addEventListener('DOMContentLoaded',function(){
 })();
 </script>
 
-<script type="module" src="./js/main.js"></script>
-<script type="module" src="./js/ai-counsellor.js"></script>
+<script type="module" src="./js/main.js?v=20260816"></script>
+<script type="module" src="./js/ai-counsellor.js?v=20260816"></script>
 <script src="./js/counsellor-goals-ui.js?v=4"></script>
 </body>
 </html>
