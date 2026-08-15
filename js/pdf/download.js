@@ -1770,11 +1770,20 @@ async function downloadPDF(override) {
       'People & Service':             { apt:'Verbal Ability',        pers:'Ethical Awareness',       sea:'S' },
       'Sports & Physical Perf.':      { apt:'Mechanical Ability',    pers:'Discipline & Sincerity',  sea:'A' },
     };
-    const pathwayDefaults = { apt:'Verbal Ability', pers:'Discipline & Sincerity', sea:'A' };
+    // No placeholder fallback: an unmapped CPI label must NOT silently stamp
+    // generic Verbal/Discipline/Academic factors onto a real report. Skip it and
+    // log so a future label change surfaces instead of shipping wrong-but-
+    // plausible data to a parent. All ten current CPI_AREAS labels are mapped,
+    // so this changes nothing today.
+    const _mapped = (list) => list.filter((p) => {
+      if (pathwayMappings[p.label]) return true;
+      try { console.warn('[download] unmapped CPI pathway skipped (no placeholder):', p.label); } catch (_) {}
+      return false;
+    });
 
-    const top4Pathways = cpiAll.slice().sort((a, b) => b.score - a.score).slice(0, 4);
+    const top4Pathways = _mapped(cpiAll.slice().sort((a, b) => b.score - a.score)).slice(0, 4);
     const pathwayGaps = top4Pathways.map((p, idx) => {
-      const m = pathwayMappings[p.label] || pathwayDefaults;
+      const m = pathwayMappings[p.label];
       const aptD = findApt(m.apt); const persD = findPers(m.pers);
       const seaR = seaToReadiness9(m.sea);
       const seaName = m.sea === 'S' ? 'Social Readiness' : m.sea === 'E' ? 'Emotional Readiness' : 'Academic Readiness';
@@ -1902,9 +1911,9 @@ async function downloadPDF(override) {
         return [careerName, interest, aptL, persL, seaL, align, pct, r.cluster || '', r.rationale || ''];
       });
     } else {
-      const top6 = cpiAll.slice().sort((a, b) => b.score - a.score).slice(0, 6);
+      const top6 = _mapped(cpiAll.slice().sort((a, b) => b.score - a.score)).slice(0, 6);
       matrixRowsLive = top6.map((p) => {
-        const m = pathwayMappings[p.label] || pathwayDefaults;
+        const m = pathwayMappings[p.label];
         const aptStn  = findApt(m.apt).stanine;
         const persStn = findPers(m.pers).stanine;
         // Same overall-SEAA approach for the score-driven fallback.
