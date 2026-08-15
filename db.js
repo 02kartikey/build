@@ -38,6 +38,33 @@ async function _initDb() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   CLASS MATCHING  (shared, free-text tolerant — single source of truth)
+   Class is stored as free text ("10", "10-B", "Grade 10"). A strict === made
+   correct students fail. classMatches compares a normalised key and, failing
+   that, the numeric grade — the part a student reliably knows — so "10-B" and
+   "10" match while a genuinely different class does not. No grade whitelist:
+   whatever number is on record is compared, so classes outside 9-12 keep
+   working. Used by verify-identity (server.js), the same-class retake lock
+   (below) and dashboard class/section scoping (dashboard-api.js) so all three
+   agree. classKey alone gives case-insensitive exact equality (used for
+   sections, which have no grade number).
+══════════════════════════════════════════════════════════════════ */
+function classKey(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+function classGrade(s) {
+  const m = classKey(s).match(/\d+/);
+  return m ? m[0] : '';
+}
+function classMatches(a, b) {
+  const ka = classKey(a), kb = classKey(b);
+  if (!ka || !kb) return false;
+  if (ka === kb) return true;
+  const ga = classGrade(a), gb = classGrade(b);
+  return !!ga && ga === gb;
+}
+
+/* ══════════════════════════════════════════════════════════════════
    PUBLIC API
 ══════════════════════════════════════════════════════════════════ */
 
@@ -56,7 +83,7 @@ async function saveRegistration(student, sessionId) {
     ? await pg.many(`SELECT class FROM report_history WHERE email = $1 ORDER BY attempt_no ASC`, [norm])
     : [];
   const attemptsCount = _hist.length;
-  const attemptedThisClass = !!(cls && _hist.some(h => String(h.class || '').trim().toLowerCase() === cls.toLowerCase()));
+  const attemptedThisClass = !!(cls && _hist.some(h => classMatches(h.class, cls)));
   const _lock = {
     attemptsCount,
     attemptedThisClass,
@@ -118,9 +145,11 @@ async function saveRegistration(student, sessionId) {
           student.firstName || '',
           student.lastName  || '',
           student.fullName  || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
-          student.class       || '',
+          String(student.class  || '').trim().replace(/\s+/g, ' '),
           student.section     || '',
-          student.school      || '',
+          // Normalised: trailing/double spaces made "St Xavier " a separate
+          // school from "St Xavier" in every dashboard grouping.
+          String(student.school || '').trim().replace(/\s+/g, ' '),
           student.schoolState || '',
           student.schoolCity  || '',
           String(student.age || ''),
@@ -548,6 +577,29 @@ async function getFullReport(sessionId) {
     pg.many(`SELECT * FROM report_careers     WHERE session_id = $1 ORDER BY position`, [sessionId]),
   ]);
   return { student, assessments, summary, personality, aptitude, interests, seaa, careers };
+}
+
+/* Completed-module snapshot for resume-after-relogin. save-section persists
+   each finished module's scores + raw answers, but nothing ever read them
+   back — so a student who logged out resumed from module 1 with an empty
+   client. Returns only modules that actually completed. */
+async function getSessionProgress(sessionId) {
+  await _initDb();
+  const row = await pg.one(`SELECT * FROM assessments WHERE session_id = $1`, [sessionId]);
+  if (!row) return { modules: {} };
+  const modules = {};
+  for (const m of MODULES) {
+    if (row[`${m}_completed_at`]) {
+      const sc = row[`${m}_scores_json`];
+      const ra = row[`${m}_raw_answers`];
+      modules[m] = {
+        scores:      typeof sc === 'string' ? JSON.parse(sc) : sc,
+        raw_answers: typeof ra === 'string' ? JSON.parse(ra) : ra,
+        completed_at: row[`${m}_completed_at`],
+      };
+    }
+  }
+  return { modules };
 }
 
 async function getSectionProgress(sessionId) {
@@ -1147,12 +1199,17 @@ module.exports = {
   saveReport,
   getFullReport,
   getSectionProgress,
+  getSessionProgress,
+  getSessionProgress,
   getStudentByEmail,
   resolveStudentByEmail,
   getStudentBySessionId,
   getJourney,
   backfillJourneyHistory,
   rescoreDaabFemale,
+  classKey,
+  classGrade,
+  classMatches,
   close,
   MODULES,
 };

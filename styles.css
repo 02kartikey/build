@@ -2,6 +2,7 @@
    TOKENS — NuMind brand palette (aligned to numind.co.in)
 ═══════════════════════════════════════════════ */
 :root {
+  color-scheme: light;
   /* Neutrals — teal-tinted so the brand lives in every surface */
   --bg:       #eef4f5;
   --bg2:      #e2ebed;
@@ -1943,3 +1944,25 @@ body {
 .daab-eg-sa-legend span { font-size:12px; font-weight:700; padding:4px 10px; border-radius:8px; }
 .daab-eg-sa-s { background:var(--m4); color:#fff; }
 .daab-eg-sa-r { background:var(--ink2); color:#fff; }
+
+
+/* ── Interactive worked examples ── */
+.eg-try { cursor:pointer; user-select:none; transition:transform .08s, border-color .12s, background .12s; }
+.eg-try:hover { transform:translateY(-1px); border-color:var(--m4) !important; }
+.eg-answered .eg-try { cursor:default; }
+.eg-answered .eg-try:hover { transform:none; }
+.eg-try.eg-sel { background:var(--m4) !important; color:#fff !important; border-color:var(--m4) !important; }
+.eg-try.eg-ok  { background:#dcfce7 !important; color:#14532d !important; border-color:#16a34a !important; font-weight:800; }
+.eg-try.eg-no  { background:#fee2e2 !important; color:#7f1d1d !important; border-color:#dc2626 !important; }
+.eg-fb { display:none; margin-top:10px; font-size:13px; font-weight:600; padding:8px 12px; border-radius:8px; }
+.eg-fb-ok { background:#f0fdf4; color:#166534; }
+.eg-fb-no { background:#fff7ed; color:#9a3412; }
+.eg-hint { font-size:12px; color:var(--ink4); margin-top:6px; font-style:italic; }
+
+/* PA's Same/Different practice buttons live inside .daab-eg-pair (monospace),
+   not .daab-eg-opts — without this they render as plain Courier text with no
+   border, so the tap-to-try affordance is invisible. */
+.daab-eg-pair .eg-try { font-family:'Nunito',sans-serif; display:inline-block; font-size:12.5px;
+  color:var(--ink3); background:var(--surface2); border:1px solid var(--border);
+  border-radius:8px; padding:4px 10px; margin-left:6px; }
+.daab-eg-pair .eg-fb, .daab-eg .eg-fb { font-family:'Nunito',sans-serif; font-style:normal; }

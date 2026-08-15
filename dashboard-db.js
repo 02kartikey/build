@@ -286,7 +286,7 @@ const _STATUS_CLAUSE = {
 function _studentWhere(schools, { class: cls, section, search, status } = {}) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length) return null;
-  let where = `WHERE LOWER(s.school) IN (${ph})`;
+  let where = `WHERE LOWER(BTRIM(s.school)) IN (${ph})`;
   const p   = [...params];
   let n = params.length + 1;
   if (cls)     { where += ` AND s.class = $${n++}`;   p.push(cls); }
@@ -355,7 +355,7 @@ async function getAtRiskStudents(schools, { days = 3, limit = 1000 } = {}) {
      FROM students s
      LEFT JOIN assessments    a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(s.school) IN (${ph})
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})
        AND rs.session_id IS NULL
        AND s.registered_at < $${n}
      ORDER BY s.registered_at ASC
@@ -374,7 +374,7 @@ async function getGenderStats(schools) {
        SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)::int AS completed
      FROM students s
      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(s.school) IN (${ph})
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})
      GROUP BY COALESCE(NULLIF(TRIM(s.gender), ''), 'Other')`,
     params
   );
@@ -430,7 +430,7 @@ async function countStudentsBySchool(schools) {
      FROM students s
      LEFT JOIN assessments    a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(s.school) IN (${ph})`,
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})`,
     params
   );
 }
@@ -452,15 +452,15 @@ async function getSchoolSummaries(schools) {
      FROM students s
      LEFT JOIN assessments    a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(s.school) IN (${ph})
-     GROUP BY LOWER(s.school), s.school, s.class
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})
+     GROUP BY LOWER(BTRIM(s.school)), s.school, s.class
      ORDER BY s.school, s.class`,
     params
   );
 
   const schoolMap = new Map();
   for (const row of rows) {
-    const key = row.school.toLowerCase();
+    const key = row.school.trim().toLowerCase();
     if (!schoolMap.has(key)) {
       schoolMap.set(key, { school: row.school, total: 0, completed: 0, in_progress: 0, not_started: 0, classes: [] });
     }
@@ -488,7 +488,7 @@ async function getAllSchools() {
     `SELECT MIN(school) AS school, COUNT(*)::int AS total_students
      FROM students
      WHERE school IS NOT NULL AND school != ''
-     GROUP BY LOWER(school)
+     GROUP BY LOWER(BTRIM(school))
      ORDER BY school`
   );
   _getAllSchoolsCache   = result;
@@ -527,7 +527,7 @@ async function getCompletionTrend(schools, days = 14) {
     `SELECT to_char((rs.generated_at)::date, 'YYYY-MM-DD') AS day, COUNT(*)::int AS completed
      FROM report_summary rs
      JOIN students s ON s.session_id = rs.session_id
-     WHERE LOWER(s.school) IN (${ph}) AND (rs.generated_at)::date >= $${n}::date
+     WHERE LOWER(BTRIM(s.school)) IN (${ph}) AND (rs.generated_at)::date >= $${n}::date
      GROUP BY (rs.generated_at)::date ORDER BY (rs.generated_at)::date`,
     [...params, cutoff]
   );
@@ -562,7 +562,7 @@ async function getAggregateScores(schools) {
        SUM(CASE WHEN rs.seaa_status = 'Support Needed'    THEN 1 ELSE 0 END)::int AS sea_support
      FROM report_summary rs
      JOIN students s ON s.session_id = rs.session_id
-     WHERE LOWER(s.school) IN (${ph})`,
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})`,
     params
   )) || {};
 }
@@ -578,7 +578,7 @@ async function getWellbeingAlerts(schools) {
      FROM report_summary rs
      JOIN students s      ON s.session_id  = rs.session_id
      LEFT JOIN report_seaa se ON se.session_id = rs.session_id
-     WHERE LOWER(s.school) IN (${ph})
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})
        AND rs.seaa_status = 'Support Needed'
      ORDER BY rs.fit_score ASC, s.session_id, se.key
      LIMIT 300`,
@@ -610,7 +610,7 @@ async function getCareerDistribution(schools) {
     `SELECT rs.recommended_primary AS career, COUNT(*)::int AS count
      FROM report_summary rs
      JOIN students s ON s.session_id = rs.session_id
-     WHERE LOWER(s.school) IN (${ph})
+     WHERE LOWER(BTRIM(s.school)) IN (${ph})
        AND rs.recommended_primary IS NOT NULL
        AND rs.recommended_primary != ''
      GROUP BY rs.recommended_primary
@@ -639,7 +639,7 @@ async function getModuleTiming(schools) {
          ROUND((AVG(a.${m.key}_duration_seconds) / 60.0)::numeric, 1)::float8 AS avg_minutes
        FROM assessments a
        JOIN students s ON s.session_id = a.session_id
-       WHERE LOWER(s.school) IN (${ph})
+       WHERE LOWER(BTRIM(s.school)) IN (${ph})
          AND a.${m.key}_completed_at IS NOT NULL
          AND a.${m.key}_duration_seconds > 0`,
       params
@@ -854,7 +854,7 @@ async function upsertStudent({ session_id, first_name, last_name, full_name, ema
        access_code        = COALESCE(students.access_code, EXCLUDED.access_code),
        access_code_set_at = COALESCE(students.access_code_set_at, EXCLUDED.access_code_set_at)`,
     [sid, first_name || '', last_name || '', full_name || (first_name + ' ' + (last_name || '')).trim(),
-     norm, cls || '', section || '', school || '', school_state || '', school_city || '', age || '', gender || '', now,
+     norm, String(cls || '').trim().replace(/\s+/g, ' '), section || '', String(school || '').trim().replace(/\s+/g, ' '), school_state || '', school_city || '', age || '', gender || '', now,
      generateAccessCode(), now]
   );
 
@@ -1021,7 +1021,8 @@ async function runImportTransaction(rows) {
              access_code = COALESCE(students.access_code, EXCLUDED.access_code),
              access_code_set_at = COALESCE(students.access_code_set_at, EXCLUDED.access_code_set_at)`,
           [sid, fn || '', ln || '', fullName || (fn + ' ' + (ln || '')).trim(), norm,
-           r.class || r.Class || '', r.section || r.Section || '', r.school || r.School || '',
+           String(r.class || r.Class || '').trim().replace(/\s+/g, ' '), r.section || r.Section || '',
+           String(r.school || r.School || '').trim().replace(/\s+/g, ' '),
            r.school_state || '', r.school_city || '', r.age || '', r.gender || '', now,
            generateAccessCode(), now]
         );

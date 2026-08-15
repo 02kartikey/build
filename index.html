@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="color-scheme" content="light">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NuMind MAPS — Multi-dimensional Assessments for Personalized Success</title>
 <link href="https://fonts.googleapis.com/css2?family=Nunito:ital,wght@0,400;0,600;0,700;0,800;1,700&family=Inter:wght@400;500;600&family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -9,7 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <!-- Supabase SDK removed — DB layer uses plain fetch() instead -->
-<link rel="stylesheet" href="styles.css?v=20260429">
+<link rel="stylesheet" href="styles.css?v=20260815">
 </head>
 <body>
 
@@ -81,9 +82,9 @@ document.addEventListener('click', function(e) {
 // These shims forward to the module version once it exists, retrying briefly,
 // and surface a clear message instead of a dead button if it never arrives.
 // Build stamp — lets anyone verify in DevTools which index.html is live.
-// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-01-R3' = this build;
+// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-15-R2' = this build;
 // undefined = the server is still serving a stale cached copy.
-window.NM_BUILD = 'NM-BUILD-2026-08-01-R3';
+window.NM_BUILD = 'NM-BUILD-2026-08-15-R2';
 console.log('[NuMind] index.html build:', window.NM_BUILD);
 
 function _accessFwd(name, tries) {
@@ -634,7 +635,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div style="flex:1;background:var(--grad-soft);border:1px solid rgba(21,125,140,.18);border-radius:16px;padding:1.4rem 1.5rem;display:flex;gap:1rem;align-items:flex-start">
             <div style="width:44px;height:44px;border-radius:12px;background:var(--brandl);display:flex;align-items:center;justify-content:center;font-size:21px;flex-shrink:0">🤖</div>
             <div>
-              <div style="font-family:'Poppins',sans-serif;font-weight:700;color:var(--brand3);font-size:15px;margin-bottom:4px">AI counsellor, available 24/7</div>
+              <div style="font-family:'Poppins',sans-serif;font-weight:700;color:var(--brand3);font-size:15px;margin-bottom:4px">Your AI counsellor</div>
               <div style="color:var(--ink3);font-size:13px;line-height:1.65">After completing your assessment, unlock your personal AI Counsellor — powered by your actual report data.</div>
               <button onclick="goToCounsellor()" class="btn btn-sm btn-primary" style="margin-top:12px">Open AI Counsellor →</button>
             </div>
@@ -657,7 +658,7 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
             <div class="field" style="margin-bottom:14px">
               <label style="font-size:13px;font-weight:600;color:var(--ink2);display:block;margin-bottom:5px">Your Query / Message *</label>
-              <textarea id="cq-message" rows="3" placeholder="e.g. I'd like help understanding my career interest scores and what stream to choose..." style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;box-sizing:border-box;outline:none;transition:border .2s;resize:vertical" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='#e5e7eb'"></textarea>
+              <textarea id="cq-message" rows="3" placeholder="e.g. I'd like help understanding my career interest scores and what stream to choose..." style="width:100%;padding:10px 12px;border:1.5px solid #e5e7eb;border-radius:10px;font-size:14px;font-family:'Inter',sans-serif;color:#1f2937;box-sizing:border-box;outline:none;transition:border .2s;resize:vertical" onfocus="this.style.borderColor='var(--brand)'" onblur="this.style.borderColor='#e5e7eb'"></textarea>
               <div id="cq-err-message" class="ferr" style="display:none;font-size:12px;color:#dc2626;margin-top:4px"></div>
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
@@ -1342,15 +1343,10 @@ document.addEventListener('DOMContentLoaded', function() {
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
       <div class="nc-topbar-center">
-        <div class="nc-tb-logo">
-          <img src="https://numind.co.in/wp-content/uploads/2025/12/numind_logo.png" alt="NuMind" onerror="this.style.display='none'">
-        </div>
         <div class="nc-live-dot">
           <svg width="8" height="8"><circle cx="4" cy="4" r="3.5" fill="#4ade80"/><circle cx="4" cy="4" r="3.5" fill="#4ade80" opacity="0"><animate attributeName="r" values="3.5;8;3.5" dur="2.6s" repeatCount="indefinite"/><animate attributeName="opacity" values="0.5;0;0.5" dur="2.6s" repeatCount="indefinite"/></circle></svg>
         </div>
         <span class="nc-topbar-title">NuMind AI Counsellor</span>
-        <span class="nc-tb-sep">·</span>
-        <span class="nc-topbar-sub" id="acp-topbar-sub">Available 24 / 7</span>
       </div>
       <div class="nc-topbar-right">
         <!-- Context chip: shows student's top trait once unlocked -->
@@ -1551,7 +1547,12 @@ document.addEventListener('DOMContentLoaded', function() {
 /* ── Shell ── */
 #page-counsellor.page { padding:0 !important; }
 .nc-shell {
-  display:flex; height:calc(100vh - 56px); overflow:hidden;
+  display:flex; overflow:hidden;
+  /* 100dvh tracks the real visible viewport on mobile — with plain 100vh the
+     collapsing URL bar makes the whole counsellor UI jump and clip while
+     scrolling, which is the "UI/UX gets hindered" report. */
+  height:calc(100vh - 56px);
+  height:calc(100dvh - 56px);
   font-family:var(--fb); background:var(--bg);
 }
 
@@ -1701,7 +1702,7 @@ document.addEventListener('DOMContentLoaded', function() {
   background:linear-gradient(135deg,rgba(92,79,181,0.08),rgba(139,92,246,0.06));
   border:1px solid var(--vbd); color:var(--v);
   font-size:11px; font-weight:600; white-space:nowrap;
-  max-width:160px; overflow:hidden; text-overflow:ellipsis;
+  max-width:230px; overflow:hidden; text-overflow:ellipsis;
   animation:nc-ctxin .35s var(--ease-spring);
 }
 @keyframes nc-ctxin { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:none} }
@@ -1709,9 +1710,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
 .nc-report-pill {
   display:flex; align-items:center; gap:5px;
-  font-size:11px; font-weight:600; padding:4px 9px;
+  font-size:12px; font-weight:600; padding:6px 12px;
   border-radius:20px; background:var(--gbg); border:1px solid var(--gbd); color:var(--green);
+  cursor:pointer; white-space:nowrap; transition:background .12s, border-color .12s, filter .12s;
 }
+.nc-report-pill:hover { filter:brightness(0.97); border-color:var(--green); }
 .nc-mobile-id {
   font-size:11px; font-weight:600; color:var(--v2);
   background:var(--vbg); border:1px solid var(--vbd);
@@ -1911,6 +1914,7 @@ document.addEventListener('DOMContentLoaded', function() {
   flex:1; overflow-y:auto; padding:22px 20px 10px;
   display:flex; flex-direction:column; gap:16px;
   scrollbar-width:thin; scrollbar-color:var(--bdr) transparent;
+  overscroll-behavior:contain; /* stop chat scroll chaining to the page */
 }
 .nc-messages::-webkit-scrollbar { width:4px; }
 .nc-messages::-webkit-scrollbar-thumb { background:var(--bdr); border-radius:4px; }
@@ -2308,7 +2312,7 @@ window._acAddTyping=function(containerId){
 /* ── Context chip ── */
 function _ncSetCtxChip(text){
   var chip=document.getElementById('nc-ctx-chip'); if(!chip) return;
-  chip.textContent=text; chip.style.display='flex';
+  chip.textContent=text; chip.title=text; chip.style.display='flex';
 }
 
 /* ── Follow-up chips ── */
@@ -2615,11 +2619,13 @@ function _applyUnlocked(name,messages){
   /* context chip — NuMind-specific top trait */
   (function(){
     var AC=window._AC,_S=window.S;
-    function e2(s){return String(s||'').replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
     var trait=null;
     if(_S&&_S.nmap&&_S.nmap.scores){try{var en=Object.entries(_S.nmap.scores).sort(function(a,b){return b[1]-a[1];});if(en.length)trait=en[0][0];}catch(_){}}
     if(!trait&&AC&&AC.reportSummary&&AC.reportSummary.top_personality_traits&&AC.reportSummary.top_personality_traits.length) trait=AC.reportSummary.top_personality_traits[0].name;
-    if(trait) _ncSetCtxChip(e2(trait));
+    // _ncSetCtxChip writes via textContent, which does not decode entities, so
+    // pass the raw trait — escaping here made "&" render as a literal "&amp;".
+    // Prefix a label so students know the chip shows their strongest trait.
+    if(trait) _ncSetCtxChip('Top trait: '+trait);
   })();
 
   /* report strip */
@@ -2823,6 +2829,6 @@ document.addEventListener('DOMContentLoaded',function(){
 
 <script type="module" src="./js/main.js"></script>
 <script type="module" src="./js/ai-counsellor.js"></script>
-<script src="./js/counsellor-goals-ui.js?v=2"></script>
+<script src="./js/counsellor-goals-ui.js?v=4"></script>
 </body>
 </html>

@@ -23,6 +23,7 @@
 
 const _ddb = require('./dashboard-db.js');
 const _cdb = require('./counsellor-db.js');
+const _core = require('./db.js'); // shared class-matching helper (single source of truth)
 let _sendEmail = null;
 let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 
@@ -341,7 +342,7 @@ async function _students(req, res) {
   const p = user.permissions || {};
   if (user.role !== 'admin') {
     if (p.studentScope === 'class' && Array.isArray(p.allowedClasses) && p.allowedClasses.length) {
-      if (cls && !p.allowedClasses.includes(cls)) return _json(res, 200, { students: [], count: 0 });
+      if (cls && !p.allowedClasses.some(ac => _core.classMatches(ac, cls))) return _json(res, 200, { students: [], count: 0 });
       if (!cls) {
         const rows = [];
         for (const ac of p.allowedClasses)
@@ -350,7 +351,7 @@ async function _students(req, res) {
       }
     }
     if (p.studentScope === 'section' && Array.isArray(p.allowedSections) && p.allowedSections.length) {
-      if (section && !p.allowedSections.includes(section)) return _json(res, 200, { students: [], count: 0 });
+      if (section && !p.allowedSections.some(as => _core.classKey(as) === _core.classKey(section))) return _json(res, 200, { students: [], count: 0 });
       if (!section) {
         const rows = [];
         for (const as of p.allowedSections)

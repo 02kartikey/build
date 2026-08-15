@@ -62,7 +62,17 @@ const log = {
   error: (...a) =>               console.error('[ERROR]', ...a),
 };
 
-process.on('uncaughtException',  err    => log.error('uncaughtException:',  err.message, err.stack));
+// After an uncaughtException the process is in an undefined state (Node's own
+// guidance): continuing can serve corrupted responses or wedge the event loop.
+// Log it, then hand off to the graceful shutdown so in-flight requests drain
+// and the supervisor (PM2 / Render) restarts a clean process. _gracefulShutdown
+// is defined at the bottom of this file; guard in case we crash before that.
+process.on('uncaughtException', err => {
+  log.error('uncaughtException:', err.message, err.stack);
+  if (typeof _gracefulShutdown === 'function') _gracefulShutdown();
+  else process.exit(1);
+});
+// A rejected promise is usually recoverable (one failed request), so log only.
 process.on('unhandledRejection', reason => log.error('unhandledRejection:', reason));
 
 // DB schema init + module wiring happens in _bootstrap() below (async).
@@ -721,16 +731,47 @@ async function _handleCounsellorUnlock(req, res) {
   let body;
   try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
 
-  const email = String(body?.email || '').toLowerCase().trim();
-  if (!email) return _json(res, 400, { error: 'Email is required.' });
+  const email     = String(body?.email || '').toLowerCase().trim();
+  const sessionId = String(body?.sessionId || '').trim();
+  if (!email && !sessionId) return _json(res, 400, { error: 'Email is required.' });
 
-  const rl = await _rlCheckDb('unlock', email, 20, RL_WINDOW);
+  const rl = await _rlCheckDb('unlock', email || sessionId, 20, RL_WINDOW);
   if (!rl.allowed) {
     res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
     return res.end(JSON.stringify({ error: 'Too many attempts. Please wait before trying again.' }));
   }
 
   try {
+    // ── Session-first unlock ──────────────────────────────────────────
+    // A student inside the live session that produced the report already
+    // sees the full report on the results page, so requiring an email/OTP
+    // round-trip here only creates the "correct details rejected"
+    // inconsistency — and makes Aria PERMANENTLY unreachable for
+    // access-code students imported without an email. Possession of the
+    // session (behind APP_TOKEN) is sufficient proof for that same student.
+    if (sessionId) {
+      const bySession = await cdb.getReportBySessionId(sessionId);
+      const hasR = !!(bySession && bySession.report &&
+        (bySession.report.fit_tier != null || bySession.report.generated_at != null));
+      const rowEmail = String((bySession && bySession.student && bySession.student.email) || '').toLowerCase().trim();
+      // Owner check: if the row has an email and the client also sent one,
+      // they must match; an email-less row (imported without one) is owned
+      // by whoever holds the live session.
+      const okOwner = hasR && (!rowEmail || !email || rowEmail === email);
+      if (okOwner) {
+        // Email-less rows get a stable per-session identity so PIN,
+        // history and conversations still key consistently.
+        const effEmail = rowEmail || ('session-' + sessionId.toLowerCase() + '@students.numind.local');
+        log.info('[unlock]', effEmail, '| session-verified (no OTP)');
+        return _jsonUnlocked(res, effEmail, bySession);
+      }
+      if (!email) {
+        return _json(res, 200, { unlocked: false,
+          error: 'No completed report found for this session yet. Please finish your assessment first.' });
+      }
+      // else fall through to the normal email flow
+    }
+
     const reportObj = await cdb.getReportByEmail(email);
     const hasReport = !!(reportObj && reportObj.report &&
       (reportObj.report.fit_tier != null || reportObj.report.generated_at != null));
@@ -818,55 +859,6 @@ async function _jsonUnlocked(res, email, reportObj) {
   } catch (err) {
     log.error('[_jsonUnlocked]', err.message);
     _json(res, 500, { error: 'Server error while unlocking session.' });
-  }
-}
-
-async function _handleCounsellorVerifyName(req, res) {
-  if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
-  let body;
-  try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
-
-  const email    = String(body?.email    || '').toLowerCase().trim();
-  const fullName = String(body?.fullName || '').toLowerCase().trim();
-  const cls      = String(body?.class    || '').toLowerCase().trim();
-  if (!email || !fullName || !cls) return _json(res, 400, { error: 'email, fullName and class are required.' });
-
-  const rl = await _rlCheckDb('verify-name', email, 10, RL_WINDOW);
-  if (!rl.allowed) {
-    res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Too many attempts. Try again later.' }));
-  }
-
-  try {
-    const reportObj = await cdb.getReportByEmail(email);
-    if (!reportObj) return _json(res, 200, { ok: false, error: 'No account found for this email. Make sure you use the email you registered with.' });
-
-    const dbFullName  = (reportObj.student?.fullName  || '').toLowerCase().trim();
-    const dbFirstName = (reportObj.student?.firstName || '').toLowerCase().trim();
-    const dbLastName  = (reportObj.student?.lastName  || '').toLowerCase().trim();
-    const dbCls       = (reportObj.student?.class     || '').toLowerCase().trim();
-
-    const nameMatch = fullName && (
-      fullName === dbFullName ||
-      fullName === dbFirstName ||
-      fullName === dbLastName ||
-      fullName === (dbFirstName + ' ' + dbLastName).trim() ||
-      (dbFirstName && fullName.startsWith(dbFirstName) && dbLastName && fullName.endsWith(dbLastName))
-    );
-    const clsMatch = cls && dbCls && (cls === dbCls || cls.replace(/\s/g,'') === dbCls.replace(/\s/g,''));
-
-    if (!nameMatch || !clsMatch) {
-      log.warn('[verify-name] mismatch for', email,
-        '| nameMatch:', nameMatch, '| clsMatch:', clsMatch);
-      return _json(res, 200, { ok: false,
-        error: 'Details do not match. Enter your name exactly as you registered (e.g. "Arjun Sharma") and your class (e.g. "10").' });
-    }
-
-    log.info('[unlock]', email, '| verified via: name+class');
-    return _jsonUnlocked(res, email, reportObj);
-  } catch (err) {
-    log.error('[counsellor-verify-name]', err.message);
-    _json(res, 500, { error: 'Server error.' });
   }
 }
 
@@ -964,9 +956,26 @@ async function _handleCounsellorVerifyIdentity(req, res) {
   try {
     const reportObj = await cdb.getReportByEmail(email);
     const stu = reportObj && reportObj.student;
-    const norm = s => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
-    const nameOk  = stu && norm(stu.fullName) === norm(fullName);
-    const classOk = stu && String(stu.class || '').trim() === cls;
+
+    // Names are matched leniently: casing, punctuation and extra spacing are
+    // ignored, and a middle name on one side (but not the other) is tolerated
+    // by falling back to a first-token + last-token match. This fixes false
+    // rejections for students whose registered name has a middle name, a dot,
+    // or odd spacing from a bulk import.
+    const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    const nameMatch = (stored, typed) => {
+      const a = norm(stored).split(' ').filter(Boolean);
+      const b = norm(typed).split(' ').filter(Boolean);
+      if (!a.length || !b.length) return false;
+      if (a.join(' ') === b.join(' ')) return true;
+      return a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
+    };
+
+    // Class is free text ("10", "10-B", "Grade 10"); dbModule.classMatches is
+    // the shared, grade-tolerant comparison (same one the retake lock and the
+    // dashboard scoping use) so a "10-B" student who types "10" is accepted.
+    const nameOk  = stu && nameMatch(stu.fullName, fullName);
+    const classOk = stu && dbModule.classMatches(stu.class, cls);
     if (!nameOk || !classOk) {
       log.warn('[verify-identity] failed for', email);
       return _json(res, 200, { ok: false, error: 'Those details do not match our records.' });
@@ -1490,11 +1499,19 @@ async function _handleRequest(req, res) {
     return res.end(JSON.stringify(payload));
   }
 
-  const ip   = _getIP(req);
-  const ipRl = _rlCheck(_ipRL, ip, IP_RL_MAX, IP_WINDOW);
-  if (!ipRl.allowed) {
-    res.writeHead(429, { 'Retry-After': String(ipRl.retryAfter), 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ error: 'Too many requests. Please slow down.' }));
+  // Per-IP limit guards the abuse surface (the API). Static assets are
+  // ETag-cached, cheap and not an abuse vector, and a single cold page load
+  // pulls dozens of ES-module files — counting those would rate-limit an
+  // entire school computer lab (30-60 students behind one NAT IP) the moment
+  // a class opens the app. So only /api/ requests are IP-limited; tune
+  // IP_RL_MAX per deployment for very large single-IP schools.
+  if (pathname.startsWith('/api/')) {
+    const ip   = _getIP(req);
+    const ipRl = _rlCheck(_ipRL, ip, IP_RL_MAX, IP_WINDOW);
+    if (!ipRl.allowed) {
+      res.writeHead(429, { 'Retry-After': String(ipRl.retryAfter), 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ error: 'Too many requests. Please slow down.' }));
+    }
   }
 
   try {
@@ -1506,7 +1523,6 @@ async function _handleRequest(req, res) {
     if (method === 'GET'  && pathname === '/api/counsellor-history')       return await _handleCounsellorHistory(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-unlock')        return await _handleCounsellorUnlock(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-otp')    return await _handleCounsellorVerifyOtp(req, res);
-    if (method === 'POST' && pathname === '/api/counsellor-verify-name')   return await _handleCounsellorVerifyName(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-request-otp')   return await _handleCounsellorRequestOtp(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-identity') return await _handleCounsellorVerifyIdentity(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-pin')   return await _handleCounsellorVerifyPin(req, res);
@@ -1612,8 +1628,15 @@ async function _handleDashboardInsights(req, res) {
     });
 
     if (upstream.statusCode !== 200) {
-      let msg = 'AI service error';
-      try { msg = JSON.parse(raw)?.error?.message || msg; } catch (_) {}
+      let msg = 'AI service error', code = '';
+      try { const e = JSON.parse(raw)?.error; msg = e?.message || msg; code = e?.code || e?.type || ''; } catch (_) {}
+      // 429 hides two very different problems — say which one it is, because
+      // "Insights unavailable: rate limit" sends staff chasing the wrong fix.
+      if (code === 'insufficient_quota' || /quota|billing/i.test(msg)) {
+        msg = 'The OpenAI account for this server is out of credits. Add billing/credits at platform.openai.com, then retry — this is not a NuMind bug.';
+      } else if (upstream.statusCode === 429) {
+        msg = 'OpenAI is rate-limiting this server right now. Wait ~1 minute and retry.';
+      }
       return _json(res, upstream.statusCode, { error: msg });
     }
 
@@ -1690,7 +1713,12 @@ server.listen(PORT, LISTEN_BACKLOG, () => {
 
 server.on('error', err => { log.error('[Server] Fatal:', err.message); process.exit(1); });
 
+let _shuttingDown = false;
 function _gracefulShutdown() {
+  // Idempotent: a second signal (or a crash during shutdown) must not stack
+  // another server.close callback and force-exit timer.
+  if (_shuttingDown) return;
+  _shuttingDown = true;
   log.error('[Server] Shutting down…');
   server.close(() => {
     Promise.resolve()
