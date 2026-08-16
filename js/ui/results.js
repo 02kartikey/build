@@ -3,10 +3,10 @@
    Results page builder — interpretations, careers, NMAP results, buildCharts dispatcher.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S } from '../state.js';
+import { S, DB } from '../state.js';
 import { CPI_AREAS } from '../engine/cpi.js';
 import { NMAP_DIMS } from '../engine/nmap.js';
-import { DAAB_SUBS } from '../engine/daab.js';
+import { DAAB_SUBS, scoreDAAB } from '../engine/daab.js';
 import { buildCPICharts } from '../charts/cpi-charts.js';
 import { buildSELCharts } from '../charts/sea-charts.js';
 import { SEL_CAT_LABEL } from '../charts/core.js';
@@ -18,6 +18,30 @@ import { generateAIReport } from '../ai/generator.js';
 import { renderAIReport } from '../ai/render.js';
 
 function buildResults() {
+  // Stored DAAB scores are a cache written when the student finished the
+  // sub-tests; they are not recomputed on this page. A session scored under an
+  // earlier norm table can therefore carry a stale/undefined stanine that
+  // renders as an empty bar (e.g. Verbal) even though the current engine would
+  // score it correctly. Re-derive every sub from its raw answers using the
+  // canonical norm tables (the engine is the single source of truth), so the
+  // charts, the client PDF, and the report payload sent to /api/save-report all
+  // read authoritative values. Runs before any surface reads S.daab.
+  if (S.daab && S.student) {
+    const _prev = DAAB_SUBS.map(s => S.daab[s.key] && S.daab[s.key].scores
+      ? S.daab[s.key].scores.stanine : undefined);
+    scoreDAAB();
+    // Only touch the server when a value actually changed — a no-op for healthy
+    // sessions, a self-heal for stale ones. This propagates the correction to
+    // report_aptitude (and thus the dashboards + Aria) via the next report save.
+    DAAB_SUBS.forEach((s, i) => {
+      const k = s.key, m = S.daab[k];
+      if (m && m.scores && m.scores.stanine !== _prev[i]) {
+        try { DB.saveSection(S.sessionId, 'daab_' + k, m.answers, m.scores, m.duration || 0); }
+        catch (_) { /* fire-and-forget: never block results render */ }
+      }
+    });
+  }
+
   const cpi=S.cpi.scores, sea=S.sea.scores, st=S.student;
 
   // Safety guard: scores must exist before rendering.
@@ -318,21 +342,11 @@ function buildNMAPResults(nmap) {
 // buildCharts — moved here from charts/core.js to avoid cyclic imports.
 function buildCharts() {
   requestAnimationFrame(() => {
-    // Isolate each builder: a throw in one (e.g. a restored/server-loaded
-    // scores object with an unexpected shape) must NOT blank the other four.
-    // Failures are logged with the offending module so the real cause is
-    // visible instead of a silent empty charts card.
-    const steps = [
-      ['CPI',      buildCPICharts],
-      ['SEAA',     buildSELCharts],
-      ['NMAP',     buildNMAPCharts],
-      ['DAAB',     buildDAAbCharts],
-      ['Overview', buildOverviewCharts],
-    ];
-    steps.forEach(([name, fn]) => {
-      try { fn(); }
-      catch (e) { console.error('[buildCharts] ' + name + ' chart failed:', e); }
-    });
+    buildCPICharts();
+    buildSELCharts();
+    buildNMAPCharts();
+    buildDAAbCharts();
+    buildOverviewCharts();
   });
 }
 
