@@ -984,44 +984,43 @@ function _deriveAptitude(assessments) {
   });
 }
 
-/* One-off historical correction for the female DAAB norm bug. The norm tables
-   live only in the frontend engine (engine/daab.js), so getStanine/label are
-   inlined here — this is the server-side counterpart. Only the gender-split
-   subtests (VA/PA/NA/AR) are recomputed. */
+/* DAAB stanine backfill. The norm tables + getStanine/stanineLabel are NOT
+   duplicated here anymore — they are dynamic-imported from the one canonical
+   source (engine/daab-norms.mjs) that the browser engine also uses, so the two
+   runtimes can never diverge (a divergent VA table is what caused the stale
+   bars in the first place). Only the gender-split subtests (VA/PA/NA/AR) carry
+   gender-specific norms and are recomputed. */
 const _DAAB_GENDER_SUBS = ['va', 'pa', 'na', 'ar'];
-const _DAAB_NORMS = {
-  va: { F: [[0,1],[2,2],[3,3],[4,5],[6,6],[7,8],[9,9],[10,11],[12,20]], M: [[0,0],[1,2],[3,3],[4,4],[5,6],[7,7],[8,8],[9,10],[11,20]] },
-  pa: { F: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,39],[40,44],[45,48],[49,50]], M: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,40],[41,44],[45,48],[49,50]] },
-  na: { F: [[0,4],[5,6],[7,8],[9,10],[11,12],[13,13],[14,15],[16,17],[18,20]], M: [[0,5],[6,7],[8,9],[10,10],[11,12],[13,14],[15,16],[17,18],[19,20]] },
-  ar: { F: [[0,3],[4,5],[6,7],[8,9],[10,11],[12,13],[14,15],[16,17],[18,20]], M: [[0,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,20]] },
-};
-function _daabStanine(key, raw, gender) {
-  const g = String(gender || '').trim().charAt(0).toUpperCase() === 'F' ? 'F' : 'M';
-  const table = _DAAB_NORMS[key] && _DAAB_NORMS[key][g];
-  if (!table) return 5;
-  for (let i = 0; i < table.length; i++) if (raw >= table[i][0] && raw <= table[i][1]) return i + 1;
-  if (raw < table[0][0]) return 1;
-  for (let i = table.length - 1; i >= 0; i--) if (raw >= table[i][0]) return i + 1;
-  return 1;
-}
-function _daabLabel(s) {
-  if (s <= 1) return 'Very Low';
-  if (s <= 2) return 'Needs Attention';
-  if (s <= 3) return 'Below Average';
-  if (s <= 4) return 'Slightly Below Avg';
-  if (s === 5) return 'Average';
-  if (s <= 6) return 'Slightly Above Avg';
-  if (s <= 7) return 'Above Average';
-  if (s <= 8) return 'High';
-  return 'Very High';
+
+// Cache the ESM norms module across calls. Path is relative to db.js at the
+// deployed repo root (engine deploys to js/engine/). .mjs is always ESM in
+// Node regardless of the CommonJS root package.json.
+let _daabNorms = null;
+async function _loadDaabNorms() {
+  if (!_daabNorms) _daabNorms = await import('./js/engine/daab-norms.mjs');
+  return _daabNorms;
 }
 
-async function rescoreDaabFemale({ commit = false, email = null } = {}) {
+
+async function rescoreDaabStanines({ commit = false, email = null, gender = null } = {}) {
   await _initDb();
+  const { getStanine, stanineLabel } = await _loadDaabNorms();
+
   const cols = _DAAB_GENDER_SUBS.map(k => `a.daab_${k}_scores_json`).join(', ');
   const params = [];
-  let where = `WHERE LOWER(LEFT(TRIM(s.gender), 1)) = 'f'`;
-  if (email) { params.push(String(email).toLowerCase().trim()); where += ` AND s.email = $1`; }
+  const clauses = [];
+  // Optional gender filter. Historically the backfill was female-only, but the
+  // male VA/PA/NA/AR tables carried the same kind of gap, so by default every
+  // gender is scanned. Pass gender:'f' (or 'm') to narrow it.
+  if (gender) {
+    params.push(String(gender).trim().charAt(0).toLowerCase());
+    clauses.push(`LOWER(LEFT(TRIM(s.gender), 1)) = $${params.length}`);
+  }
+  if (email) {
+    params.push(String(email).toLowerCase().trim());
+    clauses.push(`s.email = $${params.length}`);
+  }
+  const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
 
   const rows = await pg.many(
     `SELECT s.session_id, s.email, s.gender, ${cols}
@@ -1041,10 +1040,10 @@ async function rescoreDaabFemale({ commit = false, email = null } = {}) {
       try { p = JSON.parse(rawJson); } catch { continue; }
       if (!p || typeof p.raw !== 'number') continue;
       const oldStn = typeof p.stanine === 'number' ? p.stanine : null;
-      const newStn = _daabStanine(key, p.raw, row.gender);
+      const newStn = getStanine(key, p.raw, row.gender);
       if (newStn === oldStn) continue;
       p.stanine = newStn;
-      p.label = _daabLabel(newStn);
+      p.label = stanineLabel(newStn);
       changes.push({ key, raw: p.raw, oldStn, newStn, label: p.label, json: p });
     }
     if (!changes.length) continue;
@@ -1060,16 +1059,19 @@ async function rescoreDaabFemale({ commit = false, email = null } = {}) {
         await c.query(`UPDATE report_aptitude SET stanine = $1, band = $2 WHERE session_id = $3 AND key = $4`, [ch.newStn, ch.label, sid, ch.key]);
       }
       const apt = (await c.query(`SELECT name, stanine FROM report_aptitude WHERE session_id = $1`, [sid])).rows;
-      if (apt.length) {
-        const avg = apt.reduce((s, r) => s + r.stanine, 0) / apt.length;
+      // Match _deriveSummary: only attempted sub-tests (stanine > 0) count
+      // toward the average, so a null/unattempted row can't turn avg into NaN.
+      const done = apt.filter(r => typeof r.stanine === 'number' && r.stanine > 0);
+      if (done.length) {
+        const avg = done.reduce((s, r) => s + r.stanine, 0) / done.length;
         const res = await c.query(
           `UPDATE report_summary SET avg_aptitude_stanine = $1, aptitude_status = $2,
              strong_aptitudes_json = $3, emerging_aptitudes_json = $4 WHERE session_id = $5`,
           [
             Number(avg.toFixed(2)),
             avg >= 6.5 ? 'Strength' : avg >= 4 ? 'Developing' : 'Support Needed',
-            JSON.stringify(apt.filter(r => r.stanine >= 7).map(r => r.name)),
-            JSON.stringify(apt.filter(r => r.stanine >= 4 && r.stanine <= 6).map(r => r.name)),
+            JSON.stringify(done.filter(r => r.stanine >= 7).map(r => r.name)),
+            JSON.stringify(done.filter(r => r.stanine >= 4 && r.stanine <= 6).map(r => r.name)),
             sid,
           ]
         );
@@ -1080,6 +1082,11 @@ async function rescoreDaabFemale({ commit = false, email = null } = {}) {
 
   console.log(`[rescore-daab] ${commit ? 'committed' : 'dry-run'}: ${studentsChanged} students, ${subtestsChanged} subtests, ${summaries} summaries`);
   return { studentsChanged, subtestsChanged, summaries, committed: commit };
+}
+
+// Backward-compatible wrapper: original female-only entry point.
+async function rescoreDaabFemale(opts = {}) {
+  return rescoreDaabStanines({ ...opts, gender: 'f' });
 }
 
 function _deriveInterests(assessments) {
@@ -1214,6 +1221,7 @@ module.exports = {
   getStudentBySessionId,
   getJourney,
   backfillJourneyHistory,
+  rescoreDaabStanines,
   rescoreDaabFemale,
   classKey,
   classGrade,

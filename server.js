@@ -392,13 +392,14 @@ async function _ariaSafeReply(res, { email, conversationId, message, reply }) {
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js':   'application/javascript; charset=utf-8',
+  '.mjs':  'application/javascript; charset=utf-8',
   '.css':  'text/css; charset=utf-8',
   '.json': 'application/json',
   '.png':  'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon',
   '.svg':  'image/svg+xml', '.woff2': 'font/woff2',
   '.woff': 'font/woff',    '.ttf':   'font/ttf',
 };
-const COMPRESSIBLE = new Set(['.html', '.js', '.css', '.json', '.svg']);
+const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg']);
 
 const _CSP =
   "default-src 'self'; " +
