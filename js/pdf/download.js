@@ -5,6 +5,11 @@
 
 import { S } from '../state.js';
 import { NMAP_DIMS } from '../engine/nmap.js';
+// getStanine re-derives a stanine from a stored raw score. daab.js is already
+// in main.js's graph, so this import is free (same module instance). Used to
+// self-heal a stale/undefined stanine (e.g. Verbal scored under an old table)
+// so the report never prints "Not attempted" for a subtest that has a raw.
+import { getStanine } from '../engine/daab.js';
 
 async function downloadPDF(override) {
   /* ════════════════════════════════════════════════════════════════════
@@ -494,17 +499,25 @@ async function downloadPDF(override) {
       ma:  'Mechanical Ability',
       sa:  'Spatial Ability',
     };
+    // Gender for stanine re-derivation (VA/PA/NA/AR are gender-normed).
+    const _daabGender = ((_ov && _ov.student && _ov.student.gender)
+      || (typeof S !== 'undefined' && S && S.student && S.student.gender) || 'M');
     let aptitude8 = DAAB_KEY_ORDER.map((key) => {
       const sub = daab && daab[key];
       const sc = sub && sub.scores;
-      const attempted = !!(sc && typeof sc.stanine === 'number' && sc.stanine > 0);
-      // Previously an unattempted sub-test was stamped with stanine 5 /
-      // "Average", printing a measurement the student never took. Flag it
-      // instead so downstream maths and copy can exclude it honestly.
+      // A subtest counts as attempted if it has a raw score. If the stored
+      // stanine is missing/stale (undefined — e.g. Verbal scored under an old
+      // gapped table), re-derive it from the raw so it still renders. "Not
+      // attempted" is reserved for subtests with no raw data at all.
+      const hasRaw = !!(sc && typeof sc.raw === 'number');
+      const st = (sc && typeof sc.stanine === 'number' && sc.stanine > 0)
+        ? sc.stanine
+        : (hasRaw ? getStanine(key, sc.raw, _daabGender) : 0);
+      const attempted = st > 0;
       return {
         name: DAAB_TEMPLATE_LABELS[key],
-        stanine: attempted ? sc.stanine : 0,
-        label: attempted ? (sc.label || stanineBand(sc.stanine)) : 'Not attempted',
+        stanine: st,
+        label: attempted ? ((sc && sc.label && sc.label !== 'Not attempted') ? sc.label : stanineBand(st)) : 'Not attempted',
         attempted,
         key,
       };
@@ -1333,13 +1346,13 @@ async function downloadPDF(override) {
       const fLines = focuses.map(it => doc.splitTextToSize('• ' + it, 54));
       const sH = sLines.reduce((t, l) => t + l.length * 3.8, 0);
       const fH = fLines.reduce((t, l) => t + l.length * 3.8, 0);
-      const cardH = Math.max(38, 20 + sH + 8 + fH + 6);
+      const cardH = Math.max(42, 24 + sH + 8 + fH + 6);
       rect(px, cy, 62, cardH, CARD_FILL, CARD_BD, 2);
       await drawIcon(c.title, px + 4, cy + 3.5, 8, { fill: '#FFFFFF', border: CARD_BD });
       txt(c.title, px + 15, cy + 8.5, { size: 8, color: c.color, bold: true, maxWidth: 44 });
-      pill(c.displayLabel, px + 4, cy + 13, c.color, WHITE, 54, 6);
-      txt('Strengths', px + 4, cy + 20, { size: 7, color: '#1F2937', bold: true });
-      let by = cy + 24;
+      pill(c.displayLabel, px + 4, cy + 18, c.color, WHITE, 54, 6);
+      txt('Strengths', px + 4, cy + 24, { size: 7, color: '#1F2937', bold: true });
+      let by = cy + 28;
       sLines.forEach(ls => { txt(ls.join('\n'), px + 4, by, { size: 6.5, color: GRAY }); by += ls.length * 3.8; });
       line(px + 4, by + 1, px + 58, by + 1, '#E5E7EB', 0.2);
       by += 4;
