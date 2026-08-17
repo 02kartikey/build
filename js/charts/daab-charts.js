@@ -4,7 +4,7 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-import { DAAB_SUBS } from '../engine/daab.js';
+import { DAAB_SUBS, getStanine, stanineLabel } from '../engine/daab.js';
 import { CHARTS, destroyChart, stanineColor, CHART_ALPHA } from './core.js';
 
 function buildDAAbCharts() {
@@ -17,10 +17,26 @@ function buildDAAbCharts() {
   const available = daabSubs.filter(k => S.daab[k].scores);
   if (!available.length) return;
 
+  // Self-heal stale stanines. A student scored under an older, gapped VA norm
+  // table has a stored stanine of undefined — which plots as a MISSING bar
+  // (the empty "Verbal" column). Re-derive it from the stored raw score (always
+  // present) and heal the label too, so every subtest always shows a bar. Uses
+  // the authoritative stored raw, never re-reads answers, so it can't corrupt.
+  const gender = (S.student && S.student.gender) || 'M';
+  const healed = available.map((k) => {
+    const sc = S.daab[k].scores;
+    const st = (typeof sc.stanine === 'number' && sc.stanine > 0)
+      ? sc.stanine : getStanine(k, sc.raw || 0, gender);
+    const lb = (sc.label && sc.label !== 'Not attempted') ? sc.label : stanineLabel(st);
+    // Write the correction back so other surfaces reading S.daab agree.
+    sc.stanine = st; sc.label = lb;
+    return { st, lb, raw: sc.raw, max: sc.max };
+  });
+
   const labels   = available.map(k => SUB[k].short);
-  const stanines = available.map(k => S.daab[k].scores.stanine);
-  const raws     = available.map(k => S.daab[k].scores.raw);
-  const maxes    = available.map(k => S.daab[k].scores.max);
+  const stanines = healed.map(h => h.st);
+  const raws     = healed.map(h => h.raw);
+  const maxes    = healed.map(h => h.max);
   const colors   = stanines.map(stanineColor);
 
   // ── 1. Bar with annotation line ──
