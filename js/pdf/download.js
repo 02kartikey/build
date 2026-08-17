@@ -56,76 +56,6 @@ async function downloadPDF(override) {
       }
     } catch (_) { /* fall through to wordmark */ }
 
-    // ── Brand typeface from files. Drop Poppins TTFs at /assets/fonts/
-    // (web root -> assets/fonts folder) — Poppins-Regular.ttf, Poppins-Bold.ttf,
-    // Poppins-Italic.ttf — and every render picks them up, no code changes.
-    // The generated report was reading as generic/off-brand because it fell
-    // back to jsPDF's built-in Helvetica the whole way through; matching the
-    // template means matching its rounded, geometric sans. If a file is
-    // missing or slow (>1.5s) FONT stays FONT so the PDF never blocks
-    // or ships with a half-registered font.
-    let FONT = FONT;
-    const loadFontFile = async (file, style) => {
-      try {
-        const ctl = new AbortController();
-        const tm  = setTimeout(() => ctl.abort(), 1500);
-        const rsp = await fetch('/assets/fonts/' + file, { signal: ctl.signal });
-        clearTimeout(tm);
-        if (!rsp.ok) return false;
-        const blob = await rsp.blob();
-        const dataUrl = await new Promise((res, rej) => {
-          const fr = new FileReader();
-          fr.onload = () => res(fr.result); fr.onerror = rej;
-          fr.readAsDataURL(blob);
-        });
-        const b64 = String(dataUrl).split(',')[1];
-        doc.addFileToVFS(file, b64);
-        doc.addFont(file, 'NuMindSans', style);
-        return true;
-      } catch (_) { return false; }
-    };
-    try {
-      const [okReg, okBold] = await Promise.all([
-        loadFontFile('Poppins-Regular.ttf', 'normal'),
-        loadFontFile('Poppins-Bold.ttf', 'bold'),
-      ]);
-      // Italic is used sparingly (one caption); load it but don't gate the
-      // switch on it so the report still gets the brand font without it.
-      loadFontFile('Poppins-Italic.ttf', 'italic').catch(() => {});
-      if (okReg && okBold) FONT = 'NuMindSans';
-    } catch (_) { /* stays helvetica */ }
-
-    // ── Gradient fills (cover splash + accent header bands) ────────────
-    // jsPDF has no native gradient fill; we rasterize one on an offscreen
-    // canvas and place it as a JPEG image. Cached by its parameters so the
-    // same-sized band repeated across many pages is only computed once.
-    // This replaces the old flat two-tone cover block, which read as a flat
-    // colour swatch next to the template's soft diagonal purple gradient.
-    const _gradCache = {};
-    const gradientRect = (x, y, w, h, colorFrom, colorTo, angleDeg) => {
-      angleDeg = angleDeg == null ? 135 : angleDeg;
-      const key = [x, y, w, h, colorFrom, colorTo, angleDeg].join('|');
-      if (!_gradCache[key]) {
-        const scale = 4; // px-per-mm for a crisp print-resolution raster
-        const cw = Math.max(2, Math.round(w * scale));
-        const ch = Math.max(2, Math.round(h * scale));
-        const cnv = document.createElement('canvas');
-        cnv.width = cw; cnv.height = ch;
-        const ctx = cnv.getContext('2d');
-        const rad = (angleDeg * Math.PI) / 180;
-        const dx = Math.cos(rad), dy = Math.sin(rad);
-        const x0 = cw / 2 - (dx * cw) / 2, y0 = ch / 2 - (dy * ch) / 2;
-        const x1 = cw / 2 + (dx * cw) / 2, y1 = ch / 2 + (dy * ch) / 2;
-        const g = ctx.createLinearGradient(x0, y0, x1, y1);
-        g.addColorStop(0, colorFrom);
-        g.addColorStop(1, colorTo);
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, cw, ch);
-        _gradCache[key] = cnv.toDataURL('image/jpeg', 0.92);
-      }
-      doc.addImage(_gradCache[key], 'JPEG', x, y, w, h);
-    };
-
     // Right-aligned logo: rightX = right edge, hMM = target height in mm.
     const drawLogo = (rightX, midY, hMM, onDark) => {
       if (_logo) {
@@ -146,13 +76,13 @@ async function downloadPDF(override) {
       doc.setFillColor(onDark ? '#67E8F9' : '#157d8c');
       doc.circle(x + r * 1.7, y, r * 0.72, 'F');
       doc.setFillColor(onDark ? '#FFFFFF' : '#3B2A6D');
-      doc.setFont(FONT, 'bold');
+      doc.setFont('helvetica', 'bold');
       doc.setFontSize(11 * sc);
       doc.setTextColor(onDark ? '#FFFFFF' : '#3B2A6D');
       doc.text('NuMind', x + r * 2.9, y + 1.4 * sc);
       doc.setFontSize(3.4 * sc);
       doc.setTextColor(onDark ? '#D8B4FE' : '#6B7280');
-      doc.setFont(FONT, 'normal');
+      doc.setFont('helvetica', 'normal');
       doc.text('NURTURING MINDS, ACHIEVING OUTCOMES', x + r * 2.9, y + 4.4 * sc);
     };
 
@@ -226,7 +156,7 @@ async function downloadPDF(override) {
       const bold = !!opts.bold;
       const align = opts.align || 'left';
       doc.setFontSize(size);
-      doc.setFont(FONT, bold ? 'bold' : 'normal');
+      doc.setFont('helvetica', bold ? 'bold' : 'normal');
       setTxtColor(color);
       const drawOpts = { align: align };
       if (opts.maxWidth) drawOpts.maxWidth = opts.maxWidth;
@@ -287,14 +217,14 @@ async function downloadPDF(override) {
       let titleLines = [];
       if (opts.titleText) {
         doc.setFontSize(opts.titleSize || 9);
-        doc.setFont(FONT, (opts.titleBold !== false) ? 'bold' : 'normal');
+        doc.setFont('helvetica', (opts.titleBold !== false) ? 'bold' : 'normal');
         titleLines = doc.splitTextToSize(String(opts.titleText), maxW);
         innerH += titleLines.length * (opts.titleSize || 9) * 0.4 + 2;
       }
       let bodyLines = [];
       if (opts.bodyText) {
         doc.setFontSize(opts.bodySize || 7.5);
-        doc.setFont(FONT, 'normal');
+        doc.setFont('helvetica', 'normal');
         bodyLines = doc.splitTextToSize(String(opts.bodyText), maxW);
         innerH += bodyLines.length * lineH;
       }
@@ -314,7 +244,7 @@ async function downloadPDF(override) {
       let textY = cy + pTop + (opts.titleSize || 9) * 0.35;
       if (opts.titleText) {
         doc.setFontSize(opts.titleSize || 9);
-        doc.setFont(FONT, (opts.titleBold !== false) ? 'bold' : 'normal');
+        doc.setFont('helvetica', (opts.titleBold !== false) ? 'bold' : 'normal');
         setTxtColor(opts.titleColor || '#1F2937');
         titleLines.forEach((line) => { doc.text(line, bx + pLeft, textY); textY += (opts.titleSize || 9) * 0.4; });
         textY += 2;
@@ -323,7 +253,7 @@ async function downloadPDF(override) {
       // Draw body
       if (opts.bodyText) {
         doc.setFontSize(opts.bodySize || 7.5);
-        doc.setFont(FONT, 'normal');
+        doc.setFont('helvetica', 'normal');
         setTxtColor(opts.bodyColor || '#374151');
         bodyLines.forEach((line) => { doc.text(line, bx + pLeft, textY); textY += lineH; });
       }
@@ -437,7 +367,7 @@ async function downloadPDF(override) {
     const instructionBox = (cy, label, body, opts) => {
       opts = opts || {};
       const bodySize = opts.bodySize || 8, lineH = opts.lineH || 4.6;
-      doc.setFont(FONT, 'normal'); doc.setFontSize(bodySize);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(bodySize);
       const ls = doc.splitTextToSize(body, W - 40);
       const hasLabel = !!label;
       const h = 5 + (hasLabel ? 6 : 0) + ls.length * lineH + 4;
@@ -477,7 +407,7 @@ async function downloadPDF(override) {
         // this, splitTextToSize uses whatever size the previous draw left
         // active (often smaller), so lines wrap too late and overflow the
         // right margin — exactly what happened on the Welcome page.
-        doc.setFont(FONT, 'normal');
+        doc.setFont('helvetica', 'normal');
         doc.setFontSize(size);
         const lines = doc.splitTextToSize(para, maxW);
         for (let li = 0; li < lines.length; li++) {
@@ -698,7 +628,7 @@ async function downloadPDF(override) {
       if (subtitle) {
         // Wrap to at most two lines below the logo — no more mid-sentence
         // ellipsis clipping (the header now has the width for it).
-        doc.setFont(FONT, 'normal'); doc.setFontSize(7);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
         const sl = doc.splitTextToSize(subtitle, W - 28).slice(0, 2);
         let sy = 16.5;
         sl.forEach((ln) => { txt(ln, 14, sy, { size: 7, color: '#6B7280' }); sy += 3.5; });
@@ -708,7 +638,7 @@ async function downloadPDF(override) {
     const studentBar = (y) => {
       y = y || 22;
       rect(10, y, W - 20, 8, LIGHT_GRAY, null, 1);
-      doc.setFontSize(8); doc.setFont(FONT, 'bold'); setTxtColor(PURPLE);
+      doc.setFontSize(8); doc.setFont('helvetica', 'bold'); setTxtColor(PURPLE);
       doc.text(studentName, 14, y + 5.5);
       const nameW = doc.getTextWidth(studentName);
       const meta = '  |  ' + (grade || '—') + ' · ' + (schoolName || '—') + ' · ' + dateStr;
@@ -764,7 +694,7 @@ async function downloadPDF(override) {
       if (size >= 8) {
         const lbl = iconSlug(name);
         let fs = size >= 13 ? 3.2 : 2.7;
-        doc.setFont(FONT, 'normal'); doc.setFontSize(fs);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(fs);
         while (fs > 2 && doc.getTextWidth(lbl) > size - 1.4) { fs -= 0.15; doc.setFontSize(fs); }
         txt(lbl, x + size / 2, y + size / 2 + fs * 0.35, { size: fs, color: '#9B7AE0', align: 'center' });
       }
@@ -773,45 +703,42 @@ async function downloadPDF(override) {
     /* ═══════════════════════════════════════════════
        PAGE 1 — COVER
     ═══════════════════════════════════════════════ */
-    // Full-bleed diagonal gradient — the template's cover is one continuous
-    // wash of purple (lighter upper-left to deep violet lower-right), not a
-    // flat colour split at 80mm. That flat block was the "colour/texture"
-    // issue: no depth, and a hard seam where the second rect started.
-    gradientRect(0, 0, W, H, PURPLE_LIGHT, PURPLE_DARK, 125);
+    rect(0, 0, W, H, PURPLE_DARK);
+    rect(0, 0, W, 80, PURPLE);
     // NuMind wordmark — top-right of cover
-    drawLogo(W - 8, 14, 15, true);
-    txt('NURTURING MINDS, ACHIEVING OUTCOMES', 14, 18, { size: 5, color: '#D8B4FE' });
-    txt('Comprehensive Multidimensional Assessment Report', 14, 52, { size: 9, color: '#D8B4FE' });
-    txt('NuMind MAPS', 14, 70, { size: 28, color: WHITE, bold: true });
-    txt('Multidimensional Assessment', 14, 82, { size: 14, color: '#C4B5FD' });
-    txt('Personalized Success', 14, 90, { size: 14, color: '#C4B5FD' });
-    line(14, 97, 80, 97, WHITE, 0.8);
+    drawLogo(W - 8, 12, 15, true);
+    txt('NURTURING MINDS, ACHIEVING OUTCOMES', 14, 16, { size: 5, color: '#D8B4FE' });
+    txt('Comprehensive Multidimensional Assessment Report', 14, 50, { size: 9, color: '#D8B4FE' });
+    txt('NuMind MAPS', 14, 68, { size: 28, color: WHITE, bold: true });
+    txt('Multidimensional Assessment', 14, 80, { size: 14, color: '#C4B5FD' });
+    txt('Personalized Success', 14, 88, { size: 14, color: '#C4B5FD' });
+    line(14, 94, 80, 94, WHITE, 0.8);
 
-    rect(14, 108, W - 28, 58, WHITE, null, 4);
-    txt('Prepared For', 24, 119, { size: 8, color: GRAY });
-    txt(studentName, 24, 132, { size: 18, color: '#1F2937', bold: true, maxWidth: W - 48 });
-    line(24, 137, W - 24, 137, '#E5E7EB', 0.3);
-    txt('Grade:', 24, 148, { size: 9, color: '#1F2937', bold: true });
-    txt(grade || '—', 40, 148, { size: 9, color: '#1F2937' });
-    txt('School:', 24, 156, { size: 9, color: '#1F2937', bold: true });
-    txt(schoolName || '—', 40, 156, { size: 9, color: '#1F2937', maxWidth: W - 64 });
-    txt('Date:', 24, 164, { size: 9, color: '#1F2937', bold: true });
-    txt(dateStr, 38, 164, { size: 9, color: '#1F2937' });
+    rect(14, 104, W - 28, 56, WHITE, null, 3);
+    txt('Prepared For', 22, 114, { size: 8, color: GRAY });
+    txt(studentName, 22, 126, { size: 18, color: '#1F2937', bold: true, maxWidth: W - 44 });
+    line(22, 130, W - 22, 130, '#E5E7EB', 0.3);
+    txt('Grade:', 22, 140, { size: 9, color: '#1F2937', bold: true });
+    txt(grade || '—', 38, 140, { size: 9, color: '#1F2937' });
+    txt('School:', 22, 148, { size: 9, color: '#1F2937', bold: true });
+    txt(schoolName || '—', 38, 148, { size: 9, color: '#1F2937', maxWidth: W - 60 });
+    txt('Date:', 22, 156, { size: 9, color: '#1F2937', bold: true });
+    txt(dateStr, 35, 156, { size: 9, color: '#1F2937' });
 
     // Tagline panel — fills the previously empty mid-cover area.
-    rect(14, 176, W - 28, 23, PURPLE_LIGHT, null, 4);
-    txt('Your Personalised Career Development Report', W / 2, 186.5, { size: 11, color: WHITE, bold: true, align: 'center' });
-    txt('Built from 4 evidence-based assessments and AI-powered insights', W / 2, 193.5, { size: 8, color: '#E9D5FF', align: 'center' });
+    rect(14, 168, W - 28, 22, PURPLE_LIGHT, null, 3);
+    txt('Your Personalised Career Development Report', W / 2, 178, { size: 11, color: WHITE, bold: true, align: 'center' });
+    txt('Built from 4 evidence-based assessments and AI-powered insights', W / 2, 185, { size: 8, color: '#E9D5FF', align: 'center' });
 
-    txt('The Four Dimensions Shaping Your Profile', 14, 209, { size: 9.5, color: '#D8B4FE' });
+    txt('The Four Dimensions Shaping Your Profile', 14, 200, { size: 9.5, color: '#D8B4FE' });
     const coverPills = ['NMAP', 'NAAB', 'NCPI', 'NSEAA'];
-    const _pillGap = 4, _pillW = (W - 28 - _pillGap * 3) / 4;
     for (let i = 0; i < coverPills.length; i++) {
       const p = coverPills[i];
-      const px = 14 + i * (_pillW + _pillGap);
-      setFill(WHITE); doc.roundedRect(px, 214, _pillW, 25, 4, 4, 'F');
-      await drawIcon(p, px + 5, 219.5, 14, { fill: '#F1ECFB', border: '#D9CBF2' });
-      txt(p, px + 22, 228.5, { size: 10, color: PURPLE, bold: true });
+      const step = (W - 28) / 4, pw = 42;
+      const px = 14 + i * step;
+      setFill(WHITE); doc.roundedRect(px, 205, pw, 24, 3, 3, 'F');
+      await drawIcon(p, px + 5, 210, 14, { fill: '#F1ECFB', border: '#D9CBF2' });
+      txt(p, px + 22, 219, { size: 10, color: PURPLE, bold: true });
     }
     footer(1);
 
@@ -819,7 +746,7 @@ async function downloadPDF(override) {
        PAGE 2 — WELCOME & 4 PILLARS
     ═══════════════════════════════════════════════ */
     doc.addPage();
-    gradientRect(0, 0, W, 18, PURPLE, PURPLE_DARK, 0);
+    rect(0, 0, W, 18, PURPLE);
     txt('Welcome', 14, 9, { size: 8, color: '#D8B4FE' });
     txt(studentName, 14, 15, { size: 14, color: WHITE, bold: true, maxWidth: W - 52 });
     // NuMind wordmark — welcome page header top-right
@@ -839,7 +766,7 @@ async function downloadPDF(override) {
     // draw it here; if it does not, keep this page for the framework (with the
     // short welcome text) and give the full AI summary its own titled page.
     // Previously the intro pushed "Stronger Together" onto a lone page.
-    doc.setFont(FONT, 'normal'); doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     const _wParas = String(welcomeProse).split(/\n\s*\n/).filter(Boolean);
     const _wLines = _wParas.reduce((n, p) => n + doc.splitTextToSize(p, W - 28).length, 0);
     const _wNeed  = _wLines * 4.8 + (_wParas.length - 1) * 4;
@@ -860,7 +787,7 @@ async function downloadPDF(override) {
     // exist in jsPDF's helvetica, which is how literal asterisks ended up in
     // the shipped report.
     txt('The Four Pillars of NuMind MAP', W / 2, cy + 5.5, { size: 9, color: WHITE, bold: true, align: 'center' });
-    doc.setFont(FONT,'bold'); doc.setFontSize(9);
+    doc.setFont('helvetica','bold'); doc.setFontSize(9);
     const _pw = doc.getTextWidth('The Four Pillars of NuMind MAP');
     [ W/2 - _pw/2 - 6, W/2 + _pw/2 + 6 ].forEach((dx) => {
       doc.setFillColor('#FFFFFF');
@@ -892,7 +819,7 @@ async function downloadPDF(override) {
       await drawIcon(p.code, px + 5, py + 5, 14, { fill: '#FFFFFF', border: p.border });
       txt(p.code,  px + 23, py + 9,  { size: 7.5, color: p.border, bold: true });
       txt(p.title, px + 23, py + 14, { size: 7.3, color: '#1F2937', bold: true, maxWidth: 64 });
-      doc.setFont(FONT, 'italic'); doc.setFontSize(7); setTxtColor(p.border);
+      doc.setFont('helvetica', 'italic'); doc.setFontSize(7); setTxtColor(p.border);
       const sub = doc.splitTextToSize(p.sub, 84); doc.text(sub, px + 5, py + 25);
       const body = doc.splitTextToSize(p.body, 84);
       txt(body.join('\n'), px + 5, py + 30, { size: 6.5, color: '#6B7280' });
@@ -917,36 +844,37 @@ async function downloadPDF(override) {
     // Measure each step (label width + wrapped description) so rows size to
     // their own content and the whole set can be distributed evenly.
     const stepMeas = steps.map((row) => {
-      doc.setFont(FONT, 'bold'); doc.setFontSize(8.5);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
       const lblW = doc.getTextWidth(row[1]);
-      doc.setFont(FONT, 'normal'); doc.setFontSize(7.8);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.8);
       const dLines = doc.splitTextToSize(row[2], W - 32 - lblW);
       return { lblW, dLines, h: Math.max(12, 6 + dLines.length * 4.2) };
     });
     // Stronger Together box (measured).
     const stBody = 'These four pillars come together to provide a holistic, evidence-based view of your potential — empowering you to make informed decisions today for a more confident tomorrow.';
-    doc.setFont(FONT, 'normal'); doc.setFontSize(8);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     const stLines = doc.splitTextToSize(stBody, W - 66);
     const stH = Math.max(30, 14 + stLines.length * 4.6);
-    // Distribute the five steps + the box through the upper band; whitespace
-    // then falls to the bottom of the page (as in the template) rather than
-    // clustering the blocks at the top.
-    const p3Heights = stepMeas.map(s => s.h).concat([stH]);
-    const p3Ys = distribute(cy, Math.min(BOTTOM, cy + 178), p3Heights, { minGap: SP.sm, maxGap: SP.lg });
+    // Group the steps tightly at the top (template layout); the whitespace
+    // then falls to the bottom of the page rather than being spread as large
+    // gaps between rows.
     steps.forEach((row, i) => {
-      const y = p3Ys[i], m = stepMeas[i], mid = y + m.h / 2;
-      rect(10, y, W - 20, m.h, LIGHT_GRAY, null, 2);
+      const m = stepMeas[i], mid = cy + m.h / 2;
+      rect(10, cy, W - 20, m.h, LIGHT_GRAY, null, 2);
       setFill(PURPLE); doc.circle(18, mid, 3.4, 'F');
       txt(row[0], 18, mid + 1.4, { size: 8, color: WHITE, bold: true, align: 'center' });
       txt(row[1], 26, mid - (m.dLines.length - 1) * 2 + 1, { size: 8.5, color: PURPLE, bold: true });
       txt(m.dLines.join('\n'), 26 + m.lblW + 3, mid - (m.dLines.length - 1) * 2 + 1, { size: 7.8, color: GRAY });
+      cy += m.h + SP.sm;
     });
-    const stY = p3Ys[p3Ys.length - 1];
+    cy += SP.md;
+    const stY = cy;
     rect(10, stY, W - 20, stH, '#F5F3FF', PURPLE, 2);
     rect(10, stY, 2.5, stH, PURPLE, null, 0);
     await drawIcon('Stronger Together', 15, stY + (stH - 18) / 2, 18, { fill: '#FFFFFF', border: PURPLE });
     txt('Stronger Together', 38, stY + 9, { size: 9.5, color: PURPLE, bold: true });
     txt(stLines.join('\n'), 38, stY + 15, { size: 8, color: '#374151' });
+    cy = stY + stH;
 
     footer(2);
 
@@ -982,13 +910,15 @@ async function downloadPDF(override) {
       const trait = topPersonality[idx]
         || personalityAll[idx]
         || { name: 'Profile developing', stanine: 5, label: 'Developing Area' };
-      const px = 10 + idx * 63;
-      rect(px, cy, 59, 12, LIGHT_GRAY, '#D1D5DB', 2);
-      txt('0' + (idx + 1), px + 5, cy + 8, { size: 9, color: PURPLE, bold: true });
-      txt(trait.name, px + 16, cy + 6, { size: 7.5, color: '#1F2937', bold: true, maxWidth: 42 });
-      txt(trait.label, px + 16, cy + 11, { size: 7, color: GRAY });
+      const px = 10 + idx * 63.3, cardW = 59, cardH = 20;
+      rect(px, cy, cardW, cardH, CARD_FILL, CARD_BD, 2);
+      rect(px, cy, 2.2, cardH, PURPLE, null, 0);
+      txt('0' + (idx + 1), px + 5, cy + 14, { size: 17, color: PURPLE, bold: true });
+      txt(trait.name, px + 21, cy + 8.5, { size: 8, color: '#1F2937', bold: true, maxWidth: cardW - 25 });
+      const bandColor = trait.stanine >= 7 ? C_STRENGTH : trait.stanine >= 4 ? C_DEVELOPING : C_FOCUS;
+      txt(trait.label, px + 21, cy + 14.5, { size: 7, color: bandColor, bold: true });
     });
-    cy += 18;
+    cy += 26;
 
     cy = indicativeCallout(cy);
 
@@ -1026,7 +956,7 @@ async function downloadPDF(override) {
       'Patience & Resilience':      'Practice mindfulness and journaling to build emotional steadiness.',
       'Emotional Intelligence':     'Practice active listening, empathy exercises, and reflective journaling to strengthen emotional awareness.',
     };
-    doc.setFontSize(7.5); doc.setFont(FONT, 'normal');
+    doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
     const suggLinesP = persWeakP.map(d => doc.splitTextToSize('• ' + (suggMapP[d.name] || ('Strengthen ' + d.name + ' through targeted practice and reflection.')), W - 28));
     const suggBoxHP = persWeakP.length ? 12 + suggLinesP.reduce((h, ls) => h + ls.length * 4.6, 0) : 0;
     const suggReserveP = suggBoxHP ? suggBoxHP + 8 : 0;
@@ -1038,7 +968,7 @@ async function downloadPDF(override) {
     const cardH = personality9.map((d, i) => {
       const isLastAlone = (personality9.length % 2 === 1) && (i === personality9.length - 1);
       const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
-      doc.setFontSize(descFont); doc.setFont(FONT, 'normal');
+      doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
       const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
       return 18 + dL.length * descLH + 3;
     });
@@ -1060,7 +990,7 @@ async function downloadPDF(override) {
         const d = personality9[idx];
         const isLastAlone = (personality9.length % 2 === 1) && (idx === personality9.length - 1);
         const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
-        doc.setFontSize(descFont); doc.setFont(FONT, 'normal');
+        doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
         const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
         const px = 10 + col * 97;
         const cardW = isLastAlone ? W - 20 : 93;
@@ -1125,7 +1055,7 @@ async function downloadPDF(override) {
     ['Aptitude Area', 'Profile', 'Description', 'Potential Careers'].forEach((h, i) => txt(h, acX[i] + 2, cy + 5, { size: 7.5, color: WHITE, bold: true }));
     cy += 7;
     aptRowsC.forEach((r, ri) => {
-      doc.setFontSize(6.5); doc.setFont(FONT, 'normal');
+      doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
       const dLn = doc.splitTextToSize(r.desc, acW[2] - 5);
       const cLn = doc.splitTextToSize(r.careers, acW[3] - 5);
       const rowH = Math.max(11, 4.5 + Math.max(dLn.length, cLn.length) * 3.9);
@@ -1149,7 +1079,7 @@ async function downloadPDF(override) {
     txt('Bar colours follow the bands above. Career options are indicative, not exhaustive — explore pathways aligned with aptitude, interests and academics.', 14, cy + 2, { size: 6.5, color: GRAY, maxWidth: W - 28 });
     cy += 7;
 
-    doc.setFontSize(8); doc.setFont(FONT, 'normal');
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal');
     // Every box must carry real content. If no area reached the Strength band,
     // surface the student's closest areas with a supportive framing rather than
     // an empty placeholder; mirror the same for the emerging box.
@@ -1159,7 +1089,7 @@ async function downloadPDF(override) {
       : 'Closest to strength:\n' + _closest.join('\n') + '\nWith practice these can become clear strengths.';
     const emergingContent = aptEmerging.length ? aptEmerging.join('\n')
       : 'All areas are currently either strengths or focus areas — see the profile above.';
-    doc.setFont(FONT,'normal'); doc.setFontSize(7); // measure at draw size
+    doc.setFont('helvetica','normal'); doc.setFontSize(7); // measure at draw size
     const sALines = doc.splitTextToSize(strongContent, 83);
     const eALines = doc.splitTextToSize(emergingContent, 83);
     const aptPairH = Math.max(9 + sALines.length * 4.6, 9 + eALines.length * 4.6, 22);
@@ -1295,7 +1225,7 @@ async function downloadPDF(override) {
       return [tag, item.label, interp, pathways];
     });
     clusters.forEach((row, ri) => {
-      doc.setFontSize(7); doc.setFont(FONT, 'normal');
+      doc.setFontSize(7); doc.setFont('helvetica', 'normal');
       const interpL = doc.splitTextToSize(row[2], cColW[2] - 4);
       const pathsL  = doc.splitTextToSize(row[3], cColW[3] - 4);
       const rowH = Math.max(22, 12 + Math.max(interpL.length, pathsL.length) * 4.5);
@@ -1335,7 +1265,7 @@ async function downloadPDF(override) {
     for (let i = 0; i < seaCards.length; i++) {
       const c = seaCards[i];
       const px = 10 + i * 66;
-      doc.setFontSize(6.5); doc.setFont(FONT, 'normal');
+      doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
       const dl = doc.splitTextToSize(seaDescs[i], 54);
       // Arc colour follows the SAME readiness category as the status label
       // (gender-normed), so the card colour never contradicts its own text —
@@ -1398,7 +1328,7 @@ async function downloadPDF(override) {
       const strengths = s.strengthsByLabel[c.label] || [];
       const focuses   = s.focusByLabel[c.label] || [];
       // compute wrapped lines for each bullet
-      doc.setFontSize(6.5); doc.setFont(FONT, 'normal');
+      doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
       const sLines = strengths.map(it => doc.splitTextToSize('• ' + it, 54));
       const fLines = focuses.map(it => doc.splitTextToSize('• ' + it, 54));
       const sH = sLines.reduce((t, l) => t + l.length * 3.8, 0);
@@ -1440,7 +1370,7 @@ async function downloadPDF(override) {
       'Support Needed':       'Higher concern — structured support and guidance are recommended to build readiness.',
     };
     seaCards.forEach((c, ri) => {
-      doc.setFontSize(6.5); doc.setFont(FONT, 'normal');
+      doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
       const interpL = doc.splitTextToSize(interpByLabel[c.label] || 'A snapshot of current readiness in this area — it can strengthen with support and practice.', 88);
       const rowH = Math.max(24, 13 + interpL.length * 4.5);
       rect(10, cy, W - 20, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
@@ -1466,7 +1396,7 @@ async function downloadPDF(override) {
       rect(px, cy, 60, 30, WHITE, CARD_BD, 2);
       await drawIcon(g.t, px + 4, cy + 4, 11, { fill: '#FFFFFF', border: CARD_BD });
       txt(g.t, px + 18, cy + 10.5, { size: 8.5, color: PURPLE, bold: true });
-      doc.setFont(FONT, 'normal'); doc.setFontSize(6.5);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
       const dl = doc.splitTextToSize(g.d, 52);
       txt(dl.join('\n'), px + 4, cy + 19, { size: 6.5, color: GRAY });
     }
@@ -1476,7 +1406,7 @@ async function downloadPDF(override) {
     cy += 18;
 
     const seaIndText = 'These results provide a snapshot for guidance purposes only. They reflect the current state at the time of assessment and may evolve over time.';
-    doc.setFontSize(7.5); doc.setFont(FONT, 'normal');
+    doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
     const seaIndL = doc.splitTextToSize(seaIndText, W - 32);
     const seaIndH = 6 + seaIndL.length * 4.5;
     // (page-guard removed: SEAA closing note stays inline on the growth page)
@@ -1575,7 +1505,7 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
     const gapNote = 'For each recommended pathway, 3 key parameters are compared: 1 Aptitude factor, 1 Personality factor, and 1 SEAA readiness factor. Purple bars show your current level. Grey bars show the level typically required for that pathway.';
-    doc.setFont(FONT,'normal'); doc.setFontSize(8); // measure at draw size
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); // measure at draw size
     const gnL = doc.splitTextToSize(gapNote, W - 28);
     txt(gnL.join('\n'), 14, cy + 4, { size: 8, color: '#374151' });
     cy += gnL.length * 5 + 6;
@@ -1608,7 +1538,7 @@ async function downloadPDF(override) {
     cy = 40;
 
     const matrixNote = 'This matrix combines your Interest, Aptitude, Personality and Wellbeing readiness to calculate an overall alignment level for each career cluster. Strong = well aligned across all domains. Emerging = developing alignment. Exploratory = worth exploring with more exposure.';
-    doc.setFont(FONT,'normal'); doc.setFontSize(8); // measure at draw size
+    doc.setFont('helvetica','normal'); doc.setFontSize(8); // measure at draw size
     const mnL = doc.splitTextToSize(matrixNote, W - 28);
     txt(mnL.join('\n'), 14, cy + 4, { size: 8, color: '#374151' });
     cy += mnL.length * 5 + 4; // +mDense-aware extra below, once rows are known
@@ -1723,7 +1653,7 @@ async function downloadPDF(override) {
       { label: 'Emerging Fit', color: A_DEV.t,     fill: A_DEV.fill,     items: tierItems('Emerging'),   empty: 'None at this tier yet.' },
       { label: 'Exploratory', color: A_EXPLORE.t,  fill: A_EXPLORE.fill, items: tierItems('Exploratory'), empty: 'Broad exploration recommended this year.' },
     ];
-    doc.setFont(FONT, 'normal'); doc.setFontSize(7.5);
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
     fitTiers.forEach((t) => {
       const text = t.items.length ? t.items.join('  ·  ') : t.empty;
       t._lines = doc.splitTextToSize(text, W - 78);
@@ -1800,24 +1730,26 @@ async function downloadPDF(override) {
         return k ? subjectMap[k] : 'Flexible / multidisciplinary stream';
       };
       const pathways = [
-        { num:'01', fit:'Strong Fit',      type:'(Primary Pathway)',  subject: resolveSubject(recPrimary), desc:'Highest alignment with your assessed strengths and top fit pathway.', color: PURPLE },
-        { num:'02', fit:'Alternate Fit',   type:'(Related Pathway)',  subject: resolveSubject(recAlt),     desc:'Supports closely related pathways while keeping multiple career options open.', color: PURPLE_LIGHT },
-        { num:'03', fit:'Exploration Fit', type:'(Flexible Pathway)', subject: resolveSubject(recExpl),    desc:'Maintains broader opportunities for exploration and evolving interests.', color: '#6B7280' },
+        { num:'01', fit:'Strong Fit',      type:'(Primary Pathway)',  subject: resolveSubject(recPrimary), desc:'Highest alignment with your assessed strengths and top fit pathway.' },
+        { num:'02', fit:'Alternate Fit',   type:'(Related Pathway)',  subject: resolveSubject(recAlt),     desc:'Supports closely related pathways while keeping multiple career options open.' },
+        { num:'03', fit:'Exploration Fit', type:'(Flexible Pathway)', subject: resolveSubject(recExpl),    desc:'Maintains broader opportunities for exploration and evolving interests.' },
       ];
       pathways.forEach((p) => {
-        doc.setFontSize(7.5); doc.setFont(FONT, 'normal');
+        doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
         const dL = doc.splitTextToSize(p.desc, W - 140);
-        const pH = Math.max(mDense ? 17 : 21, (mDense ? 8 : 10) + dL.length * 4.5);
-        // (inner page-guard removed: the outer guard already reserved room for
-        // all three pathway cards, so they stay together on this page.)
-        rect(10, cy, W - 20, pH, '#FAFAFA', p.color, 2);
-        setFill(p.color); doc.roundedRect(10, cy, 14, pH, 2, 2, 'F');
-        txt(p.num, 17, cy + pH / 2 + 2, { size: 10, color: WHITE, bold: true, align: 'center' });
-        txt(p.fit, 28, cy + (mDense ? 6.5 : 8), { size: 8.5, color: p.color, bold: true });
-        txt(p.type, 64, cy + (mDense ? 6.5 : 8), { size: 6.5, color: GRAY });
-        txt(p.subject, 28, cy + (mDense ? 13 : 15.5), { size: 9, color: '#1F2937', bold: true, maxWidth: 86 });
+        const pH = Math.max(mDense ? 20 : 24, (mDense ? 10 : 12) + dL.length * 4.5);
+        rect(10, cy, W - 20, pH, CARD_FILL, CARD_BD, 2);
+        // Pennant number block (consistent purple) with a downward chevron tip —
+        // matches the template's ribbon marker.
+        const blockH = pH - 5;
+        setFill(PURPLE); doc.roundedRect(10, cy, 15, blockH, 2, 2, 'F');
+        doc.triangle(10, cy + blockH - 1, 25, cy + blockH - 1, 17.5, cy + blockH + 4, 'F');
+        txt(p.num, 17.5, cy + blockH / 2 + 2, { size: 11, color: WHITE, bold: true, align: 'center' });
+        txt(p.fit, 30, cy + (mDense ? 7 : 9), { size: 9, color: PURPLE, bold: true });
+        txt(p.type, 66, cy + (mDense ? 7 : 9), { size: 6.5, color: GRAY });
+        txt(p.subject, 30, cy + (mDense ? 14 : 16.5), { size: 9, color: '#1F2937', bold: true, maxWidth: 88 });
         txt(dL.join('\n'), 124, cy + pH / 2 - (dL.length - 1) * 2 + 0.5, { size: 7.5, color: GRAY, maxWidth: W - 140 });
-        cy += pH + (mDense ? 4 : 6);
+        cy += pH + (mDense ? 5 : 7);
       });
       if (cy + 16 < BOTTOM) {
         cy = instructionBox(cy, 'PLEASE NOTE', 'Subject pathways are indicative recommendations, not final. Explore options aligned with your aptitude, interests, academics and goals.', { bodySize: 7.5, lineH: 4.2, gapAfter: 4 });
@@ -1851,7 +1783,7 @@ async function downloadPDF(override) {
     // than a long single-column list, and reads as designed guidance.
     const tipsGrid = (items, y) => {
       const colW = (W - 20 - 5) / 2, gap = 5, rowGap = 3.5;
-      doc.setFont(FONT, 'normal'); doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
       const lines = items.map(t => doc.splitTextToSize(t, colW - 15));
       let yy = y;
       for (let i = 0; i < items.length; i += 2) {
@@ -1905,7 +1837,7 @@ async function downloadPDF(override) {
     // its place.
     const cr = 'Dear Students, Please note that final academic and career decisions should be made by considering aptitude, interests, and academic performance together. This report is intended to serve as a guidance tool and should be used alongside discussions with parents, teachers, and counselors to support well-informed decision making.';
     const disc = 'This NuMind MAPS Report presents indicative insights derived from standardized assessments to support self-awareness, exploration, and informed decision-making. Recommendations are illustrative, not prescriptive, and should be interpreted alongside academic performance, evolving interests, and guidance from parents, teachers, or qualified counselors. Final academic and career decisions should not be made solely on the basis of this report.';
-    doc.setFont(FONT, 'normal');
+    doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);   const crL   = doc.splitTextToSize(cr, W - 28);
     doc.setFontSize(7.5); const discL = doc.splitTextToSize(disc, W - 28);
     const crBoxH   = 11 + crL.length * 4.6;
@@ -1935,7 +1867,7 @@ async function downloadPDF(override) {
       if (_nsPers)     nextSteps.push(['One growth habit', 'Pick one small, repeatable action for ' + _nsPers.name + ' and do it for four weeks before adding another.']);
       nextSteps.push(['Talk it through', 'Share this report with a parent, teacher or counsellor and choose ONE thing to start this month.']);
       cy = subHeading('Your Next Steps', cy);
-      doc.setFont(FONT, 'normal'); doc.setFontSize(7.5);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
       nextSteps.forEach((st, i) => {
         const ls = doc.splitTextToSize(st[1], W - 74);
         const rh = Math.max(11, 4 + ls.length * 4.2);
