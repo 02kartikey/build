@@ -4,9 +4,6 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-// getStanine + stanineLabel now live in the canonical norms module so the
-// browser engine and the Node backfill (db.js) score from one source.
-import { getStanine, stanineLabel } from './daab-norms.mjs';
 
 const DAAB_SUBS = [
   { key:'va',  label:'Verbal Ability',          short:'Verbal',     abbr:'VA',  emoji:'📝', time: 4*60, total: 20 },
@@ -147,10 +144,56 @@ const DAAB_HMA_QS = [
   { q:'Natural gas is mainly made up of:', opts:['Ethane','Methane','Nitrogen','Hydrogen'] },
 ];
 
-/* ── Stanine norm tables ── */
-/* getStanine + stanineLabel are imported from ./daab-norms.mjs (single source
-   of truth). They remain re-exported below so existing consumers that import
-   them from engine/daab.js keep working unchanged. */
+/* ── Stanine norm tables ──
+   Self-contained here so the browser engine depends on NO separate file (a
+   missing side-file is what 404'd and broke the whole module graph). These
+   tables mirror db.js's backfill copy EXACTLY — keep the two in sync. Only
+   VA/PA/NA/AR use gender-specific norms; LSA/HMA/MA/SA use a percentage band. */
+function getStanine(key, raw, gender) {
+  if (key === 'lsa' || key === 'hma' || key === 'ma' || key === 'sa') {
+    const pct = (raw / 20) * 100;
+    if (pct <= 10) return 1;
+    if (pct <= 20) return 2;
+    if (pct <= 30) return 3;
+    if (pct <= 40) return 4;
+    if (pct <= 60) return 5;
+    if (pct <= 70) return 6;
+    if (pct <= 80) return 7;
+    if (pct <= 90) return 8;
+    return 9;
+  }
+  const norms = {
+    va: { F: [[0,1],[2,2],[3,3],[4,5],[6,6],[7,8],[9,9],[10,11],[12,20]], M: [[0,0],[1,2],[3,3],[4,4],[5,6],[7,7],[8,8],[9,10],[11,20]] },
+    pa: { F: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,39],[40,44],[45,48],[49,50]], M: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,40],[41,44],[45,48],[49,50]] },
+    na: { F: [[0,4],[5,6],[7,8],[9,10],[11,12],[13,13],[14,15],[16,17],[18,20]], M: [[0,5],[6,7],[8,9],[10,10],[11,12],[13,14],[15,16],[17,18],[19,20]] },
+    ar: { F: [[0,3],[4,5],[6,7],[8,9],[10,11],[12,13],[14,15],[16,17],[18,20]], M: [[0,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,20]] },
+  };
+  const g = String(gender || '').trim().charAt(0).toUpperCase() === 'F' ? 'F' : 'M';
+  const table = norms[key] && norms[key][g];
+  if (!table) return 5;
+  for (let i = 0; i < table.length; i++) {
+    if (raw >= table[i][0] && raw <= table[i][1]) return i + 1;
+  }
+  // Defensive fallback for any residual gap: clamp to the highest band whose
+  // lower bound <= raw. Never award stanine 9 for an uncovered low score.
+  if (raw < table[0][0]) return 1;
+  for (let i = table.length - 1; i >= 0; i--) {
+    if (raw >= table[i][0]) return i + 1;
+  }
+  return 1;
+}
+
+function stanineLabel(s) {
+  if (s <= 1) return 'Very Low';
+  if (s <= 2) return 'Needs Attention';
+  if (s <= 3) return 'Below Average';
+  if (s <= 4) return 'Slightly Below Avg';
+  if (s === 5) return 'Average';
+  if (s <= 6) return 'Slightly Above Avg';
+  if (s <= 7) return 'Above Average';
+  if (s <= 8) return 'High';
+  return 'Very High';
+}
 
 
 function scoreDAAB() {
