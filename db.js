@@ -984,27 +984,57 @@ function _deriveAptitude(assessments) {
   });
 }
 
-/* DAAB stanine backfill. The norm tables + getStanine/stanineLabel are NOT
-   duplicated here anymore — they are dynamic-imported from the one canonical
-   source (engine/daab-norms.mjs) that the browser engine also uses, so the two
-   runtimes can never diverge (a divergent VA table is what caused the stale
-   bars in the first place). Only the gender-split subtests (VA/PA/NA/AR) carry
-   gender-specific norms and are recomputed. */
+/* DAAB stanine backfill. The norm tables below mirror js/engine/daab.js
+   EXACTLY — keep the two in sync. They are intentionally self-contained so
+   neither the browser engine nor this backfill depends on a separately-deployed
+   norms file (a missing side-file is what 404'd and broke the app). Only the
+   gender-split subtests (VA/PA/NA/AR) carry gender-specific norms. */
 const _DAAB_GENDER_SUBS = ['va', 'pa', 'na', 'ar'];
 
-// Cache the ESM norms module across calls. Path is relative to db.js at the
-// deployed repo root (engine deploys to js/engine/). .mjs is always ESM in
-// Node regardless of the CommonJS root package.json.
-let _daabNorms = null;
-async function _loadDaabNorms() {
-  if (!_daabNorms) _daabNorms = await import('./js/engine/daab-norms.mjs');
-  return _daabNorms;
+function _daabGetStanine(key, raw, gender) {
+  if (key === 'lsa' || key === 'hma' || key === 'ma' || key === 'sa') {
+    const pct = (raw / 20) * 100;
+    if (pct <= 10) return 1;
+    if (pct <= 20) return 2;
+    if (pct <= 30) return 3;
+    if (pct <= 40) return 4;
+    if (pct <= 60) return 5;
+    if (pct <= 70) return 6;
+    if (pct <= 80) return 7;
+    if (pct <= 90) return 8;
+    return 9;
+  }
+  const norms = {
+    va: { F: [[0,1],[2,2],[3,3],[4,5],[6,6],[7,8],[9,9],[10,11],[12,20]], M: [[0,0],[1,2],[3,3],[4,4],[5,6],[7,7],[8,8],[9,10],[11,20]] },
+    pa: { F: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,39],[40,44],[45,48],[49,50]], M: [[0,18],[19,22],[23,27],[28,31],[32,35],[36,40],[41,44],[45,48],[49,50]] },
+    na: { F: [[0,4],[5,6],[7,8],[9,10],[11,12],[13,13],[14,15],[16,17],[18,20]], M: [[0,5],[6,7],[8,9],[10,10],[11,12],[13,14],[15,16],[17,18],[19,20]] },
+    ar: { F: [[0,3],[4,5],[6,7],[8,9],[10,11],[12,13],[14,15],[16,17],[18,20]], M: [[0,2],[3,4],[5,6],[7,8],[9,10],[11,12],[13,14],[15,16],[17,20]] },
+  };
+  const g = String(gender || '').trim().charAt(0).toUpperCase() === 'F' ? 'F' : 'M';
+  const table = norms[key] && norms[key][g];
+  if (!table) return 5;
+  for (let i = 0; i < table.length; i++) if (raw >= table[i][0] && raw <= table[i][1]) return i + 1;
+  if (raw < table[0][0]) return 1;
+  for (let i = table.length - 1; i >= 0; i--) if (raw >= table[i][0]) return i + 1;
+  return 1;
+}
+
+function _daabStanineLabel(s) {
+  if (s <= 1) return 'Very Low';
+  if (s <= 2) return 'Needs Attention';
+  if (s <= 3) return 'Below Average';
+  if (s <= 4) return 'Slightly Below Avg';
+  if (s === 5) return 'Average';
+  if (s <= 6) return 'Slightly Above Avg';
+  if (s <= 7) return 'Above Average';
+  if (s <= 8) return 'High';
+  return 'Very High';
 }
 
 
 async function rescoreDaabStanines({ commit = false, email = null, gender = null } = {}) {
   await _initDb();
-  const { getStanine, stanineLabel } = await _loadDaabNorms();
+  const getStanine = _daabGetStanine, stanineLabel = _daabStanineLabel;
 
   const cols = _DAAB_GENDER_SUBS.map(k => `a.daab_${k}_scores_json`).join(', ');
   const params = [];

@@ -82,9 +82,9 @@ document.addEventListener('click', function(e) {
 // These shims forward to the module version once it exists, retrying briefly,
 // and surface a clear message instead of a dead button if it never arrives.
 // Build stamp — lets anyone verify in DevTools which index.html is live.
-// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-15-R3' = this build;
+// Run  window.NM_BUILD  in the console: 'NM-BUILD-2026-08-17-R1' = this build;
 // undefined = the server is still serving a stale cached copy.
-window.NM_BUILD = 'NM-BUILD-2026-08-15-R3';
+window.NM_BUILD = 'NM-BUILD-2026-08-17-R1';
 console.log('[NuMind] index.html build:', window.NM_BUILD);
 
 function _accessFwd(name, tries) {
@@ -108,6 +108,26 @@ function loadAccessClasses() { _accessFwd('loadAccessClasses', 20); }
 // handler is only reachable after module-driven navigation, so needs no shim.
 function doRegister()   { _accessFwd('doRegister', 20); }
 function navLogoClick() { _accessFwd('navLogoClick', 20); }
+
+// goPage — the primary router entry, called directly from inline onclick on the
+// "Begin your assessment" buttons. Unlike the shims above it takes an argument,
+// so it can't use _accessFwd. Same idea though: forward to the module router
+// (registered as _m_goPage by main.js) with a brief retry, so a fast click, a
+// stale/slow main.js, or a module-graph hiccup never throws "goPage is not
+// defined" — it navigates once the module is ready, or surfaces a clear
+// refresh message. main.js overwrites window.goPage with the real router once
+// loaded, so after that this shim is bypassed entirely.
+function goPage(page) {
+  var real = window._m_goPage;
+  if (typeof real === 'function') return real(page);
+  var tries = 24;
+  (function attempt() {
+    var r = window._m_goPage;
+    if (typeof r === 'function') return r(page);
+    if (--tries > 0) return setTimeout(attempt, 150);
+    alert('Still loading — please refresh the page (Ctrl+Shift+R).');
+  })();
+}
 
 // goToCounsellor — navigate to the AI counsellor page.
 // Called from results page and landing page "Open AI Counsellor" buttons.
@@ -1153,7 +1173,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="chart-grid-2">
             <div class="chart-box">
               <div class="chart-box-title">SEAA Domain Scores</div>
-              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 Well-Established &nbsp;🟡 Developing &nbsp;🔴 Needs Support</div>
+              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Well-Established &nbsp;🟡 8-14 Developing &nbsp;🔴 14-20 Needs Support</div>
               <div class="chart-canvas-wrap" style="height:260px">
                 <canvas id="chart-sel-bar"></canvas>
               </div>
