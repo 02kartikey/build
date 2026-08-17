@@ -33,13 +33,17 @@ window.doRegister    = doRegister;
 // to (see _accessFwd there). The unprefixed globals are kept for any direct
 // callers. Registering both means the entry buttons work whether the module
 // loads before or after the first click.
-window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-15-R3';
+window.NM_MAIN_BUILD = 'NM-BUILD-2026-08-17-R1';
 console.log('[NuMind] main.js build:', window.NM_MAIN_BUILD);
 window._m_doAccessLogin   = doAccessLogin;
 window._m_loadAccessNames = loadAccessNames;
 window._m_loadAccessClasses = loadAccessClasses;
 window._m_doRegister      = doRegister;
 window._m_navLogoClick    = navLogoClick;
+// goPage takes an argument, so index.html has a dedicated inline shim that
+// forwards here. Registering _m_goPage lets that shim work even if the module
+// graph loads after the first click (or a later import throws).
+window._m_goPage          = goPage;
 window.doAccessLogin   = doAccessLogin;
 window.loadAccessNames = loadAccessNames;
 window.loadAccessClasses = loadAccessClasses;
