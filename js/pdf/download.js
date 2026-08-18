@@ -33,6 +33,23 @@ async function downloadPDF(override) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
 
+    // Brand typeface: register Poppins (subset) OVER the built-in 'helvetica'
+    // family, so every setFont('helvetica', …) in this file renders in Poppins
+    // to match the style guide — no call-site changes. Loaded lazily; if the
+    // font module is missing the report simply falls back to Helvetica instead
+    // of failing. 'bold' maps to SemiBold (600), the guide's default bold, and
+    // PoppinsBold (700) / PoppinsMed (500) are available for heavier/medium text.
+    let _fontsReady = false;
+    try {
+      const { POPPINS } = await import('./poppins-fonts.js');
+      doc.addFileToVFS('Poppins-Regular.ttf',  POPPINS.regular);  doc.addFont('Poppins-Regular.ttf',  'helvetica',   'normal');
+      doc.addFileToVFS('Poppins-SemiBold.ttf', POPPINS.semibold); doc.addFont('Poppins-SemiBold.ttf', 'helvetica',   'bold');
+      doc.addFileToVFS('Poppins-Medium.ttf',   POPPINS.medium);   doc.addFont('Poppins-Medium.ttf',   'PoppinsMed',  'normal');
+      doc.addFileToVFS('Poppins-Bold.ttf',     POPPINS.bold);     doc.addFont('Poppins-Bold.ttf',     'PoppinsBold', 'normal');
+      doc.setFont('helvetica', 'normal');
+      _fontsReady = true;
+    } catch (_) { /* Poppins unavailable — Helvetica fallback keeps the report working */ }
+
     // ── Logo from file. Drop your real logo at  /assets/numind-logo.png
     // (web root -> assets folder) and every render picks it up — no code
     // changes, no embedded base64. If the file is missing or slow (>1.5s),
@@ -92,15 +109,15 @@ async function downloadPDF(override) {
     };
 
     // ── Palette (matches template) ────────────────────────────────
-    const PURPLE       = '#5B2D8E';
-    const PURPLE_LIGHT = '#7B4BC4';
-    const PURPLE_DARK  = '#3D1F63';
+    const PURPLE       = '#5A24C1';
+    const PURPLE_LIGHT = '#7251BC';
+    const PURPLE_DARK  = '#43179C';
     const TEAL         = '#00B8D9';
     const YELLOW       = '#F5A623';
     const GREEN        = '#2ECC71';
     const PINK         = '#FF6B9D';
     const GRAY         = '#6B7280';
-    const LIGHT_GRAY   = '#F3F4F6';
+    const LIGHT_GRAY   = '#F7F5FF';
     const WHITE        = '#FFFFFF';
     // Unified semantic status palette for ALL score bars (personality,
     // aptitude, career) and SEAA gauges. Sampled directly from the design
@@ -136,6 +153,9 @@ async function downloadPDF(override) {
       return ys; // top-y of each block
     };
     const W = 210, H = 297;
+    // Guide page grid: content margin 44px (15.5mm), content width 507px (179mm).
+    const M = 15.5;              // left/right content margin (guide: 15.5mm)
+    const CW = W - 2 * M;        // content width = 179mm (guide: 507px)
     // Single source of truth for the content bottom limit (footer sits below
     // this). Previously a mix of H-14 and H-16 across pages.
     const BOTTOM = H - 16;
@@ -161,7 +181,9 @@ async function downloadPDF(override) {
       const bold = !!opts.bold;
       const align = opts.align || 'left';
       doc.setFontSize(size);
-      doc.setFont('helvetica', bold ? 'bold' : 'normal');
+      if (opts.heavy && _fontsReady)       doc.setFont('PoppinsBold', 'normal'); // Bold 700
+      else if (opts.medium && _fontsReady) doc.setFont('PoppinsMed', 'normal');  // Medium 500
+      else doc.setFont('helvetica', bold ? 'bold' : 'normal');                   // Regular 400 / SemiBold 600
       setTxtColor(color);
       const drawOpts = { align: align };
       if (opts.maxWidth) drawOpts.maxWidth = opts.maxWidth;
@@ -204,7 +226,7 @@ async function downloadPDF(override) {
     const drawBox = (cy, opts) => {
       opts = opts || {};
       const bx         = opts.x    !== undefined ? opts.x    : 10;
-      const bw         = opts.w    !== undefined ? opts.w    : W - 20;
+      const bw         = opts.w    !== undefined ? opts.w    : CW;
       const fill       = opts.fill  || null;
       const draw       = opts.draw  || null;
       const radius     = opts.radius !== undefined ? opts.radius : 2;
@@ -356,6 +378,38 @@ async function downloadPDF(override) {
     };
     const aiHas = (key) => !!(ai && typeof ai[key] === 'string' && ai[key].trim().length);
 
+    // Personalised AI narrative block. Renders the given AI field as a lilac
+    // insight box in the empty space at the bottom of a section page, sized to
+    // fit (prose clipped with an ellipsis if long). Renders nothing when the AI
+    // field is absent (so the no-AI fallback path simply shows no box). This is
+    // how the report surfaces the AI narrative that has no fixed template slot.
+    const aiInsight = (cy, title, key, opts) => {
+      opts = opts || {};
+      if (!aiHas(key)) return cy;
+      const prose = aiText(key, '');
+      if (!prose) return cy;
+      cy += (opts.gapBefore != null ? opts.gapBefore : SP.xs);
+      const bottom = (opts.bottom || (BOTTOM - 4));
+      if (cy + 16 > bottom) return cy; // no meaningful room
+      const size = 8, lineH = 4.6, headH = 8, pad = 6, maxW = CW - 12;
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(size);
+      const lines = doc.splitTextToSize(prose, maxW);
+      const maxLines = Math.max(1, Math.floor((bottom - cy - headH - pad) / lineH));
+      const shown = lines.slice(0, maxLines);
+      if (maxLines < lines.length) shown[shown.length - 1] = String(shown[shown.length - 1]).replace(/[\s.]+$/, '') + '…';
+      const boxH = headH + shown.length * lineH + pad;
+      rect(M, cy, CW, boxH, '#F5F3FF', '#E9D5FF', 2);
+      rect(M, cy + 1.3, 2.5, boxH - 2.6, PURPLE, null, 0);
+      // small diamond marker (font-independent) before the title
+      setFill(PURPLE);
+      doc.triangle(M + 5.5, cy + 5.2, M + 8, cy + 5.2, M + 6.75, cy + 3.4, 'F');
+      doc.triangle(M + 5.5, cy + 5.2, M + 8, cy + 5.2, M + 6.75, cy + 7.0, 'F');
+      txt(title, M + 11, cy + 7, { size: 8.5, color: PURPLE, bold: true });
+      let ty = cy + 13;
+      shown.forEach(ln => { txt(ln, M + 6, ty, { size: size, color: '#374151' }); ty += lineH; });
+      return cy + boxH;
+    };
+
     /**
      * Draw a multi-paragraph prose block, breaking pages as needed.
      * Returns the new cy after drawing. Caller passes a redraw callback
@@ -373,14 +427,14 @@ async function downloadPDF(override) {
       opts = opts || {};
       const bodySize = opts.bodySize || 8, lineH = opts.lineH || 4.6;
       doc.setFont('helvetica', 'normal'); doc.setFontSize(bodySize);
-      const ls = doc.splitTextToSize(body, W - 40);
+      const ls = doc.splitTextToSize(body, CW - 20);
       const hasLabel = !!label;
       const h = 5 + (hasLabel ? 6 : 0) + ls.length * lineH + 4;
-      rect(10, cy, W - 20, h, '#F5F3FF', '#E9D5FF', 1.5);
-      rect(10, cy, 2.2, h, PURPLE, null, 0);
+      rect(M, cy, CW, h, '#F5F3FF', '#E9D5FF', 1.5);
+      rect(M, cy + 1.3, 2.2, h - 2.6, PURPLE, null, 0);
       let ty = cy + 6;
-      if (hasLabel) { txt(label, 16, ty, { size: 7.5, color: PURPLE, bold: true }); ty += 6; }
-      txt(ls.join('\n'), 16, ty, { size: bodySize, color: '#4C1D95' });
+      if (hasLabel) { txt(label, M + 6, ty, { size: 7.5, color: PURPLE, bold: true }); ty += 6; }
+      txt(ls.join('\n'), M + 6, ty, { size: bodySize, color: '#4C1D95' });
       return cy + h + (opts.gapAfter !== undefined ? opts.gapAfter : 5);
     };
     const indicativeCallout = (cy) => {
@@ -393,7 +447,7 @@ async function downloadPDF(override) {
       const color     = opts.color     || '#374151';
       const lineH     = opts.lineH     || 5;
       const paraGap   = opts.paraGap   || 4;
-      const maxW      = opts.maxW      || (W - 28);
+      const maxW      = opts.maxW      || (CW - 8);
       const x         = opts.x         || 14;
       const bottom    = opts.bottom    || (BOTTOM);
       const pageStart = opts.pageStart || 36;
@@ -619,8 +673,8 @@ async function downloadPDF(override) {
     // accent bar + 10pt bold title, so section titles read as headings rather
     // than body text. Returns the y where content should continue.
     const subHeading = (text, y) => {
-      rect(10, y - 4.6, 2.2, 6, PURPLE, null, 0);
-      txt(text, 15.5, y, { size: 10, color: '#111827', bold: true });
+      rect(M, y - 4.6, 2.2, 6, PURPLE, null, 0);
+      txt(text, M + 5.5, y, { size: 10, color: '#111827', bold: true });
       return y + 8;
     };
 
@@ -635,35 +689,35 @@ async function downloadPDF(override) {
       rect(0, 0, W, 24, tint, null, 0);
       rect(0, 0, 3, 24, accent, null, 0);
       rect(0, 24, W, 0.4, '#E6E1F1', null, 0);
-      txt(title, 14, 11.5, { size: 14.5, color: '#1F2937', bold: true, maxWidth: W - 58 });
+      txt(title, 14, 11.5, { size: 14.5, color: '#1F2937', bold: true, maxWidth: CW - 38 });
       // Dark wordmark on the light header.
-      drawLogo(W - 8, 10, 10, false);
+      drawLogo(CW + 12, 10, 10, false);
       if (subtitle) {
         // Wrap to at most two lines below the logo — no more mid-sentence
         // ellipsis clipping (the header now has the width for it).
         doc.setFont('helvetica', 'normal'); doc.setFontSize(7);
-        const sl = doc.splitTextToSize(subtitle, W - 28).slice(0, 2);
+        const sl = doc.splitTextToSize(subtitle, CW - 8).slice(0, 2);
         let sy = 16.5;
-        sl.forEach((ln) => { txt(ln, 14, sy, { size: 7, color: '#6B7280' }); sy += 3.5; });
+        sl.forEach((ln) => { txt(ln, M + 4, sy, { size: 7, color: '#6B7280' }); sy += 3.5; });
       }
     };
 
     const studentBar = (y) => {
       y = y || 22;
-      rect(10, y, W - 20, 8, LIGHT_GRAY, null, 1);
+      rect(M, y, CW, 8, LIGHT_GRAY, null, 1);
       doc.setFontSize(8); doc.setFont('helvetica', 'bold'); setTxtColor(PURPLE);
-      doc.text(studentName, 14, y + 5.5);
+      doc.text(studentName, M + 4, y + 5.5);
       const nameW = doc.getTextWidth(studentName);
       const meta = '  |  ' + (grade || '—') + ' · ' + (schoolName || '—') + ' · ' + dateStr;
-      txt(meta, 14 + nameW, y + 5.5, { size: 8, color: GRAY });
+      txt(meta, M + 4 + nameW, y + 5.5, { size: 8, color: GRAY });
     };
 
+    const BAR_X = M + 54, BAR_W = (W - M) - (M + 54) - 8;   // shared with axis
     const stanineBar = (label, value, y, colorHex) => {
-      txt(label, 67, y, { size: 7, color: '#1F2937', align: 'right' });
-      const barX = 70, barW = W - barX - 20;
-      rect(barX, y - 3.5, barW, 5, '#E5E7EB', null, 1);
-      rect(barX, y - 3.5, (value / 9) * barW, 5, colorHex, null, 1);
-      txt(String(value), barX + barW + 2, y, { size: 7, color: GRAY, bold: true });
+      txt(label, BAR_X - 3, y, { size: 7, color: '#1F2937', align: 'right' });
+      rect(BAR_X, y - 3.5, BAR_W, 5, '#E5E7EB', null, 1);
+      rect(BAR_X, y - 3.5, (value / 9) * BAR_W, 5, colorHex, null, 1);
+      txt(String(value), BAR_X + BAR_W + 2, y, { size: 7, color: GRAY, bold: true });
     };
 
     /* ═══════════════════════════════════════════════
@@ -716,10 +770,24 @@ async function downloadPDF(override) {
     /* ═══════════════════════════════════════════════
        PAGE 1 — COVER
     ═══════════════════════════════════════════════ */
-    rect(0, 0, W, H, PURPLE_DARK);
-    rect(0, 0, W, 80, PURPLE);
+    // Cover background — a single smooth vertical gradient (style guide:
+    // #481AA4 → #7139EB), drawn as fine strips so there is NO hard two-tone
+    // split. Brighter at the top, deepening toward the footer.
+    (() => {
+      const top = hex2rgb('#7139EB'), bot = hex2rgb('#481AA4');
+      const n = 150, sh = H / n;
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        doc.setFillColor(
+          Math.round(top[0] + (bot[0] - top[0]) * t),
+          Math.round(top[1] + (bot[1] - top[1]) * t),
+          Math.round(top[2] + (bot[2] - top[2]) * t)
+        );
+        doc.rect(0, i * sh, W, sh + 0.6, 'F');
+      }
+    })();
     // NuMind wordmark — top-right of cover
-    drawLogo(W - 8, 12, 15, true);
+    drawLogo(CW + 12, 12, 15, true);
     txt('NURTURING MINDS, ACHIEVING OUTCOMES', 14, 16, { size: 5, color: '#D8B4FE' });
     txt('Comprehensive Multidimensional Assessment Report', 14, 50, { size: 9, color: '#D8B4FE' });
     txt('NuMind MAPS', 14, 68, { size: 28, color: WHITE, bold: true });
@@ -727,19 +795,19 @@ async function downloadPDF(override) {
     txt('Personalized Success', 14, 88, { size: 14, color: '#C4B5FD' });
     line(14, 94, 80, 94, WHITE, 0.8);
 
-    rect(14, 104, W - 28, 56, WHITE, null, 3);
+    rect(14, 104, CW - 8, 56, WHITE, null, 3);
     txt('Prepared For', 22, 114, { size: 8, color: GRAY });
-    txt(studentName, 22, 126, { size: 18, color: '#1F2937', bold: true, maxWidth: W - 44 });
-    line(22, 130, W - 22, 130, '#E5E7EB', 0.3);
+    txt(studentName, 22, 126, { size: 18, color: '#1F2937', bold: true, maxWidth: CW - 24 });
+    line(22, 130, CW - 2, 130, '#E5E7EB', 0.3);
     txt('Grade:', 22, 140, { size: 9, color: '#1F2937', bold: true });
     txt(grade || '—', 38, 140, { size: 9, color: '#1F2937' });
     txt('School:', 22, 148, { size: 9, color: '#1F2937', bold: true });
-    txt(schoolName || '—', 38, 148, { size: 9, color: '#1F2937', maxWidth: W - 60 });
+    txt(schoolName || '—', 38, 148, { size: 9, color: '#1F2937', maxWidth: CW - 40 });
     txt('Date:', 22, 156, { size: 9, color: '#1F2937', bold: true });
     txt(dateStr, 35, 156, { size: 9, color: '#1F2937' });
 
     // Tagline panel — fills the previously empty mid-cover area.
-    rect(14, 168, W - 28, 22, PURPLE_LIGHT, null, 3);
+    rect(14, 168, CW - 8, 22, PURPLE_LIGHT, null, 3);
     txt('Your Personalised Career Development Report', W / 2, 178, { size: 11, color: WHITE, bold: true, align: 'center' });
     txt('Built from 4 evidence-based assessments and AI-powered insights', W / 2, 185, { size: 8, color: '#E9D5FF', align: 'center' });
 
@@ -747,7 +815,7 @@ async function downloadPDF(override) {
     const coverPills = ['NMAP', 'NAAB', 'NCPI', 'NSEAA'];
     for (let i = 0; i < coverPills.length; i++) {
       const p = coverPills[i];
-      const step = (W - 28) / 4, pw = 42;
+      const step = (CW - 8) / 4, pw = 42;
       const px = 14 + i * step;
       setFill(WHITE); doc.roundedRect(px, 205, pw, 24, 3, 3, 'F');
       await drawIcon(p, px + 5, 210, 14, { fill: '#F1ECFB', border: '#D9CBF2' });
@@ -761,9 +829,9 @@ async function downloadPDF(override) {
     doc.addPage();
     rect(0, 0, W, 18, PURPLE);
     txt('Welcome', 14, 9, { size: 8, color: '#D8B4FE' });
-    txt(studentName, 14, 15, { size: 14, color: WHITE, bold: true, maxWidth: W - 52 });
+    txt(studentName, 14, 15, { size: 14, color: WHITE, bold: true, maxWidth: CW - 32 });
     // NuMind wordmark — welcome page header top-right
-    drawLogo(W - 8, 8, 11, true);
+    drawLogo(CW + 12, 8, 11, true);
 
     let cy = 28;
     // Use AI holistic_summary when present — this is the personalised
@@ -781,7 +849,7 @@ async function downloadPDF(override) {
     // Previously the intro pushed "Stronger Together" onto a lone page.
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     const _wParas = String(welcomeProse).split(/\n\s*\n/).filter(Boolean);
-    const _wLines = _wParas.reduce((n, p) => n + doc.splitTextToSize(p, W - 28).length, 0);
+    const _wLines = _wParas.reduce((n, p) => n + doc.splitTextToSize(p, CW - 8).length, 0);
     const _wNeed  = _wLines * 4.8 + (_wParas.length - 1) * 4;
     // Order steps + "Stronger Together" now live on their own page (page 3),
     // so page 2 has room for a fuller intro. Render the AI holistic summary
@@ -791,12 +859,12 @@ async function downloadPDF(override) {
     void _wNeed;
     cy = drawProse(welcomeProse, cy, {
       size: 8, color: '#374151', lineH: 4.8, paraGap: 4,
-      maxW: W - 28, x: 14, bottom: cy + _wBudget + 6, clip: true,
+      maxW: CW - 8, x: 14, bottom: cy + _wBudget + 6, clip: true,
     });
     cy += 2;
 
-    rect(10, cy, W - 20, 8, PURPLE, null, 2);
-    // Diamond ornaments drawn as vectors — the template's ✦ glyph does not
+    rect(M, cy, CW, 8, PURPLE, null, 2);
+    // Diamond ornaments drawn as vectors — the template's glyph does not
     // exist in jsPDF's helvetica, which is how literal asterisks ended up in
     // the shipped report.
     txt('The Four Pillars of NuMind MAP', W / 2, cy + 5.5, { size: 9, color: WHITE, bold: true, align: 'center' });
@@ -826,8 +894,8 @@ async function downloadPDF(override) {
     for (let i = 0; i < pillarData.length; i++) {
       const p = pillarData[i];
       const col = i % 2, row = Math.floor(i / 2);
-      const px = 10 + col * 97, py = cy + row * 44;
-      rect(px, py, 93, 40, '#F9FAFB', p.border, 2);
+      const px = M + col * 91.5, py = cy + row * 44;
+      rect(px, py, 87.5, 40, '#F9FAFB', p.border, 2);
       doc.setLineWidth(0.8); setDraw(p.border); doc.line(px, py, px, py + 40);
       await drawIcon(p.code, px + 5, py + 5, 14, { fill: '#FFFFFF', border: p.border });
       txt(p.code,  px + 23, py + 9,  { size: 7.5, color: p.border, bold: true });
@@ -860,33 +928,33 @@ async function downloadPDF(override) {
       doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5);
       const lblW = doc.getTextWidth(row[1]);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(7.8);
-      const dLines = doc.splitTextToSize(row[2], W - 32 - lblW);
+      const dLines = doc.splitTextToSize(row[2], CW - 12 - lblW);
       return { lblW, dLines, h: Math.max(12, 6 + dLines.length * 4.2) };
     });
     // Stronger Together box (measured).
     const stBody = 'These four pillars come together to provide a holistic, evidence-based view of your potential — empowering you to make informed decisions today for a more confident tomorrow.';
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
-    const stLines = doc.splitTextToSize(stBody, W - 66);
+    const stLines = doc.splitTextToSize(stBody, CW - 46);
     const stH = Math.max(30, 14 + stLines.length * 4.6);
     // Group the steps tightly at the top (template layout); the whitespace
     // then falls to the bottom of the page rather than being spread as large
     // gaps between rows.
     steps.forEach((row, i) => {
       const m = stepMeas[i], mid = cy + m.h / 2;
-      rect(10, cy, W - 20, m.h, LIGHT_GRAY, null, 2);
-      setFill(PURPLE); doc.circle(18, mid, 3.4, 'F');
-      txt(row[0], 18, mid + 1.4, { size: 8, color: WHITE, bold: true, align: 'center' });
-      txt(row[1], 26, mid - (m.dLines.length - 1) * 2 + 1, { size: 8.5, color: PURPLE, bold: true });
-      txt(m.dLines.join('\n'), 26 + m.lblW + 3, mid - (m.dLines.length - 1) * 2 + 1, { size: 7.8, color: GRAY });
+      rect(M, cy, CW, m.h, LIGHT_GRAY, null, 2);
+      setFill(PURPLE); doc.circle(23.5, mid, 3.4, 'F');
+      txt(row[0], M + 8, mid + 1.4, { size: 8, color: WHITE, heavy: true, align: 'center' });
+      txt(row[1], M + 16, mid - (m.dLines.length - 1) * 2 + 1, { size: 8.5, color: PURPLE, bold: true });
+      txt(m.dLines.join('\n'), M + 16 + m.lblW + 3, mid - (m.dLines.length - 1) * 2 + 1, { size: 7.8, color: GRAY });
       cy += m.h + SP.sm;
     });
     cy += SP.md;
     const stY = cy;
-    rect(10, stY, W - 20, stH, '#F5F3FF', PURPLE, 2);
-    rect(10, stY, 2.5, stH, PURPLE, null, 0);
-    await drawIcon('Stronger Together', 15, stY + (stH - 18) / 2, 18, { fill: '#FFFFFF', border: PURPLE });
-    txt('Stronger Together', 38, stY + 9, { size: 9.5, color: PURPLE, bold: true });
-    txt(stLines.join('\n'), 38, stY + 15, { size: 8, color: '#374151' });
+    rect(M, stY, CW, stH, '#F5F3FF', PURPLE, 2);
+    rect(M, stY + 1.3, 2.5, stH - 2.6, PURPLE, null, 0);
+    await drawIcon('Stronger Together', M + 5, stY + (stH - 18) / 2, 18, { fill: '#FFFFFF', border: PURPLE });
+    txt('Stronger Together', M + 28, stY + 9, { size: 9.5, color: PURPLE, bold: true });
+    txt(stLines.join('\n'), M + 28, stY + 15, { size: 8, color: '#374151' });
     cy = stY + stH;
 
     footer(2);
@@ -899,34 +967,34 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
 
-    rect(10, cy, W - 20, 7, LIGHT_GRAY, null, 1);
-    setFill(C_STRENGTH);   doc.circle(18, cy + 3.5, 2.5, 'F'); txt('Strength',        22, cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_DEVELOPING); doc.circle(52, cy + 3.5, 2.5, 'F'); txt('Developing',      56, cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_FOCUS);      doc.circle(92, cy + 3.5, 2.5, 'F'); txt('Needs Attention', 96, cy + 5, { size: 7.5, color: '#1F2937' });
+    rect(M, cy, CW, 7, LIGHT_GRAY, null, 1);
+    setFill(C_STRENGTH);   doc.circle(23.5, cy + 3.5, 2.5, 'F'); txt('Strength', 27.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_DEVELOPING); doc.circle(57.5, cy + 3.5, 2.5, 'F'); txt('Developing', 61.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_FOCUS);      doc.circle(97.5, cy + 3.5, 2.5, 'F'); txt('Needs Attention', 101.5, cy + 5, { size: 7.5, color: '#1F2937' });
     cy += 11;
 
     const persChartH = 8 + personality9.length * 7.5 + 4;
-    rect(10, cy, W - 20, persChartH, '#FAFAFA', '#E5E7EB', 2);
-    txt('Personality Profile — ' + personality9.length + ' Dimensions', 14, cy + 6, { size: 8, color: GRAY, bold: true });
+    rect(M, cy, CW, persChartH, '#FAFAFA', '#E5E7EB', 2);
+    txt('Personality Profile — ' + personality9.length + ' Dimensions', M + 4, cy + 6, { size: 8, color: GRAY, bold: true });
     personality9.forEach((d, i) => stanineBar(d.name, d.stanine, cy + 15 + i * 7.5, stanineColor(d.stanine)));
     for (let i = 1; i <= 9; i++) {
-      const bx = 70 + ((i - 1) / 8) * (W - 90);
+      const bx = BAR_X + ((i - 1) / 8) * BAR_W;
       txt(String(i), bx, cy + persChartH + 2, { size: 6, color: GRAY, align: 'center' });
     }
     cy += persChartH + 6;
 
-    txt('Bands:   Focus Area   ·   Developing Area   ·   Strength Area', 14, cy + 3, { size: 7, color: GRAY });
-    cy += 13;
+    txt('Bands:   Focus Area   ·   Developing Area   ·   Strength Area', M + 4, cy + 3, { size: 7, color: GRAY });
+    cy += 9;
 
     cy = subHeading('Top 3 Dominant Traits', cy);
     [0, 1, 2].forEach((idx) => {
       const trait = topPersonality[idx]
         || personalityAll[idx]
         || { name: 'Profile developing', stanine: 5, label: 'Developing Area' };
-      const px = 10 + idx * 63.3, cardW = 59, cardH = 20;
+      const px = M + idx * 61, cardW = 57, cardH = 20;
       rect(px, cy, cardW, cardH, CARD_FILL, CARD_BD, 2);
-      rect(px, cy, 2.2, cardH, PURPLE, null, 0);
-      txt('0' + (idx + 1), px + 5, cy + 14, { size: 17, color: PURPLE, bold: true });
+      rect(px, cy + 1.3, 2.2, cardH - 2.6, PURPLE, null, 0);
+      txt('0' + (idx + 1), px + 5, cy + 14, { size: 17, color: PURPLE, heavy: true });
       txt(trait.name, px + 21, cy + 8.5, { size: 8, color: '#1F2937', bold: true, maxWidth: cardW - 25 });
       const bandColor = trait.stanine >= 7 ? C_STRENGTH : trait.stanine >= 4 ? C_DEVELOPING : C_FOCUS;
       txt(trait.label, px + 21, cy + 14.5, { size: 7, color: bandColor, bold: true });
@@ -934,6 +1002,7 @@ async function downloadPDF(override) {
     cy += 26;
 
     cy = indicativeCallout(cy);
+    cy = aiInsight(cy, 'What your personality profile means for you', 'personality_profile');
 
     // Trait reference descriptions move to their own page so the analysis
     // (chart, top traits, insight) sits together on the previous page.
@@ -970,20 +1039,20 @@ async function downloadPDF(override) {
       'Emotional Intelligence':     'Practice active listening, empathy exercises, and reflective journaling to strengthen emotional awareness.',
     };
     doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
-    const suggLinesP = persWeakP.map(d => doc.splitTextToSize('• ' + (suggMapP[d.name] || ('Strengthen ' + d.name + ' through targeted practice and reflection.')), W - 28));
+    const suggLinesP = persWeakP.map(d => doc.splitTextToSize('• ' + (suggMapP[d.name] || ('Strengthen ' + d.name + ' through targeted practice and reflection.')), CW - 8));
     const suggBoxHP = persWeakP.length ? 12 + suggLinesP.reduce((h, ls) => h + ls.length * 4.6, 0) : 0;
     const suggReserveP = suggBoxHP ? suggBoxHP + 8 : 0;
 
     // Card = icon slot (top-left) + number/name + description. Sized to its own
     // text, with larger, more legible type than before.
     const descFont = 7, descLH = 4.3;
-    const cardTextW = (isLast) => (isLast ? W - 20 : 93) - 10;
+    const cardTextW = (isLast) => (isLast ? CW : 87.5) - 10;
     const cardH = personality9.map((d, i) => {
       const isLastAlone = (personality9.length % 2 === 1) && (i === personality9.length - 1);
       const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
       doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
       const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
-      return 18 + dL.length * descLH + 3;
+      return 19 + dL.length * descLH + 4;
     });
     const descRows = [];
     for (let i = 0; i < personality9.length; i += 2) descRows.push([i, i + 1 < personality9.length ? i + 1 : null]);
@@ -1005,13 +1074,13 @@ async function downloadPDF(override) {
         const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
         doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
         const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
-        const px = 10 + col * 97;
-        const cardW = isLastAlone ? W - 20 : 93;
-        rect(px, traitCy, cardW, descRowH[ri], CARD_FILL, CARD_BD, 2);
-        await drawIcon(d.name, px + 5, traitCy + 5, 11, { fill: '#FFFFFF', border: CARD_BD });
+        const px = M + col * 91.5;
+        const cardW = isLastAlone ? CW : 87.5;
+        rect(px, traitCy, cardW, descRowH[ri], '#DBF8FE', '#C3EDFF', 2);
+        await drawIcon(d.name, px + 5, traitCy + 5, 11, { fill: '#FFFFFF', border: '#C3EDFF' });
         txt((idx + 1) < 10 ? '0' + (idx + 1) : String(idx + 1), px + 19, traitCy + 11, { size: 8, color: PURPLE_LIGHT, bold: true });
         txt(d.name, px + 27, traitCy + 11, { size: 8.5, color: '#1F2937', bold: true, maxWidth: cardW - 32 });
-        txt(dL.join('\n'), px + 5, traitCy + 18, { size: descFont, color: GRAY });
+        txt(dL.join('\n'), px + 5, traitCy + 19, { size: descFont, color: '#4E4747' });
       }
       traitCy += descRowH[ri] + descGap;
     }
@@ -1021,10 +1090,10 @@ async function downloadPDF(override) {
     // the cards (template p5), not floated down to the footer.
     if (suggBoxHP) {
       const sby = (traitCy - descGap) + 6; // sit just below the last card row
-      rect(10, sby, W - 20, suggBoxHP, '#F5F3FF', '#E9D5FF', 2);
-      txt('Development Suggestions', 14, sby + 8, { size: 9, color: PURPLE, bold: true });
+      rect(M, sby, CW, suggBoxHP, '#F5F3FF', '#E9D5FF', 2);
+      txt('Development Suggestions', M + 4, sby + 8, { size: 9, color: PURPLE, bold: true });
       let sy = sby + 15;
-      suggLinesP.forEach(ls => { txt(ls.join('\n'), 14, sy, { size: 7.5, color: '#374151' }); sy += ls.length * 4.6; });
+      suggLinesP.forEach(ls => { txt(ls.join('\n'), M + 4, sy, { size: 7.5, color: '#374151' }); sy += ls.length * 4.6; });
       cy = sby + suggBoxHP;
     }
 
@@ -1038,10 +1107,10 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
 
-    rect(10, cy, W - 20, 7, LIGHT_GRAY, null, 1);
-    setFill(C_STRENGTH);   doc.circle(18,  cy + 3.5, 2.5, 'F'); txt('Strong Aptitude Area',  22,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_DEVELOPING); doc.circle(62,  cy + 3.5, 2.5, 'F'); txt('Emerging Area',         66,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_FOCUS);      doc.circle(96,  cy + 3.5, 2.5, 'F'); txt('Area for Development', 100, cy + 5, { size: 7.5, color: '#1F2937' });
+    rect(M, cy, CW, 7, LIGHT_GRAY, null, 1);
+    setFill(C_STRENGTH);   doc.circle(23.5,  cy + 3.5, 2.5, 'F'); txt('Strong Aptitude Area', 27.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_DEVELOPING); doc.circle(67.5,  cy + 3.5, 2.5, 'F'); txt('Emerging Area', 71.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_FOCUS);      doc.circle(101.5,  cy + 3.5, 2.5, 'F'); txt('Area for Development', 105.5, cy + 5, { size: 7.5, color: '#1F2937' });
     cy += 11;
 
     // Combined profile table — the bar chart and the reference table described
@@ -1058,39 +1127,21 @@ async function downloadPDF(override) {
       'Legal Studies Ability':  ['Reasoning, argument formation and rule-based thinking.',           'Law · International Relations · Public Policy'],
       'Health & Medical Apt.':  ['Readiness for health, biology and clinical reasoning.',            'Medicine · Biotechnology · Clinical Psychology'],
     };
-    const aptRowsC = aptitude8.slice().sort((a, b) => b.stanine - a.stanine).map((d) => {
-      const md = aptDescriptions[d.name] || ['A distinct thinking skill measured by this assessment.', 'Multiple pathways — discuss with your counsellor.'];
-      return { name: d.name, stanine: d.stanine, desc: md[0], careers: md[1] };
-    });
-    const acX = [10, 54, 102, 150];
-    const acW = [44, 48, 48, 50];
-    rect(10, cy, W - 20, 7, PURPLE, null, 0);
-    ['Aptitude Area', 'Profile', 'Description', 'Potential Careers'].forEach((h, i) => txt(h, acX[i] + 2, cy + 5, { size: 7.5, color: WHITE, bold: true }));
-    cy += 7;
-    aptRowsC.forEach((r, ri) => {
-      doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
-      const dLn = doc.splitTextToSize(r.desc, acW[2] - 5);
-      const cLn = doc.splitTextToSize(r.careers, acW[3] - 5);
-      const rowH = Math.max(11, 4.5 + Math.max(dLn.length, cLn.length) * 3.9);
-      const midY = cy + rowH / 2;
-      rect(10, cy, W - 20, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
-      txt(r.name, acX[0] + 2, midY + 1, { size: 7.5, color: '#1F2937', bold: true, maxWidth: acW[0] - 4 });
-      const abX = acX[1] + 2, abW = acW[1] - 8;
-      rect(abX, midY - 2, abW, 4, '#E5E7EB', null, 1);
-      // stanine 0 = never taken. Draw no fill and say so, rather than leaving an
-      // unexplained empty bar that could read as a very low score.
-      if (r.stanine > 0) {
-        rect(abX, midY - 2, (r.stanine / 9) * abW, 4, stanineColor(r.stanine), null, 1);
-      } else {
-        txt('Not attempted', abX, midY + 4.6, { size: 5.6, color: GRAY });
-      }
-      txt(dLn.join('\n'), acX[2] + 2, midY - (dLn.length - 1) * 1.9 + 1, { size: 6.5, color: GRAY });
-      txt(cLn.join('\n'), acX[3] + 2, midY - (cLn.length - 1) * 1.9 + 1, { size: 6.5, color: '#374151' });
-      cy += rowH;
-    });
-    cy += 3;
-    txt('Bar colours follow the bands above. Career options are indicative, not exhaustive — explore pathways aligned with aptitude, interests and academics.', 14, cy + 2, { size: 6.5, color: GRAY, maxWidth: W - 28 });
-    cy += 7;
+    // Aptitude stanine bar chart (matches the personality chart), strongest
+    // first. The description + careers table moves to its own page (Career
+    // Relevance Planning) per the template.
+    const aptSorted = aptitude8.slice().sort((a, b) => b.stanine - a.stanine);
+    const aptChartH = 8 + aptSorted.length * 7.5 + 4;
+    rect(M, cy, CW, aptChartH, '#FAFAFA', '#E5E7EB', 2);
+    txt('Aptitude Stanine Scores — ' + aptSorted.length + ' Domains', M + 4, cy + 6, { size: 8, color: GRAY, bold: true });
+    aptSorted.forEach((d, i) => stanineBar(d.name, d.stanine, cy + 15 + i * 7.5, stanineColor(d.stanine)));
+    for (let i = 1; i <= 9; i++) {
+      const bx = BAR_X + ((i - 1) / 8) * BAR_W;
+      txt(String(i), bx, cy + aptChartH + 2, { size: 6, color: GRAY, align: 'center' });
+    }
+    cy += aptChartH + 6;
+    txt('Bands:   Area for Development   ·   Emerging Area   ·   Strong Aptitude Area', M + 4, cy + 3, { size: 7, color: GRAY });
+    cy += 8;
 
     doc.setFontSize(8); doc.setFont('helvetica', 'normal');
     // Every box must carry real content. If no area reached the Strength band,
@@ -1106,47 +1157,76 @@ async function downloadPDF(override) {
     const sALines = doc.splitTextToSize(strongContent, 83);
     const eALines = doc.splitTextToSize(emergingContent, 83);
     const aptPairH = Math.max(9 + sALines.length * 4.6, 9 + eALines.length * 4.6, 22);
-    rect(10,  cy, 93, aptPairH, A_STRONG.fill, A_STRONG.bd, 2);
-    txt('Strong Aptitude Areas', 14, cy + 7, { size: 8.5, color: A_STRONG.t, bold: true });
-    txt(sALines.join('\n'), 14, cy + 12, { size: 8, color: '#1F2937' });
-    rect(107, cy, 93, aptPairH, A_DEV.fill, A_DEV.bd, 2);
-    txt('Emerging Areas', 111, cy + 7, { size: 8.5, color: A_DEV.t, bold: true });
-    txt(eALines.join('\n'), 111, cy + 12, { size: 8, color: '#1F2937' });
+    rect(M,  cy, 87.5, aptPairH, A_STRONG.fill, A_STRONG.bd, 2);
+    txt('Strong Aptitude Areas', M + 4, cy + 7, { size: 8.5, color: A_STRONG.t, bold: true });
+    txt(sALines.join('\n'), M + 4, cy + 12, { size: 8, color: '#1F2937' });
+    rect(M + 91.5, cy, 87.5, aptPairH, A_DEV.fill, A_DEV.bd, 2);
+    txt('Emerging Areas', M + 95.5, cy + 7, { size: 8.5, color: A_DEV.t, bold: true });
+    txt(eALines.join('\n'), M + 95.5, cy + 12, { size: 8, color: '#1F2937' });
     cy += aptPairH + 6;
 
     cy = indicativeCallout(cy);
-    cy += 4;
-    const aptDomainMap = {
-      'Verbal Ability':         ['Psychology', 'Law', 'Journalism'],
-      'Perceptual Speed':       ['Data Analytics', 'Cybersecurity'],
-      'Numerical Ability':      ['Finance', 'Data Science', 'AI/ML'],
-      'Spatial Ability':        ['Architecture', 'UX/UI', 'Product Design'],
-      'Mechanical Ability':     ['Engineering', 'Robotics'],
-      'Abstract Reasoning':     ['Strategy', 'AI Research'],
-      'Legal Studies Ability':  ['Law', 'Public Policy'],
-      'Health & Medical Apt.':  ['Medicine', 'Biotechnology'],
-    };
+    cy += 1;
 
-    // (page-guard removed: aptitude holds to its two designed pages)
-    rect(10, cy, W - 20, 15, '#EDE9FE', null, 2);
-    txt('Suggested Career Domains Based on Aptitude', 14, cy + 5, { size: 8.5, color: PURPLE, bold: true });
-    // Real domains only — no placeholder padding. Pull from strong areas
-    // first, then emerging, then the remaining aptitudes by level; render
-    // however many exist (up to 4) with spacing computed from the count.
-    const suggDoms = (() => {
-      const set = new Set();
-      aptStrong.forEach(a => (aptDomainMap[a] || []).forEach(d => set.add(d)));
-      if (set.size < 4) aptEmerging.forEach(a => (aptDomainMap[a] || []).forEach(d => set.add(d)));
-      if (set.size < 4) aptitude8.filter(a => a.attempted).slice().sort((a, b) => b.stanine - a.stanine)
-        .forEach(a => (aptDomainMap[a.name] || []).forEach(d => set.add(d)));
-      return Array.from(set).slice(0, 4);
-    })();
-    if (suggDoms.length) {
-      const pillW = Math.min(44, (W - 28 - (suggDoms.length - 1) * 5) / suggDoms.length);
-      suggDoms.forEach((d, i) => pill(d, 14 + i * (pillW + 5), cy + 11.5, PURPLE, WHITE, pillW, 6));
-    }
-    cy += 20;
 
+    cy = aiInsight(cy, 'What your aptitude profile suggests', 'aptitude_profile');
+
+    footer(5);
+
+    /* ═══════════════════════════════════════════════
+       PAGE 7 — CAREER RELEVANCE PLANNING
+       Aptitude areas mapped to related career pathways (template p7).
+    ═══════════════════════════════════════════════ */
+    doc.addPage();
+    sectionHeader('Aptitude & Ability Profile', 'How your aptitude areas connect to real-world career pathways', { tint: '#F4F8FF' });
+    studentBar(25);
+    cy = 40;
+
+    cy = instructionBox(cy, 'CAREER RELEVANCE MAPPING',
+      'Describes how strong aptitude areas connect to specific career domains. For example, strong verbal and abstract reasoning may support pathways related to psychology, law, communication and social sciences.',
+      { gapAfter: 6 });
+    cy = subHeading('Understanding Aptitude Areas and Related Career Pathways', cy) + SP.xs;
+
+    // Table header
+    const crX = [15.5, 64.5, 109.7];       // Aptitude | Description | Potential Careers
+    const crW = [49, 45, 84];
+    rect(M, cy, CW, 8, PURPLE, null, 2);
+    ['Aptitude Areas', 'Description', 'Potential Careers'].forEach((h, i) => txt(h, crX[i] + 3, cy + 5.4, { size: 8, color: WHITE, bold: true }));
+    cy += 8;
+    // Rows: name (purple) + description + career pills. Sorted strongest first.
+    const crRows = aptSorted.map((d) => {
+      const md = aptDescriptions[d.name] || ['A distinct thinking skill measured by this assessment.', 'Multiple pathways — discuss with your counsellor'];
+      return { name: d.name, desc: md[0], careers: String(md[1]).split('·').map(s => s.trim()).filter(Boolean) };
+    });
+    crRows.forEach((r, ri) => {
+      doc.setFontSize(6.8); doc.setFont('helvetica', 'normal');
+      const dLn = doc.splitTextToSize(r.desc, crW[1] - 4);
+      // lay career pills into the careers column, wrapping to rows
+      const pillH = 5, pillGap = 2, lineGap = 2, maxPW = crW[2] - 4;
+      doc.setFontSize(6.2);
+      let plx = 0, ply = 0; const placed = [];
+      r.careers.forEach((c) => {
+        const w = Math.min(maxPW, doc.getTextWidth(c) + 6);
+        if (plx + w > maxPW && plx > 0) { plx = 0; ply += pillH + lineGap; }
+        placed.push({ c, x: plx, y: ply, w }); plx += w + pillGap;
+      });
+      const pillsH = ply + pillH;
+      const rowH = Math.max(13, 5 + Math.max(dLn.length * 3.9, pillsH));
+      const midY = cy + rowH / 2;
+      rect(M, cy, CW, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#EFEAF9', 0.2);
+      txt(r.name, crX[0] + 3, midY + 1, { size: 7.5, color: PURPLE, bold: true, maxWidth: crW[0] - 5 });
+      txt(dLn.join('\n'), crX[1] + 2, midY - (dLn.length - 1) * 1.9 + 1, { size: 6.8, color: GRAY });
+      const pStartY = cy + (rowH - pillsH) / 2;
+      placed.forEach((p) => {
+        rect(crX[2] + 2 + p.x, pStartY + p.y, p.w, pillH, '#F5F3FF', '#D9CBF2', 2);
+        txt(p.c, crX[2] + 2 + p.x + p.w / 2, pStartY + p.y + 3.4, { size: 6.2, color: PURPLE, align: 'center', maxWidth: p.w - 1.5 });
+      });
+      cy += rowH;
+    });
+    cy += SP.sm;
+    cy = instructionBox(cy, 'NOTE',
+      'The career options listed are indicative and not exhaustive. Students are encouraged to explore additional pathways aligned with their aptitude, interests, academic performance, exposure and guidance.',
+      { bodySize: 7.5, lineH: 4.2, gapAfter: 4 });
 
     footer(5);
 
@@ -1158,10 +1238,10 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
 
-    rect(10, cy, W - 20, 7, LIGHT_GRAY, null, 1);
-    setFill(C_STRENGTH);   doc.circle(18,  cy + 3.5, 2.5, 'F'); txt('Strong Interest',   22,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_DEVELOPING); doc.circle(56,  cy + 3.5, 2.5, 'F'); txt('Moderate Interest', 60,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_FOCUS);      doc.circle(100, cy + 3.5, 2.5, 'F'); txt('Low Interest',     104, cy + 5, { size: 7.5, color: '#1F2937' });
+    rect(M, cy, CW, 7, LIGHT_GRAY, null, 1);
+    setFill(C_STRENGTH);   doc.circle(23.5,  cy + 3.5, 2.5, 'F'); txt('Strong Interest', 27.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_DEVELOPING); doc.circle(61.5,  cy + 3.5, 2.5, 'F'); txt('Moderate Interest', 65.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_FOCUS);      doc.circle(105.5, cy + 3.5, 2.5, 'F'); txt('Low Interest', 109.5, cy + 5, { size: 7.5, color: '#1F2937' });
     cy += 11;
 
     // Chart sizing adapts to what shares the page: on the AI path the chart is
@@ -1171,12 +1251,12 @@ async function downloadPDF(override) {
     const cpiHasAI = aiHas('interest_profile') || aiHas('internal_motivators');
     const cSp = cpiHasAI ? 9.5 : 7.5, cBarH = cpiHasAI ? 6 : 5;
     const cpiChartH = (cpiHasAI ? 12 : 10) + careers8.length * cSp + 4;
-    rect(10, cy, W - 20, cpiChartH, '#FAFAFA', '#E5E7EB', 2);
-    txt('Career Interest Ranking — strongest interests first', 14, cy + 6, { size: 8, color: GRAY, bold: true });
-    const barX2 = 70, barW2 = W - barX2 - 20;
+    rect(M, cy, CW, cpiChartH, '#FAFAFA', '#E5E7EB', 2);
+    txt('Career Interest Ranking — strongest interests first', M + 4, cy + 6, { size: 8, color: GRAY, bold: true });
+    const barX2 = BAR_X, barW2 = BAR_W;
     careers8.forEach((c, i) => {
       const y2 = cy + (cpiHasAI ? 17 : 15) + i * cSp;
-      txt(c.label, 67, y2, { size: 7, color: '#1F2937', align: 'right', maxWidth: 55 });
+      txt(c.label, BAR_X - 3, y2, { size: 7, color: '#1F2937', align: 'right', maxWidth: 55 });
       rect(barX2, y2 - cBarH / 2 - 1, barW2, cBarH, '#E5E7EB', null, 1);
       rect(barX2, y2 - cBarH / 2 - 1, (Math.max(0, c.score) / 20) * barW2, cBarH, cpiColor(c.level), null, 1);
       txt(String(c.score), barX2 + barW2 + 2, y2, { size: 7, color: GRAY, bold: true });
@@ -1191,6 +1271,7 @@ async function downloadPDF(override) {
     cy = instructionBox(cy, 'HOW TO READ THIS GRAPH', cpiGNote, { gapAfter: 6 });
 
     cy = indicativeCallout(cy);
+    cy = aiInsight(cy, 'What your interests reveal', 'interest_profile');
 
     // Interest Cluster Summary sits on its own page (template p9).
     doc.addPage();
@@ -1200,9 +1281,9 @@ async function downloadPDF(override) {
 
     cy = subHeading('Interest Cluster Summary', cy);
     const clusterHeaders = ['Cluster', 'Top Domain', 'Interpretation', 'Sample Career Pathways'];
-    const cColX = [10, 35, 70, 135];
+    const cColX = [15.5, 39.1, 72.0, 133.3];
     const cColW = [25, 35, 65, 65];
-    rect(10, cy, W - 20, 7, PURPLE, null, 0);
+    rect(M, cy, CW, 7, PURPLE, null, 0);
     clusterHeaders.forEach((h, i) => txt(h, cColX[i] + 2, cy + 5, { size: 8, color: WHITE, bold: true }));
     cy += 7;
 
@@ -1243,7 +1324,7 @@ async function downloadPDF(override) {
       const pathsL  = doc.splitTextToSize(row[3], cColW[3] - 4);
       const rowH = Math.max(22, 12 + Math.max(interpL.length, pathsL.length) * 4.5);
       const rowBg = ri % 2 === 0 ? WHITE : LIGHT_GRAY;
-      rect(10, cy, W - 20, rowH, rowBg, '#E5E7EB', 0);
+      rect(M, cy, CW, rowH, rowBg, '#E5E7EB', 0);
       pill(row[0], cColX[0] + 2, cy + rowH / 2 + 2, ri === 0 ? PURPLE : ri === 1 ? PURPLE_LIGHT : '#6B7280', WHITE, 20, 6);
       txt(row[1], cColX[1] + 2, cy + rowH / 2, { size: 8, color: '#1F2937', bold: true, maxWidth: cColW[1] - 4 });
       txt(interpL.join('\n'), cColX[2] + 2, cy + rowH / 2 - (interpL.length - 1) * 2.2 + 1, { size: 7, color: GRAY });
@@ -1251,6 +1332,8 @@ async function downloadPDF(override) {
       cy += rowH;
     });
 
+
+    cy = aiInsight(cy, 'What drives you', 'internal_motivators');
 
     footer(6);
 
@@ -1262,10 +1345,10 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
 
-    rect(10, cy, W - 20, 7, LIGHT_GRAY, null, 1);
-    setFill(C_STRENGTH); doc.circle(18,  cy + 3.5, 2.5, 'F'); txt('Well-Established',   22,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_DEVELOPING); doc.circle(74,  cy + 3.5, 2.5, 'F'); txt('Developing', 78,  cy + 5, { size: 7.5, color: '#1F2937' });
-    setFill(C_FOCUS); doc.circle(134, cy + 3.5, 2.5, 'F'); txt('Needs Support',   138, cy + 5, { size: 7.5, color: '#1F2937' });
+    rect(M, cy, CW, 7, LIGHT_GRAY, null, 1);
+    setFill(C_STRENGTH); doc.circle(23.5,  cy + 3.5, 2.5, 'F'); txt('Well-Established', 27.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_DEVELOPING); doc.circle(79.5,  cy + 3.5, 2.5, 'F'); txt('Developing', 83.5, cy + 5, { size: 7.5, color: '#1F2937' });
+    setFill(C_FOCUS); doc.circle(139.5, cy + 3.5, 2.5, 'F'); txt('Needs Support', 143.5, cy + 5, { size: 7.5, color: '#1F2937' });
     cy += 10;
 
     cy = subHeading('SEAA Readiness by Domain', cy + 3) - 2;
@@ -1277,52 +1360,65 @@ async function downloadPDF(override) {
     ];
     for (let i = 0; i < seaCards.length; i++) {
       const c = seaCards[i];
-      const px = 10 + i * 66;
+      const px = M + i * 60.8;
       doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
-      const dl = doc.splitTextToSize(seaDescs[i], 54);
+      const dl = doc.splitTextToSize(seaDescs[i], 49);
       // Arc colour follows the SAME readiness category as the status label
       // (gender-normed), so the card colour never contradicts its own text —
       // e.g. a "Developing Readiness" card is always orange, never green.
       const arcColor = c.label === 'Strong Readiness' ? C_STRENGTH
                      : c.label === 'Developing Readiness' ? C_DEVELOPING
                      : C_FOCUS;
-      const cardH = Math.max(58, 15 + dl.length * 4.2 + 32);
-      rect(px, cy, 62, cardH, CARD_FILL, CARD_BD, 2);
+      const cardH = Math.max(70, 22 + dl.length * 4.2 + 40);
+      rect(px, cy, 57, cardH, '#F8FAF7', '#EAE1FF', 2);
       await drawIcon(c.title, px + 4, cy + 4, 9, { fill: '#FFFFFF', border: CARD_BD });
       txt(c.title, px + 16, cy + 9.5, { size: 8, color: arcColor, bold: true, maxWidth: 42 });
       txt(dl.join('\n'), px + 4, cy + 17, { size: 6.5, color: GRAY });
-      // Arc gauge
-      const cx2 = px + 31, arcY = cy + cardH - 17, r = 13;
-      // Grey background arc (180° → 360°)
-      doc.setDrawColor(220, 220, 220); doc.setLineWidth(3);
-      for (let a = 180; a <= 360; a += 5) {
-        const rad1 = (a * Math.PI) / 180, rad2 = ((a + 5) * Math.PI) / 180;
-        doc.line(cx2 + r * Math.cos(rad1), arcY + r * Math.sin(rad1), cx2 + r * Math.cos(rad2), arcY + r * Math.sin(rad2));
-      }
-      // Coloured fill — proportional to score (high score = more filled = more concern)
-      const fillDeg = Math.round((c.score / 20) * 180);
-      const [fr, fg, fb] = hex2rgb(arcColor);
-      doc.setDrawColor(fr, fg, fb); doc.setLineWidth(3);
-      for (let a = 180; a <= 180 + fillDeg; a += 5) {
-        const rad1 = (a * Math.PI) / 180, rad2 = ((a + 5) * Math.PI) / 180;
-        doc.line(cx2 + r * Math.cos(rad1), arcY + r * Math.sin(rad1), cx2 + r * Math.cos(rad2), arcY + r * Math.sin(rad2));
-      }
+
+      // Needle-dial gauge (style guide): a semicircle with three readiness
+      // bands (strong / developing / support), a needle pointing to the current
+      // position, a dark hub, and a lime readiness chip below. No raw score is
+      // printed — the band word carries the meaning (student-facing rule); the
+      // needle position gives the visual magnitude.
+      const cx2 = px + 31, dialY = cy + cardH - 19, r = 12;
+      const bands = [[180, 240, C_STRENGTH], [240, 300, C_DEVELOPING], [300, 360, C_FOCUS]];
+      doc.setLineWidth(3.2);
+      bands.forEach(([a0, a1, col]) => {
+        const [br, bg, bb] = hex2rgb(col); doc.setDrawColor(br, bg, bb);
+        for (let a = a0; a < a1; a += 4) {
+          const r1 = (a * Math.PI) / 180, r2 = (Math.min(a + 4, a1) * Math.PI) / 180;
+          doc.line(cx2 + r * Math.cos(r1), dialY + r * Math.sin(r1), cx2 + r * Math.cos(r2), dialY + r * Math.sin(r2));
+        }
+      });
+      doc.setDrawColor(255, 255, 255); doc.setLineWidth(0.9);
+      [240, 300].forEach(a => { const rr = (a * Math.PI) / 180; doc.line(cx2 + (r - 1.9) * Math.cos(rr), dialY + (r - 1.9) * Math.sin(rr), cx2 + (r + 1.9) * Math.cos(rr), dialY + (r + 1.9) * Math.sin(rr)); });
+      setFill('#F8FAF7'); doc.circle(cx2, dialY, r - 3.2, 'F');
+      // needle (score 0 -> left/strong, 20 -> right/support)
+      const ndeg = 180 + (Math.max(0, Math.min(20, c.score)) / 20) * 180;
+      const nrad = (ndeg * Math.PI) / 180, L = r - 3.6, prad = nrad + Math.PI / 2, bw = 1.3;
+      const tipX = cx2 + L * Math.cos(nrad), tipY = dialY + L * Math.sin(nrad);
+      setFill('#323232');
+      doc.triangle(cx2 + bw * Math.cos(prad), dialY + bw * Math.sin(prad), cx2 - bw * Math.cos(prad), dialY - bw * Math.sin(prad), tipX, tipY, 'F');
+      doc.circle(cx2, dialY, 1.4, 'F');
+      setDraw('#FFFFFF'); doc.setLineWidth(0.4); doc.circle(cx2, dialY, 1.4, 'S');
+      txt('Strong', cx2 - r - 0.5, dialY + 0.8, { size: 4.6, color: GRAY, align: 'right' });
+      txt('Support', cx2 + r + 0.5, dialY + 0.8, { size: 4.6, color: GRAY });
+      txt('Developing', cx2, dialY - r - 1.6, { size: 4.6, color: GRAY, align: 'center' });
+      const chipW = 34, chipY = dialY + 4.5;
+      setFill('#84BD32'); doc.roundedRect(cx2 - chipW / 2, chipY, chipW, 5.4, 2.7, 2.7, 'F');
+      txt(c.displayLabel, cx2, chipY + 3.7, { size: 6, color: '#FFFFFF', bold: true, align: 'center', maxWidth: chipW - 2 });
       doc.setLineWidth(0.3);
-      // Band word inside the arc (no raw score); the arc fill itself carries
-      // the magnitude visually.
-      txt(c.displayLabel, cx2, arcY + 4, { size: 7, color: arcColor, bold: true, align: 'center', maxWidth: 30 });
       seaCards[i]._cardH = cardH;
     }
     cy += Math.max(...seaCards.map(c => c._cardH || 52)) + 9;
 
-    // Legend explaining the arc gauge — same instruction style as elsewhere.
-    // Student-facing wording: bands, not raw scores.
-    const _seaHowTo = 'Each arc shows one readiness area. A fuller, warmer arc means more support will help right now; a short deep-purple arc means the student is already well-established there. Bands are set against age- and gender-adjusted norms — they describe today, not a fixed limit.';
+    // Legend explaining the needle gauge — student-facing wording (bands).
+    const _seaHowTo = 'Each dial shows one readiness area. The needle sits toward Strong when the student is already well-established, and toward Support when focused help will make the biggest difference right now. Bands are set against age- and gender-adjusted norms — they describe today, not a fixed limit.';
     cy = instructionBox(cy, 'HOW TO READ THESE GAUGES', _seaHowTo, { gapAfter: 3 });
     cy += 4;
 
     cy = subHeading('Adjustment Snapshot', cy) - 8;
-    txt('A quick view of your current zone, key strengths and focus areas.', 14, cy + 5, { size: 8, color: GRAY });
+    txt('A quick view of your current zone, key strengths and focus areas.', M + 4, cy + 5, { size: 8, color: GRAY });
     cy += 10;
 
     const seaSnapshot = [
@@ -1336,7 +1432,7 @@ async function downloadPDF(override) {
     for (let i = 0; i < seaSnapshot.length; i++) {
       const s = seaSnapshot[i];
       const c = seaCards[i];
-      const px = 10 + i * 66;
+      const px = M + i * 60.8;
       const bgByLabel = c.label === 'Strong Readiness' ? '#F0FDF4' : c.label === 'Developing Readiness' ? '#F5F3FF' : '#FFF1F2';
       const strengths = s.strengthsByLabel[c.label] || [];
       const focuses   = s.focusByLabel[c.label] || [];
@@ -1347,10 +1443,10 @@ async function downloadPDF(override) {
       const sH = sLines.reduce((t, l) => t + l.length * 3.8, 0);
       const fH = fLines.reduce((t, l) => t + l.length * 3.8, 0);
       const cardH = Math.max(42, 24 + sH + 8 + fH + 6);
-      rect(px, cy, 62, cardH, CARD_FILL, CARD_BD, 2);
+      rect(px, cy, 57, cardH, CARD_FILL, CARD_BD, 2);
       await drawIcon(c.title, px + 4, cy + 3.5, 8, { fill: '#FFFFFF', border: CARD_BD });
       txt(c.title, px + 15, cy + 8.5, { size: 8, color: c.color, bold: true, maxWidth: 44 });
-      pill(c.displayLabel, px + 4, cy + 18, c.color, WHITE, 54, 6);
+      pill(c.displayLabel, px + 4, cy + 18, c.color, WHITE, 49, 6);
       txt('Strengths', px + 4, cy + 24, { size: 7, color: '#1F2937', bold: true });
       let by = cy + 28;
       sLines.forEach(ls => { txt(ls.join('\n'), px + 4, by, { size: 6.5, color: GRAY }); by += ls.length * 3.8; });
@@ -1373,8 +1469,8 @@ async function downloadPDF(override) {
 
     cy = subHeading('Dimension Summary', cy);
     const dimHeaders = ['Dimension', 'Status', 'Interpretation'];
-    const dimColX = [10, 65, 110];
-    rect(10, cy, W - 20, 8, PURPLE, null, 0);
+    const dimColX = [15.5, 67.3, 109.7];
+    rect(M, cy, CW, 8, PURPLE, null, 0);
     dimHeaders.forEach((h, i) => txt(h, dimColX[i] + 2, cy + 5.5, { size: 8, color: WHITE, bold: true }));
     cy += 8;
     const interpByLabel = {
@@ -1386,47 +1482,26 @@ async function downloadPDF(override) {
       doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
       const interpL = doc.splitTextToSize(interpByLabel[c.label] || 'A snapshot of current readiness in this area — it can strengthen with support and practice.', 88);
       const rowH = Math.max(24, 13 + interpL.length * 4.5);
-      rect(10, cy, W - 20, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
+      rect(M, cy, CW, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
       txt(c.title, dimColX[0] + 2, cy + rowH / 2 + 1, { size: 8, color: '#1F2937' });
       pill(c.displayLabel, dimColX[1] + 2, cy + rowH / 2 + 1, c.color, WHITE, 42, 6);
       txt(interpL.join('\n'), dimColX[2] + 2, cy + rowH / 2 - (interpL.length - 1) * 2 + 1, { size: 6.5, color: GRAY });
       cy += rowH;
     });
-    cy += 20;
+    cy += SP.md;
 
-
-    // ── Growth Support Pathway (Awareness -> Action -> Support) ──
-    // Present in the ideal template's SEAA page; was missing from the report.
-    cy = subHeading('Growth Support Pathway', cy);
-    const gsp = [
-      { t: 'Awareness', d: 'Develop understanding of current strengths and growth areas.' },
-      { t: 'Action',    d: 'Practice routines and strategies that support improvement.' },
-      { t: 'Support',   d: 'Use guidance and resources to sustain progress.' },
-    ];
-    for (let i = 0; i < gsp.length; i++) {
-      const g = gsp[i];
-      const px = 10 + i * 64;
-      rect(px, cy, 60, 30, WHITE, CARD_BD, 2);
-      await drawIcon(g.t, px + 4, cy + 4, 11, { fill: '#FFFFFF', border: CARD_BD });
-      txt(g.t, px + 18, cy + 10.5, { size: 8.5, color: PURPLE, bold: true });
-      doc.setFont('helvetica', 'normal'); doc.setFontSize(6.5);
-      const dl = doc.splitTextToSize(g.d, 52);
-      txt(dl.join('\n'), px + 4, cy + 19, { size: 6.5, color: GRAY });
-    }
-    cy += 30 + SP.md;
-    rect(10, cy, W - 20, 9, LIGHT_GRAY, null, 1);
-    txt('Consistent support, positive reinforcement, and collaboration help students grow with confidence.', 14, cy + 6, { size: 7.5, color: '#374151' });
-    cy += 18;
 
     const seaIndText = 'These results provide a snapshot for guidance purposes only. They reflect the current state at the time of assessment and may evolve over time.';
     doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
-    const seaIndL = doc.splitTextToSize(seaIndText, W - 32);
+    const seaIndL = doc.splitTextToSize(seaIndText, CW - 12);
     const seaIndH = 6 + seaIndL.length * 4.5;
     // (page-guard removed: SEAA closing note stays inline on the growth page)
-    rect(10, cy, W - 20, seaIndH, '#F5F3FF', PURPLE, 2);
-    doc.setLineWidth(1.5); setDraw(PURPLE); doc.line(10, cy, 10, cy + seaIndH);
-    txt(seaIndL.join('\n'), 15, cy + 6, { size: 7.5, color: '#374151' });
+    rect(M, cy, CW, seaIndH, '#F5F3FF', '#E9D5FF', 2);
+    rect(M, cy + 1.3, 2.2, seaIndH - 2.6, PURPLE, null, 0);
+    txt(seaIndL.join('\n'), M + 5, cy + 6, { size: 7.5, color: '#374151' });
     cy += seaIndH + 4;
+
+    cy = aiInsight(cy, 'Personalised wellbeing guidance', 'wellbeing_guidance');
 
     footer(7);
 
@@ -1482,25 +1557,25 @@ async function downloadPDF(override) {
 
     const drawPathwayGap = (pg, startY, fs) => {
       fs = fs || 30;
-      rect(10, startY, W - 20, 8, PURPLE, null, 2);
-      txt(pg.title, 14, startY + 6, { size: 9, color: WHITE, bold: true, maxWidth: W - 28 });
+      rect(M, startY, CW, 8, PURPLE, null, 2);
+      txt(pg.title, M + 4, startY + 6, { size: 9, color: WHITE, bold: true, maxWidth: CW - 8 });
       let gy = startY + 15;
       pg.factors.forEach((f) => {
         const fType = f[0], fLabel = f[1], current = f[2], required = f[3];
-        const barX3 = 14, barW3 = W - 28;
+        const barX3 = M, barW3 = CW;
         // One-line factor heading ("Aptitude Factor — Mechanical Ability")
         // keeps the block compact and leaves clear air above the next block —
         // the previous two-line layout ran its last bar into the next heading.
-        txt(fType + '  —  ' + fLabel, 14, gy, { size: 8, color: '#1F2937', bold: true });
+        txt(fType + '  —  ' + fLabel, M + 4, gy, { size: 8, color: '#1F2937', bold: true });
         txt('Your Current Level', barX3, gy + 6.5, { size: 6.5, color: PURPLE });
         // stanine 0 = never taken. Say so and draw no fill — any fill would
         // imply a measured level, and a band word would invent one.
         txt(current > 0 ? stanineBand(current) : 'Not measured',
-            W - 14, gy + 6.5, { size: 7, color: PURPLE, bold: true, align: 'right' });
+            W - M, gy + 6.5, { size: 7, color: PURPLE, bold: true, align: 'right' });
         rect(barX3, gy + 8.5, barW3, 4, '#E5E7EB', null, 1);
         if (current > 0) rect(barX3, gy + 8.5, (current / 9) * barW3, 4, PURPLE, null, 1);
         txt('Typically Required', barX3, gy + 17.5, { size: 6.5, color: GRAY });
-        txt(stanineBand(required), W - 14, gy + 17.5, { size: 7, color: '#6B7280', bold: true, align: 'right' });
+        txt(stanineBand(required), W - M, gy + 17.5, { size: 7, color: '#6B7280', bold: true, align: 'right' });
         rect(barX3, gy + 19.5, barW3, 4, '#E5E7EB', null, 1);
         rect(barX3, gy + 19.5, (required / 9) * barW3, 4, '#9CA3AF', null, 1);
         gy += fs;
@@ -1519,8 +1594,8 @@ async function downloadPDF(override) {
     cy = 40;
     const gapNote = 'For each recommended pathway, 3 key parameters are compared: 1 Aptitude factor, 1 Personality factor, and 1 SEAA readiness factor. Purple bars show your current level. Grey bars show the level typically required for that pathway.';
     doc.setFont('helvetica','normal'); doc.setFontSize(8); // measure at draw size
-    const gnL = doc.splitTextToSize(gapNote, W - 28);
-    txt(gnL.join('\n'), 14, cy + 4, { size: 8, color: '#374151' });
+    const gnL = doc.splitTextToSize(gapNote, CW - 8);
+    txt(gnL.join('\n'), M + 4, cy + 4, { size: 8, color: '#374151' });
     cy += gnL.length * 5 + 6;
     {
       const fs1 = gapFactorSpacing(cy, pathwayGaps[0], pathwayGaps[1]);
@@ -1552,8 +1627,8 @@ async function downloadPDF(override) {
 
     const matrixNote = 'This matrix combines your Interest, Aptitude, Personality and Wellbeing readiness to calculate an overall alignment level for each career cluster. Strong = well aligned across all domains. Emerging = developing alignment. Exploratory = worth exploring with more exposure.';
     doc.setFont('helvetica','normal'); doc.setFontSize(8); // measure at draw size
-    const mnL = doc.splitTextToSize(matrixNote, W - 28);
-    txt(mnL.join('\n'), 14, cy + 4, { size: 8, color: '#374151' });
+    const mnL = doc.splitTextToSize(matrixNote, CW - 8);
+    txt(mnL.join('\n'), M + 4, cy + 4, { size: 8, color: '#374151' });
     cy += mnL.length * 5 + 4; // +mDense-aware extra below, once rows are known
 
     // Stanine 0 means "never measured", which is not the same as a low score —
@@ -1625,9 +1700,9 @@ async function downloadPDF(override) {
     const mDense = matrixRowsLive.length > 4;
     cy += mDense ? 1 : 5;
     const mHeaders = ['Career Cluster', 'Interest', 'Aptitude', 'Personality', 'SEAA', 'Alignment Level'];
-    const mColX = [10, 62, 88, 114, 140, 158];
+    const mColX = [15.5, 64.5, 89.0, 113.5, 138.0, 154.9];
     const mColW = [52, 26, 26, 26, 18, 42];
-    rect(10, cy, W - 20, 7, PURPLE, null, 0);
+    rect(M, cy, CW, 7, PURPLE, null, 0);
     mHeaders.forEach((h, i) => txt(h, mColX[i] + 2, cy + 5, { size: 7.5, color: WHITE, bold: true }));
     cy += 7;
 
@@ -1638,7 +1713,7 @@ async function downloadPDF(override) {
       const nameLines = doc.splitTextToSize(String(row[0]), mColW[0] - 4);
       const rowH = Math.max(mDense ? 11 : 13, (mDense ? 5 : 6) + nameLines.length * 4.2);
       const midY = cy + rowH / 2;
-      rect(10, cy, W - 20, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
+      rect(M, cy, CW, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
       txt(nameLines.join('\n'), mColX[0] + 2, midY - (nameLines.length - 1) * 2.1 + 1, { size: 7.5, color: '#1F2937' });
       [1, 2, 3, 4].forEach((ci) => pill(row[ci], mColX[ci] + 1, midY + 1, levelColors[row[ci]] || GRAY, WHITE, mColW[ci] - 4, 6));
       const alignLabel = row[5]; // 'Strong Fit', 'Emerging Fit', 'Exploratory'
@@ -1669,7 +1744,7 @@ async function downloadPDF(override) {
     doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
     fitTiers.forEach((t) => {
       const text = t.items.length ? t.items.join('  ·  ') : t.empty;
-      t._lines = doc.splitTextToSize(text, W - 78);
+      t._lines = doc.splitTextToSize(text, CW - 58);
       t._h = Math.max(7.5, 3 + t._lines.length * 4.2);
     });
     // Section heading + one row per tier with a light tint in the tier's
@@ -1682,14 +1757,14 @@ async function downloadPDF(override) {
     const tierStripH = fitTiers.reduce((s, t) => s + t._h, 0);
     let tyy = cy;
     fitTiers.forEach((t) => {
-      rect(10, tyy, W - 20, t._h, tierTint[t.label] || WHITE, '#E5E7EB', 0);
+      rect(M, tyy, CW, t._h, tierTint[t.label] || WHITE, '#E5E7EB', 0);
       const tMidY = tyy + t._h / 2;
-      setFill(t.color); doc.circle(16, tMidY - 0.8, 1.8, 'F');
-      txt(t.label, 21, tMidY + 0.6, { size: 7.5, color: t.color, bold: true });
-      txt(t._lines.join('\n'), 54, tMidY - (t._lines.length - 1) * 2.1 + 0.6, { size: 7.5, color: t.items.length ? '#1F2937' : GRAY });
+      setFill(t.color); doc.circle(21.5, tMidY - 0.8, 1.8, 'F');
+      txt(t.label, 25.5, tMidY + 0.6, { size: 7.5, color: t.color, bold: true });
+      txt(t._lines.join('\n'), 57, tMidY - (t._lines.length - 1) * 2.1 + 0.6, { size: 7.5, color: t.items.length ? '#1F2937' : GRAY });
       tyy += t._h;
     });
-    doc.setLineWidth(0.3); setDraw('#D1D5DB'); doc.roundedRect(10, cy, W - 20, tierStripH, 1.5, 1.5, 'S');
+    doc.setLineWidth(0.3); setDraw('#D1D5DB'); doc.roundedRect(10, cy, CW, tierStripH, 1.5, 1.5, 'S');
     cy += tierStripH + (mDense ? 8 : 12);
 
     // Recommended Subject Pathways — the template's 01/02/03 chevron cards.
@@ -1749,25 +1824,27 @@ async function downloadPDF(override) {
       ];
       pathways.forEach((p) => {
         doc.setFontSize(7.5); doc.setFont('helvetica', 'normal');
-        const dL = doc.splitTextToSize(p.desc, W - 140);
+        const dL = doc.splitTextToSize(p.desc, CW - 120);
         const pH = Math.max(mDense ? 20 : 24, (mDense ? 10 : 12) + dL.length * 4.5);
-        rect(10, cy, W - 20, pH, CARD_FILL, CARD_BD, 2);
+        rect(M, cy, CW, pH, CARD_FILL, CARD_BD, 2);
         // Pennant number block (consistent purple) with a downward chevron tip —
         // matches the template's ribbon marker.
         const blockH = pH - 5;
         setFill(PURPLE); doc.roundedRect(10, cy, 15, blockH, 2, 2, 'F');
         doc.triangle(10, cy + blockH - 1, 25, cy + blockH - 1, 17.5, cy + blockH + 4, 'F');
-        txt(p.num, 17.5, cy + blockH / 2 + 2, { size: 11, color: WHITE, bold: true, align: 'center' });
+        txt(p.num, 17.5, cy + blockH / 2 + 2, { size: 11, color: WHITE, heavy: true, align: 'center' });
         txt(p.fit, 30, cy + (mDense ? 7 : 9), { size: 9, color: PURPLE, bold: true });
-        txt(p.type, 66, cy + (mDense ? 7 : 9), { size: 6.5, color: GRAY });
+        txt(p.type, 71.5, cy + (mDense ? 7 : 9), { size: 6.5, color: GRAY });
         txt(p.subject, 30, cy + (mDense ? 14 : 16.5), { size: 9, color: '#1F2937', bold: true, maxWidth: 88 });
-        txt(dL.join('\n'), 124, cy + pH / 2 - (dL.length - 1) * 2 + 0.5, { size: 7.5, color: GRAY, maxWidth: W - 140 });
+        txt(dL.join('\n'), 129.5, cy + pH / 2 - (dL.length - 1) * 2 + 0.5, { size: 7.5, color: GRAY, maxWidth: CW - 120 });
         cy += pH + (mDense ? 5 : 7);
       });
       if (cy + 16 < BOTTOM) {
         cy = instructionBox(cy, 'PLEASE NOTE', 'Subject pathways are indicative recommendations, not final. Explore options aligned with your aptitude, interests, academics and goals.', { bodySize: 7.5, lineH: 4.2, gapAfter: 4 });
       }
     }
+
+    cy = aiInsight(cy, '\u2726 Why these pathways fit you', 'stream_advice');
 
     // Tips to Strengthen Aptitude — kept together as one block (never split)
     cy += 3;
@@ -1791,11 +1868,11 @@ async function downloadPDF(override) {
     studentBar(25);
     cy = 40;
     await drawIcon('Tips to Strengthen Aptitude', 12, cy - 5.4, 7, { fill: '#FFFFFF', border: CARD_BD });
-    txt('Tips to Strengthen Aptitude', 22, cy, { size: 10, color: '#111827', bold: true }); cy += 8;
+    txt('Tips to Strengthen Aptitude', M + 12, cy, { size: 10, color: '#111827', bold: true }); cy += 8;
     // Two-column grid of numbered cards: uses the page width, easier to scan
     // than a long single-column list, and reads as designed guidance.
     const tipsGrid = (items, y) => {
-      const colW = (W - 20 - 5) / 2, gap = 5, rowGap = 3.5;
+      const colW = (CW - 5) / 2, gap = 5, rowGap = 3.5;
       doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
       const lines = items.map(t => doc.splitTextToSize(t, colW - 15));
       let yy = y;
@@ -1839,7 +1916,7 @@ async function downloadPDF(override) {
     }
     cy += 4;
     await drawIcon('Fostering Wellbeing', 12, cy - 5.4, 7, { fill: '#FFFFFF', border: CARD_BD });
-    txt('Fostering Healthy Personality Development & Emotional Wellbeing', 22, cy, { size: 9.5, color: '#111827', bold: true }); cy += 8;
+    txt('Fostering Healthy Personality Development & Emotional Wellbeing', M + 12, cy, { size: 9.5, color: '#111827', bold: true }); cy += 8;
     cy = tipsGrid(wellbeingTips, cy);
     cy += 4;
 
@@ -1851,8 +1928,8 @@ async function downloadPDF(override) {
     const cr = 'Dear Students, Please note that final academic and career decisions should be made by considering aptitude, interests, and academic performance together. This report is intended to serve as a guidance tool and should be used alongside discussions with parents, teachers, and counselors to support well-informed decision making.';
     const disc = 'This NuMind MAPS Report presents indicative insights derived from standardized assessments to support self-awareness, exploration, and informed decision-making. Recommendations are illustrative, not prescriptive, and should be interpreted alongside academic performance, evolving interests, and guidance from parents, teachers, or qualified counselors. Final academic and career decisions should not be made solely on the basis of this report.';
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);   const crL   = doc.splitTextToSize(cr, W - 28);
-    doc.setFontSize(7.5); const discL = doc.splitTextToSize(disc, W - 28);
+    doc.setFontSize(8);   const crL   = doc.splitTextToSize(cr, CW - 8);
+    doc.setFontSize(7.5); const discL = doc.splitTextToSize(disc, CW - 8);
     const crBoxH   = 11 + crL.length * 4.6;
     const discBoxH = 11 + discL.length * 4.2;
     const closingNeed = 16 + 10 + crBoxH + 8 + discBoxH;
@@ -1882,13 +1959,13 @@ async function downloadPDF(override) {
       cy = subHeading('Your Next Steps', cy);
       doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
       nextSteps.forEach((st, i) => {
-        const ls = doc.splitTextToSize(st[1], W - 74);
+        const ls = doc.splitTextToSize(st[1], CW - 54);
         const rh = Math.max(11, 4 + ls.length * 4.2);
-        rect(10, cy, W - 20, rh, i % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
-        setFill(PURPLE); doc.circle(16, cy + rh / 2, 2.6, 'F');
-        txt(String(i + 1), 16, cy + rh / 2 + 1.3, { size: 6.5, color: WHITE, bold: true, align: 'center' });
-        txt(st[0], 22, cy + rh / 2 + 1, { size: 7.5, color: '#1F2937', bold: true, maxWidth: 36 });
-        txt(ls.join('\n'), 62, cy + rh / 2 - (ls.length - 1) * 2.1 + 1, { size: 7.5, color: '#374151' });
+        rect(M, cy, CW, rh, i % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
+        setFill(PURPLE); doc.circle(21.5, cy + rh / 2, 2.6, 'F');
+        txt(String(i + 1), M + 6, cy + rh / 2 + 1.3, { size: 6.5, color: WHITE, bold: true, align: 'center' });
+        txt(st[0], M + 12, cy + rh / 2 + 1, { size: 7.5, color: '#1F2937', bold: true, maxWidth: 36 });
+        txt(ls.join('\n'), 67.5, cy + rh / 2 - (ls.length - 1) * 2.1 + 1, { size: 7.5, color: '#374151' });
         cy += rh;
       });
       cy += 10;
@@ -1897,14 +1974,14 @@ async function downloadPDF(override) {
     }
     cy = instructionBox(cy, 'NOTE', 'These areas are developmental in nature and can be strengthened over time through consistent practice, support, and conscious effort.', { bodySize: 7.5, lineH: 4.2, gapAfter: 10 });
 
-    rect(10, cy, W - 20, crBoxH, '#F5F3FF', '#C4B5FD', 2);
-    txt("Counsellor's Remarks", 14, cy + 6.5, { size: 8.5, color: PURPLE, bold: true });
-    txt(crL.join('\n'), 14, cy + 12.5, { size: 8, color: '#374151' });
+    rect(M, cy, CW, crBoxH, '#F5F3FF', '#C4B5FD', 2);
+    txt("Counsellor's Remarks", M + 4, cy + 6.5, { size: 8.5, color: PURPLE, bold: true });
+    txt(crL.join('\n'), M + 4, cy + 12.5, { size: 8, color: '#374151' });
     cy += crBoxH + 8;
 
-    rect(10, cy, W - 20, discBoxH, LIGHT_GRAY, null, 2);
-    txt('Disclaimer', 14, cy + 6.5, { size: 8.5, color: '#1F2937', bold: true });
-    txt(discL.join('\n'), 14, cy + 12.5, { size: 7.5, color: GRAY });
+    rect(M, cy, CW, discBoxH, LIGHT_GRAY, null, 2);
+    txt('Disclaimer', M + 4, cy + 6.5, { size: 8.5, color: '#1F2937', bold: true });
+    txt(discL.join('\n'), M + 4, cy + 12.5, { size: 7.5, color: GRAY });
 
     footer(10);
 
@@ -1914,9 +1991,9 @@ async function downloadPDF(override) {
     for (let p = 1; p <= totalPages; p++) {
       doc.setPage(p);
       const fy = H - 8;
-      line(10, fy - 3, W - 10, fy - 3, '#E5E7EB', 0.2);
-      txt('numind.co.in | Confidential — For personal guidance only', 14, fy, { size: 7, color: GRAY });
-      txt('Page ' + p + ' of ' + totalPages, W - 14, fy, { size: 7, color: GRAY, align: 'right' });
+      line(M, fy - 3, CW + 10, fy - 3, '#E5E7EB', 0.2);
+      txt('numind.co.in | Confidential — For personal guidance only', M + 4, fy, { size: 7, color: GRAY });
+      txt('Page ' + p + ' of ' + totalPages, CW + 6, fy, { size: 7, color: GRAY, align: 'right' });
     }
 
     // SAVE
