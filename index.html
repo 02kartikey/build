@@ -1369,8 +1369,6 @@ document.addEventListener('DOMContentLoaded', function() {
         <span class="nc-topbar-title">NuMind AI Counsellor</span>
       </div>
       <div class="nc-topbar-right">
-        <!-- Context chip: shows student's top trait once unlocked -->
-        <div class="nc-ctx-chip" id="nc-ctx-chip" style="display:none"></div>
         <div class="nc-report-pill" id="acp-report-chip" style="display:none;cursor:pointer" onclick="acToggleReportPanel()">
           <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
           Report
@@ -1713,41 +1711,36 @@ document.addEventListener('DOMContentLoaded', function() {
 }
 .nc-tb-sep { color:var(--ink4); font-size:12px; flex-shrink:0; }
 .nc-topbar-sub { font-size:12px; color:var(--ink3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.nc-topbar-right { display:flex; align-items:center; gap:7px; flex-shrink:0; }
+.nc-topbar-right { display:flex; align-items:center; flex-shrink:0; }
 
-/* Context chip — NuMind-specific — shows student's top trait */
-.nc-ctx-chip {
-  display:flex; align-items:center; gap:5px;
-  padding:4px 10px; border-radius:20px;
-  background:linear-gradient(135deg,rgba(92,79,181,0.08),rgba(139,92,246,0.06));
-  border:1px solid var(--vbd); color:var(--v);
-  font-size:11px; font-weight:600; white-space:nowrap;
-  max-width:230px; overflow:hidden; text-overflow:ellipsis;
-  animation:nc-ctxin .35s var(--ease-spring);
+/* ── Topbar action buttons — unified, app-consistent ── */
+.nc-report-pill, .nc-back-btn, .nmg-pill {
+  display:inline-flex; align-items:center; margin-left:9px;
+  font-family:var(--fb); font-size:12px; font-weight:600;
+  padding:7px 14px; border-radius:10px;
+  cursor:pointer; white-space:nowrap; line-height:1;
+  transition:background .14s, border-color .14s, box-shadow .14s, filter .14s;
 }
-@keyframes nc-ctxin { from{opacity:0;transform:scale(0.88)} to{opacity:1;transform:none} }
-.nc-ctx-chip::before { content:'✦'; font-size:9px; flex-shrink:0; opacity:0.7; }
-
+.nc-report-pill svg, .nc-back-btn svg, .nmg-pill svg, .nmg-pill span {
+  flex-shrink:0; margin-right:7px;
+}
+/* Report = primary action (open your report) */
 .nc-report-pill {
-  display:flex; align-items:center; gap:5px;
-  font-size:12px; font-weight:600; padding:6px 12px;
-  border-radius:20px; background:var(--gbg); border:1px solid var(--gbd); color:var(--green);
-  cursor:pointer; white-space:nowrap; transition:background .12s, border-color .12s, filter .12s;
+  background:linear-gradient(135deg,#4a3f9e,#5c4fb5); color:#fff;
+  border:1px solid transparent; box-shadow:0 2px 8px rgba(92,79,181,.22);
 }
-.nc-report-pill:hover { filter:brightness(0.97); border-color:var(--green); }
+.nc-report-pill:hover { filter:brightness(1.07); box-shadow:0 4px 12px rgba(92,79,181,.32); }
+/* Goals + Back = secondary outlined buttons (same shape as primary) */
+.nc-back-btn, .nmg-pill {
+  background:#fff; border:1px solid var(--vbd); color:var(--v);
+}
+.nc-back-btn:hover, .nmg-pill:hover { background:var(--vbg); border-color:#c4b5fd; }
 .nc-mobile-id {
   font-size:11px; font-weight:600; color:var(--v2);
   background:var(--vbg); border:1px solid var(--vbd);
-  padding:4px 9px; border-radius:20px;
+  padding:4px 9px; border-radius:10px;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100px;
 }
-.nc-back-btn {
-  display:flex; align-items:center; gap:5px; padding:6px 12px; border-radius:20px;
-  background:var(--vbg); border:1px solid var(--vbd); color:var(--v);
-  font-family:var(--fb); font-size:12px; font-weight:600; cursor:pointer;
-  transition:background .12s, border-color .12s; white-space:nowrap;
-}
-.nc-back-btn:hover { background:#ede9fe; border-color:#c4b5fd; }
 
 /* ══ LOCK SCREEN ══ */
 .nc-lock {
@@ -2134,7 +2127,6 @@ document.addEventListener('DOMContentLoaded', function() {
   .nc-starters { grid-template-columns:1fr; }
   .nc-welcome { padding:1.5rem 1rem; }
   .nc-welcome-hi { font-size:23px; }
-  .nc-ctx-chip { max-width:110px; }
   /* chips stay visible on mobile — they scroll horizontally */
   .nc-chip-row { padding-bottom:8px; }
   .nc-empty-mark { display:none; }
