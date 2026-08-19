@@ -899,10 +899,10 @@ async function downloadPDF(override) {
       doc.setLineWidth(0.8); setDraw(p.border); doc.line(px, py, px, py + 40);
       await drawIcon(p.code, px + 5, py + 5, 14, { fill: '#FFFFFF', border: p.border });
       txt(p.code,  px + 23, py + 9,  { size: 7.5, color: p.border, bold: true });
-      txt(p.title, px + 23, py + 14, { size: 7.3, color: '#1F2937', bold: true, maxWidth: 64 });
+      txt(p.title, px + 23, py + 14, { size: 7.3, color: '#1F2937', bold: true, maxWidth: 60 });
       doc.setFont('helvetica', 'italic'); doc.setFontSize(7); setTxtColor(p.border);
-      const sub = doc.splitTextToSize(p.sub, 84); doc.text(sub, px + 5, py + 25);
-      const body = doc.splitTextToSize(p.body, 84);
+      const sub = doc.splitTextToSize(p.sub, 78); doc.text(sub, px + 5, py + 25);
+      const body = doc.splitTextToSize(p.body, 78);
       txt(body.join('\n'), px + 5, py + 30, { size: 6.5, color: '#6B7280' });
     }
     cy += 92;
@@ -1154,8 +1154,8 @@ async function downloadPDF(override) {
     const emergingContent = aptEmerging.length ? aptEmerging.join('\n')
       : 'All areas are currently either strengths or focus areas — see the profile above.';
     doc.setFont('helvetica','normal'); doc.setFontSize(7); // measure at draw size
-    const sALines = doc.splitTextToSize(strongContent, 83);
-    const eALines = doc.splitTextToSize(emergingContent, 83);
+    const sALines = doc.splitTextToSize(strongContent, 79);
+    const eALines = doc.splitTextToSize(emergingContent, 79);
     const aptPairH = Math.max(9 + sALines.length * 4.6, 9 + eALines.length * 4.6, 22);
     rect(M,  cy, 87.5, aptPairH, A_STRONG.fill, A_STRONG.bd, 2);
     txt('Strong Aptitude Areas', M + 4, cy + 7, { size: 8.5, color: A_STRONG.t, bold: true });
@@ -1380,7 +1380,7 @@ async function downloadPDF(override) {
       // position, a dark hub, and a lime readiness chip below. No raw score is
       // printed — the band word carries the meaning (student-facing rule); the
       // needle position gives the visual magnitude.
-      const cx2 = px + 31, dialY = cy + cardH - 19, r = 12;
+      const cx2 = px + 28.5, dialY = cy + cardH - 19, r = 12;
       const bands = [[180, 240, C_STRENGTH], [240, 300, C_DEVELOPING], [300, 360, C_FOCUS]];
       doc.setLineWidth(3.2);
       bands.forEach(([a0, a1, col]) => {
@@ -1401,9 +1401,9 @@ async function downloadPDF(override) {
       doc.triangle(cx2 + bw * Math.cos(prad), dialY + bw * Math.sin(prad), cx2 - bw * Math.cos(prad), dialY - bw * Math.sin(prad), tipX, tipY, 'F');
       doc.circle(cx2, dialY, 1.4, 'F');
       setDraw('#FFFFFF'); doc.setLineWidth(0.4); doc.circle(cx2, dialY, 1.4, 'S');
-      txt('Strong', cx2 - r - 0.5, dialY + 0.8, { size: 4.6, color: GRAY, align: 'right' });
-      txt('Support', cx2 + r + 0.5, dialY + 0.8, { size: 4.6, color: GRAY });
-      txt('Developing', cx2, dialY - r - 1.6, { size: 4.6, color: GRAY, align: 'center' });
+      txt('Strong', cx2 - r - 2.5, dialY + 1, { size: 4.6, color: GRAY, align: 'right' });
+      txt('Support', cx2 + r + 2.5, dialY + 1, { size: 4.6, color: GRAY });
+      txt('Developing', cx2, dialY - r - 4, { size: 4.6, color: GRAY, align: 'center' });
       const chipW = 34, chipY = dialY + 4.5;
       setFill('#84BD32'); doc.roundedRect(cx2 - chipW / 2, chipY, chipW, 5.4, 2.7, 2.7, 'F');
       txt(c.displayLabel, cx2, chipY + 3.7, { size: 6, color: '#FFFFFF', bold: true, align: 'center', maxWidth: chipW - 2 });
@@ -1480,7 +1480,7 @@ async function downloadPDF(override) {
     };
     seaCards.forEach((c, ri) => {
       doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
-      const interpL = doc.splitTextToSize(interpByLabel[c.label] || 'A snapshot of current readiness in this area — it can strengthen with support and practice.', 88);
+      const interpL = doc.splitTextToSize(interpByLabel[c.label] || 'A snapshot of current readiness in this area — it can strengthen with support and practice.', (W - M) - dimColX[2] - 4);
       const rowH = Math.max(24, 13 + interpL.length * 4.5);
       rect(M, cy, CW, rowH, ri % 2 === 0 ? WHITE : LIGHT_GRAY, '#E5E7EB', 0);
       txt(c.title, dimColX[0] + 2, cy + rowH / 2 + 1, { size: 8, color: '#1F2937' });
@@ -1702,7 +1702,15 @@ async function downloadPDF(override) {
     const mHeaders = ['Career Cluster', 'Interest', 'Aptitude', 'Personality', 'SEAA', 'Alignment Level'];
     const mColX = [15.5, 64.5, 89.0, 113.5, 138.0, 154.9];
     const mColW = [52, 26, 26, 26, 18, 42];
-    rect(M, cy, CW, 7, PURPLE, null, 0);
+    // Matrix header — horizontal gradient (#481AA4 → #7139EB) per the guide.
+    (() => {
+      const c0 = hex2rgb('#481AA4'), c1 = hex2rgb('#7139EB'), n = 64, sw = CW / n;
+      for (let i = 0; i < n; i++) {
+        const t = i / (n - 1);
+        doc.setFillColor(Math.round(c0[0] + (c1[0] - c0[0]) * t), Math.round(c0[1] + (c1[1] - c0[1]) * t), Math.round(c0[2] + (c1[2] - c0[2]) * t));
+        doc.rect(M + i * sw, cy, sw + 0.4, 7, 'F');
+      }
+    })();
     mHeaders.forEach((h, i) => txt(h, mColX[i] + 2, cy + 5, { size: 7.5, color: WHITE, bold: true }));
     cy += 7;
 
@@ -1764,7 +1772,7 @@ async function downloadPDF(override) {
       txt(t._lines.join('\n'), 57, tMidY - (t._lines.length - 1) * 2.1 + 0.6, { size: 7.5, color: t.items.length ? '#1F2937' : GRAY });
       tyy += t._h;
     });
-    doc.setLineWidth(0.3); setDraw('#D1D5DB'); doc.roundedRect(10, cy, CW, tierStripH, 1.5, 1.5, 'S');
+    doc.setLineWidth(0.3); setDraw('#D1D5DB'); doc.roundedRect(M, cy, CW, tierStripH, 1.5, 1.5, 'S');
     cy += tierStripH + (mDense ? 8 : 12);
 
     // Recommended Subject Pathways — the template's 01/02/03 chevron cards.
@@ -1830,12 +1838,12 @@ async function downloadPDF(override) {
         // Pennant number block (consistent purple) with a downward chevron tip —
         // matches the template's ribbon marker.
         const blockH = pH - 5;
-        setFill(PURPLE); doc.roundedRect(10, cy, 15, blockH, 2, 2, 'F');
-        doc.triangle(10, cy + blockH - 1, 25, cy + blockH - 1, 17.5, cy + blockH + 4, 'F');
-        txt(p.num, 17.5, cy + blockH / 2 + 2, { size: 11, color: WHITE, heavy: true, align: 'center' });
-        txt(p.fit, 30, cy + (mDense ? 7 : 9), { size: 9, color: PURPLE, bold: true });
+        setFill(PURPLE); doc.roundedRect(M, cy, 15, blockH, 2, 2, 'F');
+        doc.triangle(M, cy + blockH - 1, M + 15, cy + blockH - 1, M + 7.5, cy + blockH + 4, 'F');
+        txt(p.num, M + 7.5, cy + blockH / 2 + 2, { size: 11, color: WHITE, heavy: true, align: 'center' });
+        txt(p.fit, M + 20, cy + (mDense ? 7 : 9), { size: 9, color: PURPLE, bold: true });
         txt(p.type, 71.5, cy + (mDense ? 7 : 9), { size: 6.5, color: GRAY });
-        txt(p.subject, 30, cy + (mDense ? 14 : 16.5), { size: 9, color: '#1F2937', bold: true, maxWidth: 88 });
+        txt(p.subject, M + 20, cy + (mDense ? 14 : 16.5), { size: 9, color: '#1F2937', bold: true, maxWidth: 88 });
         txt(dL.join('\n'), 129.5, cy + pH / 2 - (dL.length - 1) * 2 + 0.5, { size: 7.5, color: GRAY, maxWidth: CW - 120 });
         cy += pH + (mDense ? 5 : 7);
       });
