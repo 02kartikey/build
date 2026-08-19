@@ -314,9 +314,10 @@
     if (document.getElementById('nmg-css')) return;
     var css =
       '.nmg-panel{--sb:#f6f7fe;--sb2:rgba(96,84,196,.05);--sbb:rgba(96,84,196,.12);--sbt:#3a4166;--sbm:#8b90b3;--v:#6a5fc7;--v2:#8b7fe0}' +
-      '.nmg-pill{display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:4px 10px;' +
-        'border-radius:20px;background:var(--vbg,#efeafe);border:1px solid var(--vbd,#d9cffb);color:var(--v,#5c4fb5);cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}' +
-      '.nmg-pill:hover{background:#e6ddff;border-color:#c4b5fd}' +
+      '.nmg-pill{display:inline-flex;align-items:center;margin-left:9px;font-size:12px;font-weight:600;padding:7px 14px;' +
+        'border-radius:10px;background:#fff;border:1px solid var(--vbd,#d9cffb);color:var(--v,#5c4fb5);cursor:pointer;white-space:nowrap;line-height:1;transition:background .14s,border-color .14s}' +
+      '.nmg-pill span{flex-shrink:0;margin-right:7px}' +
+      '.nmg-pill:hover{background:var(--vbg,#efeafe);border-color:#c4b5fd}' +
 
       '.nmg-panel{position:fixed;inset:0;z-index:9600;display:none}' +
       '.nmg-panel.nmg-open{display:block}' +
