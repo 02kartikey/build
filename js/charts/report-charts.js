@@ -6,7 +6,7 @@
 import { S } from '../state.js';
 import { CPI_AREAS } from '../engine/cpi.js';
 import { NMAP_DIMS } from '../engine/nmap.js';
-import { DAAB_SUBS } from '../engine/daab.js';
+import { DAAB_SUBS, getStanine, stanineLabel } from '../engine/daab.js';
 import { SEA_DOMAINS } from '../engine/sea.js';
 import { CHARTS, destroyChart, CHART_ALPHA, stanineColor, SEL_CAT_COLOR, SEL_DOM_INFO } from './core.js';
 
@@ -25,6 +25,17 @@ function buildReportCharts() {
   if (daabBarEl) {
     const avail   = ['va','pa','na','lsa','hma','ar','ma','sa'].filter(k => S.daab[k].scores);
     if (avail.length) {
+      // Self-heal stale stanines. A student scored under the old gapped VA norm
+      // table has a stored stanine of undefined, which plots as a MISSING bar
+      // (the empty "Verbal" column on the report). Re-derive from the stored raw
+      // (matching daab-charts.js) and heal the label; write back so the tooltip
+      // and every other surface reading S.daab agree.
+      const gender = (S.student && S.student.gender) || 'M';
+      avail.forEach(k => {
+        const sc = S.daab[k].scores;
+        if (!(typeof sc.stanine === 'number' && sc.stanine > 0)) sc.stanine = getStanine(k, sc.raw || 0, gender);
+        if (!sc.label || sc.label === 'Not attempted')          sc.label   = stanineLabel(sc.stanine);
+      });
       const labels   = avail.map(k => subLabels[k]);
       const stanines = avail.map(k => S.daab[k].scores.stanine);
       const colors   = stanines.map(stanineColor);

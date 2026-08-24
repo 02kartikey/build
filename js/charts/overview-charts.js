@@ -6,7 +6,7 @@
 import { S } from '../state.js';
 import { CPI_AREAS } from '../engine/cpi.js';
 import { NMAP_DIMS } from '../engine/nmap.js';
-import { DAAB_SUBS } from '../engine/daab.js';
+import { DAAB_SUBS, getStanine, stanineLabel } from '../engine/daab.js';
 import { SEA_DOMAINS } from '../engine/sea.js';
 import { CHARTS, destroyChart, stanineColor, CHART_ALPHA, SEL_CAT_LABEL } from './core.js';
 
@@ -29,6 +29,15 @@ function buildOverviewCharts() {
       allGroups.push('Personality');
     });
   }
+  // Self-heal stale stanines (VA stored undefined under the old gapped norms →
+  // missing bar). Re-derive from the stored raw and write back so every surface
+  // reading S.daab agrees. Matches daab-charts.js / report-charts.js.
+  const _gender = (S.student && S.student.gender) || 'M';
+  available.forEach((k) => {
+    const sc = S.daab[k].scores;
+    if (!(typeof sc.stanine === 'number' && sc.stanine > 0)) sc.stanine = getStanine(k, sc.raw || 0, _gender);
+    if (!sc.label || sc.label === 'Not attempted')          sc.label   = stanineLabel(sc.stanine);
+  });
   available.forEach(k => {
     allLabels.push(SUB[k].short);
     allStanines.push(S.daab[k].scores.stanine);
