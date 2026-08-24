@@ -1238,6 +1238,8 @@ function _deriveSummary(personality, aptitude, interests, seaa, careers, report)
 
 module.exports = {
   deriveDisplayRowsFromAssessmentRow,
+  daabGetStanine: _daabGetStanine,
+  daabStanineLabel: _daabStanineLabel,
   _initDb,
   saveRegistration,
   saveSection,

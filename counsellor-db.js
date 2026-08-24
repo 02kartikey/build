@@ -266,6 +266,30 @@ async function _buildReportPayload(student) {
     } catch (_) { /* best-effort — never fail the report for a backfill */ }
   }
 
+  // Self-heal stale aptitude stanines before they reach the counsellor panel
+  // and Aria's context. A subtest scored under the old gapped VA norm table has
+  // a stored stanine of null/0 despite having a real raw_score, which renders as
+  // an empty (missing) bar and a wrong band. Re-derive from the stored raw_score
+  // using the same Node norm table the report generator uses.
+  //
+  // CRITICAL: only heal rows that were actually ATTEMPTED (raw_score is a
+  // number). A genuinely unattempted subtest is stored as stanine null /
+  // raw_score null / band 'Not attempted' on purpose — healing it would compute
+  // raw 0 -> stanine 1 and stamp a "Very Low" score the student never earned.
+  try {
+    const _db = require('./db.js');
+    if (Array.isArray(aptitude) && typeof _db.daabGetStanine === 'function') {
+      const _g = student.gender || 'M';
+      aptitude = aptitude.map((a) => {
+        if (typeof a.stanine === 'number' && a.stanine > 0) return a;   // already valid
+        if (typeof a.raw_score !== 'number') return a;                   // never attempted — leave absent
+        const st = _db.daabGetStanine(a.key, a.raw_score, _g);
+        const healedBand = (!a.band || a.band === 'Not attempted') ? _db.daabStanineLabel(st) : a.band;
+        return { ...a, stanine: st, band: healedBand, attempted: true };
+      });
+    }
+  } catch (_) { /* heal is best-effort — never fail the report */ }
+
   const jp = (v) => { try { return JSON.parse(v); } catch { return null; } };
 
   return {
