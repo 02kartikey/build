@@ -91,7 +91,11 @@
     var pill = document.getElementById('nmg-pill');
     if (!pill) return;
     var report = document.getElementById('acp-report-chip');
-    function shouldShow() { return loggedIn() || (report && report.style.display !== 'none'); }
+    // Show the Goals pill only once the session is actually unlocked in THIS
+    // load — i.e. the Report chip is visible. A cached token alone (loggedIn)
+    // is not enough, or the pill would show on the lock screen before the
+    // student re-enters their PIN.
+    function shouldShow() { return !!(report && report.style.display !== 'none'); }
     pill.style.display = shouldShow() ? '' : 'none';
     if (report && window.MutationObserver && !pill._obs) {
       pill._obs = new MutationObserver(function () { pill.style.display = shouldShow() ? '' : 'none'; });

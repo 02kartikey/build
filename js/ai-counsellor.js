@@ -19,6 +19,13 @@ function _acHandle401() {
   // Clear stale token
   _AC.counsellorToken = null;
   _AC.unlocked        = false;
+  // Clear the previous session's report data too. Leaving it in memory means the
+  // Report panel (and Aria's context) can still hold the last student's results
+  // behind the lock screen — a stale-data leak across sessions.
+  _AC.reportSummary   = null;
+  _AC.fullScores      = null;
+  _AC.journey         = null;
+  _AC.messages        = [];
   try { localStorage.removeItem('nmind_ac_ctok'); } catch(_) {}
   // Show the lock screen again with a friendly message
   const lockCard   = document.getElementById('acp-lock-card');
@@ -28,6 +35,16 @@ function _acHandle401() {
   if (lockLoader) lockLoader.style.display = 'none';
   if (lockCard)   lockCard.style.display   = '';
   if (chatArea)   chatArea.style.display   = 'none';
+  // Hide the topbar actions and drop the rendered report panel, so nothing from
+  // the expired session stays visible or re-openable.
+  const chipEl  = document.getElementById('acp-report-chip');
+  if (chipEl)  chipEl.style.display  = 'none';
+  const midEl   = document.getElementById('acp-mobile-id');
+  if (midEl)   midEl.style.display   = 'none';
+  const panelEl = document.getElementById('ac-report-panel');
+  if (panelEl) panelEl.style.display = 'none';
+  const panelBodyEl = document.getElementById('ac-report-panel-body');
+  if (panelBodyEl) panelBodyEl.innerHTML = '';
   if (errEl) {
     errEl.textContent   = 'Your session has expired. Please enter your email to continue.';
     errEl.style.display = 'block';
@@ -86,6 +103,15 @@ function _makeLockInput(id, type, placeholder, inputmode, onEnter) {
   var el = document.createElement('input');
   el.id = id; el.type = type; el.placeholder = placeholder;
   if (inputmode) el.setAttribute('inputmode', inputmode);
+  // Stop the browser (and password managers) from prefilling the PIN/OTP with a
+  // saved credential. 'new-password' suppresses saved-password autofill on the
+  // PIN fields; 'one-time-code' fits the OTP. The data-* attrs cover LastPass/
+  // 1Password/Bitwarden, which ignore plain autocomplete=off.
+  el.setAttribute('autocomplete', type === 'password' ? 'new-password' : 'one-time-code');
+  el.setAttribute('data-lpignore', 'true');
+  el.setAttribute('data-1p-ignore', 'true');
+  el.setAttribute('data-bwignore', 'true');
+  el.setAttribute('data-form-type', 'other');
   el.maxLength = 6;
   el.style.cssText = 'width:100%;padding:12px 14px;background:#f4f8f9;border:1.5px solid rgba(12,53,64,0.18);border-radius:10px;color:#0c3540;font-size:20px;letter-spacing:0.3em;text-align:center;box-sizing:border-box;outline:none;margin-bottom:10px';
   if (onEnter) el.addEventListener('keydown', function(e){ if (e.key === 'Enter') onEnter(); });
@@ -921,10 +947,21 @@ function acToggleReportPanel() {
 
 function _acRenderReportPanel() {
   const el = document.getElementById('ac-report-panel-body');
-  if (!el || el.dataset.rendered === '1') return;
-  el.dataset.rendered = '1';
+  if (!el) return;
+  // Re-render every time the panel opens so it always reflects the current
+  // session data (never a cached first render).
   const fs = _AC.fullScores || {};
   const rs = _AC.reportSummary || {};
+  // Guard: if the report isn't actually available yet, say so rather than
+  // rendering an empty/stale shell. (The server blocks unlock without a report,
+  // so this is a safety net for in-progress / partial reports.)
+  const hasData = (rs && Object.keys(rs).length > 0) ||
+                  (fs.personality && fs.personality.length) ||
+                  (fs.aptitude && fs.aptitude.length);
+  if (!hasData) {
+    el.innerHTML = '<div class="arp-section" style="text-align:center;color:var(--sbm);padding:26px 16px;font-size:13px;line-height:1.6">Your report is still being prepared.<br>Once your NuMind MAPS report has finished generating, it will appear here.</div>';
+    return;
+  }
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const bar = (w,cls) => `<div class="arp-bar-track"><div class="arp-bar-fill ${cls||''}" style="width:${Math.round(Math.min(100,Math.max(0,w)))}%"></div></div>`;
   let html = '';
