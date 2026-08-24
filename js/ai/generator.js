@@ -9,6 +9,7 @@ import { buildReportPrompt } from './prompt.js';
 import { _showPill, _hidePill, _updatePillMsg, _showToast } from './pill.js';
 import { _buildFallbackReport } from './fallback.js';
 import { renderAIReport, showAIError, showAILoading } from './render.js';
+import { getStanine, stanineLabel } from '../engine/daab.js';
 
 var _aiAbortCtrl  = null;
 
@@ -192,12 +193,18 @@ async function generateAIReport() {
   // ── Build DAAB payload (only completed sub-tests) ──
   const daabSubs = ['va','pa','na','lsa','hma','ar','ma','sa'];
   const daabPayload = {};
+  // Self-heal stale stanines (VA stored undefined under the old gapped norms)
+  // before they feed the GPT prompt AND the rule-based fallback — an undefined
+  // stanine there skews the narrative and makes the fallback's aptitude average
+  // NaN. Re-derive from the stored raw; gender-aware.
+  const _genGender = (S.student && S.student.gender) || 'M';
   daabSubs.forEach(function(k) {
     if (daab[k] && daab[k].scores) {
-      daabPayload[k] = {
-        raw: daab[k].scores.raw, max: daab[k].scores.max,
-        stanine: daab[k].scores.stanine, label: daab[k].scores.label
-      };
+      const sc = daab[k].scores;
+      const st = (typeof sc.stanine === 'number' && sc.stanine > 0) ? sc.stanine : getStanine(k, sc.raw || 0, _genGender);
+      const lb = (sc.label && sc.label !== 'Not attempted') ? sc.label : stanineLabel(st);
+      sc.stanine = st; sc.label = lb;
+      daabPayload[k] = { raw: sc.raw, max: sc.max, stanine: st, label: lb };
     }
   });
 
@@ -369,8 +376,7 @@ async function _callAPIWithStream(prompt, firstName, signal) {
       ...(APP_TOKEN ? { 'X-App-Token': APP_TOKEN } : {}),
     },
     body: JSON.stringify({
-      // Model is chosen server-side from OPENAI_MODEL (server.js); sending it
-      // here was dead and could misreport the model if the env differs.
+      model: 'gpt-4o',
       temperature: 0.65,
       max_tokens: 6000,
       stream: true,

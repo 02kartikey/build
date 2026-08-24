@@ -5,6 +5,7 @@
 
 import { S, _saveSession } from '../state.js';
 import { buildReportCharts } from '../charts/report-charts.js';
+import { getStanine, stanineLabel } from '../engine/daab.js';
 import { _aiState } from './generator.js';
 import { SEL_CAT_LABEL } from '../charts/core.js';
 
@@ -146,6 +147,17 @@ function _unusedLegacyReportRenderer(data) {
     const sea  = S.sea.scores;
     const daabSubs = ['va','pa','na','lsa','hma','ar','ma','sa'];
     const available = daabSubs.filter(k => S.daab[k] && S.daab[k].scores);
+
+    // Self-heal stale stanines (VA stored undefined under old gapped norms)
+    // BEFORE they feed the aptitude average below — an undefined stanine turns
+    // the reduce() into NaN, blanking the whole aptitude summary. Re-derive from
+    // the stored raw and write back (matches the report/overview/module charts).
+    const _daabG = (S.student && S.student.gender) || 'M';
+    available.forEach(k => {
+      const sc = S.daab[k].scores;
+      if (!(typeof sc.stanine === 'number' && sc.stanine > 0)) sc.stanine = getStanine(k, sc.raw || 0, _daabG);
+      if (!sc.label || sc.label === 'Not attempted')          sc.label   = stanineLabel(sc.stanine);
+    });
 
     // Personality: average stanine
     const nmapAvg = nmap ? (nmap.dims.reduce((s,d)=>s+d.stanine,0)/nmap.dims.length).toFixed(1) : null;
