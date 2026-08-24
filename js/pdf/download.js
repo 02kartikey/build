@@ -10,6 +10,7 @@ import { NMAP_DIMS } from '../engine/nmap.js';
 // self-heal a stale/undefined stanine (e.g. Verbal scored under an old table)
 // so the report never prints "Not attempted" for a subtest that has a raw.
 import { getStanine } from '../engine/daab.js';
+import { CPI_AREAS } from '../engine/cpi.js';
 
 async function downloadPDF(override) {
   /* ════════════════════════════════════════════════════════════════════
@@ -1287,19 +1288,13 @@ async function downloadPDF(override) {
     clusterHeaders.forEach((h, i) => txt(h, cColX[i] + 2, cy + 5, { size: 8, color: WHITE, bold: true }));
     cy += 7;
 
-    // Keys MUST match CPI_AREAS labels exactly (defined elsewhere in app.js).
-    const careerPathwayMap = {
-      'Science & Technology':         'Engineering · CS · Research · AI/ML',
-      'Health & Medical Science':     'Medicine · Allied Health · Public Health',
-      'Language & Communication':     'Journalism · Content · Linguistics · PR',
-      'Creative Design & Perf. Arts': 'UX/UI · Animation · Visual Arts · Performing Arts',
-      'Legal & Judiciary':            'Law · Policy · Civil Services',
-      'Administration & Governance':  'Public Admin · Management · Civil Services',
-      'Education & Research':         'Teaching · Academia · Research · EdTech',
-      'Business & Entrepreneurship':  'Business · Finance · Startups · Consulting',
-      'People & Service':             'Counselling · Social Work · NGO · HR',
-      'Sports & Physical Perf.':      'Sports Science · Coaching · Athletics',
-    };
+    // Sample career pathways per interest cluster come from CPI_AREAS (the
+    // single source of truth in engine/cpi.js) — no duplicated map here. The AI
+    // career_table still overrides these when present.
+    const careerPathwayMap = Object.fromEntries(
+      CPI_AREAS.filter(a => a.careers && a.careers.length)
+               .map(a => [a.label, a.careers.join(' · ')])
+    );
     const aiCareerTable = (ai && Array.isArray(ai.career_table)) ? ai.career_table : null;
     const clusters = ['Primary', 'Secondary', 'Exploratory'].map((tag, i) => {
       const item = top3[i] || { label: 'Still exploring — retake or discuss with your counsellor', score: 0 };
@@ -1316,6 +1311,12 @@ async function downloadPDF(override) {
       const interp = i === 0 ? 'Areas you may be most naturally drawn toward based on current interests'
                    : i === 1 ? 'Additional areas that may also align well and offer related pathways'
                              : 'Emerging areas worth exploring through exposure and learning';
+      // Keep the sample pathways scannable — show at most 3, whatever the source
+      // (AI career_table or the CPI fallback), split on · or , separators. Guard
+      // against a malformed AI value (null/number/object) becoming literal text.
+      pathways = (typeof pathways === 'string' ? pathways : '')
+        .split(/[·,]/).map(s => s.trim()).filter(Boolean).slice(0, 3).join(' · ')
+        || 'Multiple aligned pathways';
       return [tag, item.label, interp, pathways];
     });
     clusters.forEach((row, ri) => {
@@ -1372,7 +1373,7 @@ async function downloadPDF(override) {
       const cardH = Math.max(70, 22 + dl.length * 4.2 + 40);
       rect(px, cy, 57, cardH, '#F8FAF7', '#EAE1FF', 2);
       await drawIcon(c.title, px + 4, cy + 4, 9, { fill: '#FFFFFF', border: CARD_BD });
-      txt(c.title, px + 16, cy + 9.5, { size: 8, color: arcColor, bold: true, maxWidth: 42 });
+      txt(c.title, px + 16, cy + 9.5, { size: 8, color: arcColor, bold: true, maxWidth: 37 });
       txt(dl.join('\n'), px + 4, cy + 17, { size: 6.5, color: GRAY });
 
       // Needle-dial gauge (style guide): a semicircle with three readiness
@@ -1438,19 +1439,19 @@ async function downloadPDF(override) {
       const focuses   = s.focusByLabel[c.label] || [];
       // compute wrapped lines for each bullet
       doc.setFontSize(6.5); doc.setFont('helvetica', 'normal');
-      const sLines = strengths.map(it => doc.splitTextToSize('• ' + it, 54));
-      const fLines = focuses.map(it => doc.splitTextToSize('• ' + it, 54));
+      const sLines = strengths.map(it => doc.splitTextToSize('• ' + it, 49));
+      const fLines = focuses.map(it => doc.splitTextToSize('• ' + it, 49));
       const sH = sLines.reduce((t, l) => t + l.length * 3.8, 0);
       const fH = fLines.reduce((t, l) => t + l.length * 3.8, 0);
       const cardH = Math.max(42, 24 + sH + 8 + fH + 6);
       rect(px, cy, 57, cardH, CARD_FILL, CARD_BD, 2);
       await drawIcon(c.title, px + 4, cy + 3.5, 8, { fill: '#FFFFFF', border: CARD_BD });
-      txt(c.title, px + 15, cy + 8.5, { size: 8, color: c.color, bold: true, maxWidth: 44 });
+      txt(c.title, px + 15, cy + 8.5, { size: 8, color: c.color, bold: true, maxWidth: 38 });
       pill(c.displayLabel, px + 4, cy + 18, c.color, WHITE, 49, 6);
       txt('Strengths', px + 4, cy + 24, { size: 7, color: '#1F2937', bold: true });
       let by = cy + 28;
       sLines.forEach(ls => { txt(ls.join('\n'), px + 4, by, { size: 6.5, color: GRAY }); by += ls.length * 3.8; });
-      line(px + 4, by + 1, px + 58, by + 1, '#E5E7EB', 0.2);
+      line(px + 4, by + 1, px + 53, by + 1, '#E5E7EB', 0.2);
       by += 4;
       txt('Focus Areas', px + 4, by, { size: 7, color: '#1F2937', bold: true });
       by += 4;
@@ -1639,7 +1640,22 @@ async function downloadPDF(override) {
     // Source 1: AI career_table (preferred — real career names, fit ratings,
     // and a numeric suitability_pct).
     // Source 2: score-driven cluster matrix (fallback when no AI report).
-    const aiTable10 = (ai && Array.isArray(ai.career_table) && ai.career_table.length) ? ai.career_table.slice(0, 6) : null;
+    const aiTable10 = (ai && Array.isArray(ai.career_table) && ai.career_table.length)
+      ? (() => {
+          // The matrix column is "Career Cluster", so show one row per distinct
+          // domain rather than several specific careers from the same domain.
+          // Keep the highest-suitability career to represent each cluster, then
+          // take the top 6 domains by suitability.
+          const _pctOf = (r) => (typeof r.suitability_pct === 'number') ? r.suitability_pct : (parseFloat(r.suitability_pct) || 0);
+          const byCluster = new Map();
+          ai.career_table.forEach((r) => {
+            const key = String(r.cluster || r.career || '').trim() || '—';
+            const prev = byCluster.get(key);
+            if (!prev || _pctOf(r) > _pctOf(prev)) byCluster.set(key, r);
+          });
+          return Array.from(byCluster.values()).sort((a, b) => _pctOf(b) - _pctOf(a)).slice(0, 6);
+        })()
+      : null;
 
     let matrixRowsLive;
     if (aiTable10) {
@@ -1665,7 +1681,8 @@ async function downloadPDF(override) {
         const pct  = (typeof r.suitability_pct === 'number') ? Math.round(r.suitability_pct)
                    : (parseFloat(r.suitability_pct) || 0);
         const align = pct >= 80 ? 'Strong Fit' : pct >= 65 ? 'Emerging Fit' : 'Exploratory';
-        const careerName = r.career || r.cluster || '—';
+        // "Career Cluster" column shows the domain, not a single specific career.
+        const careerName = r.cluster || r.career || '—';
         return [careerName, interest, aptL, persL, seaL, align, pct, r.cluster || '', r.rationale || ''];
       });
     } else {
