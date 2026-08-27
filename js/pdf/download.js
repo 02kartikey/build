@@ -717,8 +717,13 @@ async function downloadPDF(override) {
     const stanineBar = (label, value, y, colorHex) => {
       txt(label, BAR_X - 3, y, { size: 7, color: '#1F2937', align: 'right' });
       rect(BAR_X, y - 3.5, BAR_W, 5, '#E5E7EB', null, 1);
-      rect(BAR_X, y - 3.5, (value / 9) * BAR_W, 5, colorHex, null, 1);
-      txt(String(value), BAR_X + BAR_W + 2, y, { size: 7, color: GRAY, bold: true });
+      // stanine 0 means the sub-test was never attempted. Draw no fill and show
+      // an em-dash rather than "0", which a student would read as "I scored
+      // zero" instead of "this wasn't taken".
+      const taken = typeof value === 'number' && value > 0;
+      if (taken) rect(BAR_X, y - 3.5, (value / 9) * BAR_W, 5, colorHex, null, 1);
+      txt(taken ? String(value) : '—', BAR_X + BAR_W + 2, y, { size: 7, color: GRAY, bold: true });
+      if (!taken) txt('Not attempted', BAR_X + 3, y, { size: 5.6, color: GRAY });
     };
 
     /* ═══════════════════════════════════════════════
