@@ -227,7 +227,6 @@ const IP_WINDOW = 60 * 1000;
 // (IP_RL_MAX=1000000) or if a large school NATs hundreds of students to one IP.
 const IP_RL_MAX = parseInt(process.env.IP_RL_MAX || '200', 10);
 const _ipRL    = new Map();
-const _loginRL = new Map();
 
 function _rlCheck(map, key, limit, windowMs) {
   const win = windowMs || RL_WINDOW;
@@ -253,7 +252,6 @@ function _getIP(req) {
 setInterval(() => {
   const n = Date.now();
   for (const [k, v] of _ipRL)    if (n > v.resetAt) _ipRL.delete(k);
-  for (const [k, v] of _loginRL) if (n > v.reset)   _loginRL.delete(k);
 }, 5 * 60 * 1000).unref();
 
 setInterval(() => {
@@ -332,6 +330,9 @@ const ARIA_SAFE_DISTRESS =
   "You are not alone in this. 💛";
 
 // Highest-severity patterns — caught instantly, even if moderation is unavailable.
+// SPLIT BY OUTCOME: harmful/out-of-scope requests are REFUSED, but distress must
+// never be refused — it needs the supportive crisis response. _tripwireHit()
+// covers the refuse set; _selfHarmHit() covers distress.
 const _SAFETY_TRIPWIRE = [
   /\b(detonat|grenade|molotov|napalm|\brdx\b|\btnt\b|\bied\b|pipe ?bomb|dirty bomb|ammonium nitrate|nerve agent|sarin|ricin|anthrax|bio ?weapon|gun ?powder|silencer|ghost gun|zip gun)\b/i,
   /\bhow\s+(to|do i|can i|would i)\s+(make|build|create|synthesi[sz]e|manufacture|assemble)\s+(a|an|my|the)?\s*(bomb|explosive|weapon|gun|firearm|poison|meth|cocaine|lsd|drug)\b/i,
@@ -339,9 +340,40 @@ const _SAFETY_TRIPWIRE = [
   /\b(porn|pornograph|hentai|\bnsfw\b|nud(?:e|es|ity)|naked pics?|sexual (positions?|acts?)|blow ?job|hand ?job|masturbat|orgasm|sexting)\b/i,
   /\bhow\s+(to|do i|can i)\s+(have sex|lose my virginity|send nudes)\b/i,
 ];
+
+/* Self-harm / suicidal ideation — offline safety net.
+   The OpenAI moderation call FAILS OPEN (an outage, timeout or non-200 returns
+   'allow'). Without these patterns a student in crisis would reach the model
+   with only the system prompt protecting them, which for a platform used by
+   13–18 year olds is the highest-consequence failure mode in the product.
+   These are deliberately broad: a false positive shows a caring message with
+   support resources, which is a harmless outcome, whereas a false negative is
+   not. Matching routes to ARIA_SAFE_DISTRESS (support), never to a refusal. */
+const _SELF_HARM_TRIPWIRE = [
+  /\b(kill|killing)\s+(myself|my ?self)\b/i,
+  /\bk\s*[\*\.]?\s*y\s*[\*\.]?\s*s\b/i,                       // "kys" and obfuscations
+  /\b(end|ending|take|taking)\s+(my|his|her|their)\s+(own\s+)?life\b/i,
+  /\b(commit|committing|attempt|attempting)\s+suicide\b/i,
+  /\bsuicid(e|al)\b/i,
+  /\b(want|wanna|going|plan|planning|thinking about)\s+to\s+die\b/i,
+  /\bi\s+(want|wanna)\s+to\s+(die|disappear|not\s+exist|not\s+be\s+here)\b/i,
+  /\b(don'?t|do not|dont)\s+want\s+to\s+(live|be\s+alive|be\s+here|exist)\b/i,
+  /\b(hurt|harm|cut|cutting|burn|burning)\s+(myself|my ?self)\b/i,
+  /\bself[\s-]?harm(ing)?\b/i,
+  /\b(better|everyone.{0,20}better)\s+off\s+without\s+me\b/i,
+  /\bno\s+(point|reason)\s+(in\s+)?(living|going on|being alive)\b/i,
+  /\bnobody\s+(would|will)\s+(miss|care about)\s+me\b/i,
+  /\b(overdose|od)\s+on\b/i,
+];
+
 function _tripwireHit(text) {
   const t = String(text || '');
   return _SAFETY_TRIPWIRE.some(rx => rx.test(t));
+}
+
+function _selfHarmHit(text) {
+  const t = String(text || '');
+  return _SELF_HARM_TRIPWIRE.some(rx => rx.test(t));
 }
 
 // OpenAI omni-moderation → 'allow' | 'block' | 'selfharm'. Fails open (the
@@ -1140,7 +1172,13 @@ async function _handleCounsellorChat(req, res) {
   // ── Child-safety gate: screen the student's message before it reaches the
   //    model. Tripwire (instant) first, then OpenAI moderation. Harmful/out-of
   //    -bounds → warm redirect; distress → caring, resource-forward response.
-  let _gate = _tripwireHit(message) ? 'block' : null;
+  //    The self-harm tripwire is checked BEFORE the network call so a moderation
+  //    outage (which fails open) can never leave a student in crisis unhandled,
+  //    and it takes priority over the refusal tripwire — distress must receive
+  //    support, never a refusal.
+  let _gate = null;
+  if (_selfHarmHit(message))      _gate = 'selfharm';
+  else if (_tripwireHit(message)) _gate = 'block';
   if (!_gate) {
     const mod = await _moderateInput(message);
     _gate = mod.action; // 'allow' | 'block' | 'selfharm'
@@ -1556,16 +1594,17 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/save-report')              return await _handleSaveReport(req, res);
     if (method === 'POST' && pathname === '/api/ai-report')                return await _handleAIReport(req, res);
     if (method === 'POST' && pathname === '/api/dashboard/login') {
-      const _ip = req.socket.remoteAddress || 'unknown';
-      const _now = Date.now(), _win = 15 * 60 * 1000, _lim = 10;
-      const _loginEntry = _loginRL.get(_ip) || { count: 0, reset: _now + _win };
-      if (_now > _loginEntry.reset) { _loginEntry.count = 0; _loginEntry.reset = _now + _win; }
-      _loginEntry.count++;
-      _loginRL.set(_ip, _loginEntry);
-      if (_loginEntry.count > _lim) {
-        const retryAfter = Math.ceil((_loginEntry.reset - _now) / 1000);
-        res.writeHead(429, { 'Retry-After': retryAfter, 'Content-Type': 'application/json' });
-        return res.end(JSON.stringify({ error: 'Too many login attempts. Try again in ' + Math.ceil(retryAfter/60) + ' minutes.' }));
+      // Cluster-safe, proxy-aware brute-force guard. Previously this used an
+      // in-memory Map, so with PM2 `instances: 'max'` an attacker got 10×N
+      // attempts (one bucket per worker), and it keyed on
+      // req.socket.remoteAddress — which behind Render's proxy is the PROXY's
+      // address, putting every staff user into one shared bucket. _rlCheckDb is
+      // shared across workers and _getIP honours x-forwarded-for, matching every
+      // other authentication endpoint here.
+      const rl = await _rlCheckDb('dashboard-login', _getIP(req), 10, 15 * 60 * 1000);
+      if (!rl.allowed) {
+        res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Too many login attempts. Try again in ' + Math.ceil(rl.retryAfter / 60) + ' minutes.' }));
       }
       return await dashApi.handle(req, res);
     }

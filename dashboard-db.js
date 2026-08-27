@@ -118,6 +118,23 @@ async function login(email, password) {
   if (!user || !user.active) return null;
   if (!_verifyPassword(String(password || ''), user.password_hash)) return null;
 
+  // Transparent hash upgrade. Accounts created before the scrypt migration still
+  // hold an unsalted SHA-256 digest (no ':' separator), which is cheap to
+  // brute-force if the table ever leaks. A successful login is the one moment we
+  // hold the plaintext, so re-hash with scrypt + a fresh salt and write it back.
+  // Best-effort: a failure must never block a valid login — the next successful
+  // login retries.
+  if (user.password_hash && !String(user.password_hash).includes(':')) {
+    try {
+      await pg.exec(
+        'UPDATE dashboard_users SET password_hash = $1 WHERE id = $2',
+        [_hashPassword(String(password || '')), user.id]
+      );
+    } catch (e) {
+      console.warn('[auth] legacy password hash upgrade failed for user', user.id, e && e.message);
+    }
+  }
+
   const token     = crypto.randomBytes(32).toString('hex');
   const expiresAt = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString();
   const now       = new Date().toISOString();
@@ -296,10 +313,8 @@ function _studentWhere(schools, { class: cls, section, search, status } = {}) {
   let where = `WHERE LOWER(BTRIM(s.school)) IN (${ph})`;
   const p   = [...params];
   let n = params.length + 1;
-  // Case/whitespace-insensitive so a picked "10-B" matches stored "10-B " and
-  // a class-scoped counsellor doesn't get an empty roster on a padding mismatch.
-  if (cls)     { where += ` AND ${pg.normEq('s.class', `$${n}`)}`;   p.push(cls);     n++; }
-  if (section) { where += ` AND ${pg.normEq('s.section', `$${n}`)}`; p.push(section); n++; }
+  if (cls)     { where += ` AND s.class = $${n++}`;   p.push(cls); }
+  if (section) { where += ` AND s.section = $${n++}`; p.push(section); }
   if (search)  {
     where += ` AND (LOWER(s.full_name) LIKE $${n} OR LOWER(s.email) LIKE $${n + 1})`;
     const q = `%${search.toLowerCase()}%`;
@@ -454,11 +469,9 @@ async function getSchoolSummaries(schools) {
   const params = list.map(x => String(x).trim().toLowerCase());
 
   const rows = await pg.many(
-    // Group by the normalised class key so "10-B" and "10-B " collapse into one
-    // row; MIN(BTRIM(class)) gives a single tidy label for display.
     `SELECT
        s.school,
-       MIN(BTRIM(s.class))                                                                 AS class,
+       s.class,
        COUNT(*)::int                                                                       AS total,
        SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)::int                    AS completed,
        SUM(CASE WHEN rs.session_id IS NULL AND a.session_id IS NOT NULL THEN 1 ELSE 0 END)::int AS in_progress,
@@ -467,8 +480,8 @@ async function getSchoolSummaries(schools) {
      LEFT JOIN assessments    a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary rs ON rs.session_id = s.session_id
      WHERE LOWER(BTRIM(s.school)) IN (${ph})
-     GROUP BY LOWER(BTRIM(s.school)), s.school, ${pg.normKey('s.class')}
-     ORDER BY s.school, MIN(BTRIM(s.class))`,
+     GROUP BY LOWER(BTRIM(s.school)), s.school, s.class
+     ORDER BY s.school, s.class`,
     params
   );
 
@@ -994,14 +1007,11 @@ async function listAccessNames(school, klass) {
    Bulk import stores class as free text ("10-B", "Class 10 DS"), so the entry
    form cannot use a fixed Grade 9-12 list — it must offer these values. */
 async function listAccessClasses(school) {
-  // DISTINCT ON the normalised key so "10-B" and "10-B " don't both appear;
-  // return a trimmed representative for a clean dropdown.
   return pg.many(
-    `SELECT DISTINCT ON (${pg.normKey('class')}) BTRIM(class) AS class
-       FROM students
-      WHERE ${pg.normEq('school', '$1')}
-        AND access_code IS NOT NULL AND class IS NOT NULL AND BTRIM(class) <> ''
-      ORDER BY ${pg.normKey('class')}`,
+    `SELECT DISTINCT class FROM students
+      WHERE lower(btrim(school)) = lower(btrim($1))
+        AND access_code IS NOT NULL AND class IS NOT NULL AND btrim(class) <> ''
+      ORDER BY class`,
     [String(school || '').trim()]
   );
 }
