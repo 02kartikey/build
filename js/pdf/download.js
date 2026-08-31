@@ -1303,25 +1303,36 @@ async function downloadPDF(override) {
     const aiCareerTable = (ai && Array.isArray(ai.career_table)) ? ai.career_table : null;
     const clusters = ['Primary', 'Secondary', 'Exploratory'].map((tag, i) => {
       const item = top3[i] || { label: 'Still exploring — retake or discuss with your counsellor', score: 0 };
-      let pathways = careerPathwayMap[item.label] || 'Multiple aligned pathways';
-      // Pull from AI career_table when available — prefer matched cluster name,
-      // else fall back to positional row.
+      // Collect ALL AI-provided careers whose cluster matches this row — the AI
+      // schema is one career per row, so a single .find() previously produced only
+      // one pathway per cluster. We filter, then top up from CPI_AREAS (the single
+      // source of truth) to guarantee 2-3 items whenever the fallback has them.
+      const items = [];
+      const clusterKey = (item.label || '').split(' ')[0].toLowerCase();
       if (aiCareerTable) {
-        const matched = aiCareerTable.find(r => (r.cluster || '').toLowerCase().includes((item.label || '').split(' ')[0].toLowerCase()))
-                        || aiCareerTable[i];
-        if (matched) {
-          pathways = matched.career || matched.pathways || matched.careers || pathways;
+        const matched = aiCareerTable.filter(r =>
+          typeof r?.cluster === 'string' && r.cluster.toLowerCase().includes(clusterKey)
+        );
+        const list = matched.length ? matched : (aiCareerTable[i] ? [aiCareerTable[i]] : []);
+        for (const m of list) {
+          const raw = m?.career || m?.pathways || m?.careers;
+          if (typeof raw === 'string') {
+            raw.split(/[·,]/).map(s => s.trim()).filter(Boolean).forEach(s => items.push(s));
+          }
         }
       }
+      // Top up from CPI_AREAS fallback when AI gave < 3 (dedup case-insensitive).
+      const fallback = (careerPathwayMap[item.label] || '')
+        .split(/[·,]/).map(s => s.trim()).filter(Boolean);
+      const seen = new Set(items.map(s => s.toLowerCase()));
+      for (const f of fallback) {
+        if (items.length >= 3) break;
+        if (!seen.has(f.toLowerCase())) { items.push(f); seen.add(f.toLowerCase()); }
+      }
+      const pathways = items.slice(0, 3).join(' · ') || 'Multiple aligned pathways';
       const interp = i === 0 ? 'Areas you may be most naturally drawn toward based on current interests'
                    : i === 1 ? 'Additional areas that may also align well and offer related pathways'
                              : 'Emerging areas worth exploring through exposure and learning';
-      // Keep the sample pathways scannable — show at most 3, whatever the source
-      // (AI career_table or the CPI fallback), split on · or , separators. Guard
-      // against a malformed AI value (null/number/object) becoming literal text.
-      pathways = (typeof pathways === 'string' ? pathways : '')
-        .split(/[·,]/).map(s => s.trim()).filter(Boolean).slice(0, 3).join(' · ')
-        || 'Multiple aligned pathways';
       return [tag, item.label, interp, pathways];
     });
     clusters.forEach((row, ri) => {
