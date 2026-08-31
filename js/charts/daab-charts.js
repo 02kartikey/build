@@ -37,7 +37,10 @@ function buildDAAbCharts() {
   const stanines = healed.map(h => h.st);
   const raws     = healed.map(h => h.raw);
   const maxes    = healed.map(h => h.max);
-  const colors   = stanines.map(stanineColor);
+  // Wrap in an arrow so .map doesn't pass (element, index, array) to stanineColor.
+  // Its second arg is alpha — an index of 0 (Verbal, first in DAAB_SUBS) rendered
+  // the bar fully transparent in both charts; higher indices got clamped to opaque.
+  const colors   = stanines.map(s => stanineColor(s));
 
   // ── 1. Bar with annotation line ──
   destroyChart('daab-bar');

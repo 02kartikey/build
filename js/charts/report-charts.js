@@ -38,7 +38,9 @@ function buildReportCharts() {
       });
       const labels   = avail.map(k => subLabels[k]);
       const stanines = avail.map(k => S.daab[k].scores.stanine);
-      const colors   = stanines.map(stanineColor);
+      // Wrap in an arrow so .map doesn't leak the index as stanineColor's alpha arg;
+      // index 0 (first sub) otherwise rendered the bar fully transparent.
+      const colors   = stanines.map(s => stanineColor(s));
       CHARTS['daab-bar-rpt'] = new Chart(daabBarEl, {
         type: 'bar',
         data: {
@@ -129,7 +131,9 @@ function buildReportCharts() {
   if (nmapBarEl && S.nmap.scores) {
     const dims     = S.nmap.scores.dims;
     const stanines = dims.map(d => d.stanine);
-    const colors   = stanines.map(stanineColor);
+    // Wrap in an arrow so .map doesn't leak the index as stanineColor's alpha arg;
+    // index 0 (first dim) otherwise rendered the bar fully transparent.
+    const colors   = stanines.map(s => stanineColor(s));
     CHARTS['nmap-bar-rpt'] = new Chart(nmapBarEl, {
       type:'bar',
       data:{
