@@ -343,12 +343,53 @@ export function populateSchools() {
 
   let schools = (INDIA_DATA[state][city] || []).slice().sort();
 
+  /* Merge in schools that are actually in the database. INDIA_DATA is a
+     curated list of well-known institutions; a school that has onboarded to
+     NuMind is very often not on it. Without this, a student at "ABPS,BAGA"
+     finds no entry for their own school, picks "Other", and types some
+     variant of the name — which lands them in a school their counsellor is
+     not assigned to, so they never appear on that counsellor's roster.
+     Registering under the exact spelling the school already uses is what
+     keeps them visible. Best-effort: if the lookup fails the curated list
+     still works. */
   if (schEl.tagName === 'SELECT') {
-    // Add "Other (type below)" option at end
-    const opts = [...schools, 'Other (type below)'];
-    _setOptions(schEl, opts, 'Select School');
-    schEl.disabled = false;
+    const render = (extra) => {
+      // _setOptions clears innerHTML, which drops the current selection. Carry
+      // it across the re-render: the DB list arrives a moment after the first
+      // paint, and a student who already picked their school (or "Other" and
+      // typed a name) must not have that silently reset out from under them.
+      const prev = schEl.value;
+      const merged = [...new Set([...schools, ...extra])].sort();
+      _setOptions(schEl, [...merged, 'Other (type below)'], 'Select School');
+      schEl.disabled = false;
+      if (prev && [...schEl.options].some(o => o.value === prev)) schEl.value = prev;
+    };
+    render([]);   // paint immediately; refine when the fetch returns
+    _knownSchools()
+      .then((known) => {
+        // Nothing to add, or the student already moved on to typing their own
+        // school name — leave the field alone either way.
+        if (!known.length) return;
+        if (schEl.value === 'Other (type below)') return;
+        render(known);
+      })
+      .catch(() => {});
   }
+}
+
+/* Schools already present in the database, fetched once per page load and
+   cached. Same endpoint the access-code screens use. */
+let _knownSchoolsCache = null;
+let _knownSchoolsInFlight = null;
+function _knownSchools() {
+  if (_knownSchoolsCache) return Promise.resolve(_knownSchoolsCache);
+  if (_knownSchoolsInFlight) return _knownSchoolsInFlight;
+  _knownSchoolsInFlight = fetch('/api/student-access/schools')
+    .then((r) => r.json())
+    .then((j) => { _knownSchoolsCache = (j && j.schools) || []; return _knownSchoolsCache; })
+    .catch(() => { _knownSchoolsCache = []; return _knownSchoolsCache; })
+    .finally(() => { _knownSchoolsInFlight = null; });
+  return _knownSchoolsInFlight;
 }
 
 export function handleSchoolChange() {
