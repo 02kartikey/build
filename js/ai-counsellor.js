@@ -1067,6 +1067,176 @@ window.acToggleReportPanel = acToggleReportPanel;
 
 /* ── Expose on window for inline HTML handlers ──────────────────── */
 window._AC                   = _AC;   // needed by auto-restore in index.html
+/* ═════════════════════════════════════════════════════════════════
+   ACCESS-CODE LOGIN for the Aria lock screen.
+   Mirrors the registration access-code flow (school/class/name/code).
+   Email-less bulk-imported students use this — no email, no OTP, no PIN.
+   Server route: /api/counsellor-access-login  (see access-login-handler.js)
+═════════════════════════════════════════════════════════════════ */
+
+function acpSwitchLockTab(mode) {
+  var tE = document.getElementById('acp-tab-email');
+  var tC = document.getElementById('acp-tab-code');
+  var pE = document.getElementById('acp-mode-email');
+  var pC = document.getElementById('acp-mode-code');
+  if (!tE || !tC || !pE || !pC) return;
+  var codeMode = (mode === 'code');
+  tE.classList.toggle('active', !codeMode); tE.setAttribute('aria-selected', String(!codeMode));
+  tC.classList.toggle('active',  codeMode); tC.setAttribute('aria-selected', String( codeMode));
+  pE.style.display = codeMode ? 'none' : '';
+  pC.style.display = codeMode ? ''     : 'none';
+  // Clear any stale error when switching tabs.
+  var eE = document.getElementById('acp-email-err');
+  var eC = document.getElementById('acp-code-err');
+  if (eE) eE.style.display = 'none';
+  if (eC) eC.style.display = 'none';
+  // Load the school suggestions from the database the first time this tab is
+  // opened. Schools come from students who actually hold an access code, so
+  // the list reflects who can really use this form.
+  if (codeMode) {
+    var dst = document.getElementById('acp-code-school-list');
+    if (dst && !dst.children.length && typeof window._fillSchoolDatalist === 'function') {
+      window._fillSchoolDatalist('acp-code-school-list', '');
+    }
+  }
+}
+
+/* Request sequencing — see the identical guard in router.js.
+   The school field fires onchange and onblur, and each keystroke can start
+   another lookup. Without a sequence check, overlapping responses each clear
+   and re-append, which duplicated the class list, and a slow names response
+   could land after a newer one and show the wrong class's students. */
+var _acpClassSeq = 0;
+var _acpNameSeq  = 0;
+
+function _acpResetNames(msg) {
+  var sel = document.getElementById('acp-code-name');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">' + msg + '</option>';
+  sel.disabled = true;
+}
+
+/* Populate the Class dropdown for the typed school. Same endpoint the
+   registration access-code screen uses — no server change needed. */
+async function acpLoadCodeClasses() {
+  var sch = document.getElementById('acp-code-school');
+  var cls = document.getElementById('acp-code-class');
+  var err = document.getElementById('acp-code-err');
+  if (!sch || !cls) return;
+  var school = (sch.value || '').trim();
+
+  var seq = ++_acpClassSeq;
+  _acpResetNames('Select your school and class first\u2026');
+  cls.innerHTML = '<option value="">Select\u2026</option>';
+  if (!school) return;
+
+  try {
+    var r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school), { headers: _acHeaders() });
+    var j = await r.json();
+    if (seq !== _acpClassSeq) return;
+    var classes = (j && j.classes) || [];
+    if (!classes.length) {
+      if (err) { err.textContent = 'No students with access codes found for that school. Please check the spelling with your teacher.'; err.style.display = 'block'; }
+      return;
+    }
+    if (err) err.style.display = 'none';
+    cls.innerHTML = '<option value="">Select\u2026</option>';
+    classes.forEach(function (c) {
+      var o = document.createElement('option'); o.value = c; o.textContent = c; cls.appendChild(o);
+    });
+  } catch (_) {
+    if (seq !== _acpClassSeq) return;
+    if (err) { err.textContent = 'Could not load classes. Please check your connection.'; err.style.display = 'block'; }
+  }
+}
+
+async function acpLoadCodeNames() {
+  var sch = document.getElementById('acp-code-school');
+  var cls = document.getElementById('acp-code-class');
+  var sel = document.getElementById('acp-code-name');
+  var err = document.getElementById('acp-code-err');
+  if (!sch || !cls || !sel) return;
+  var school = (sch.value || '').trim(), klass = (cls.value || '').trim();
+
+  var seq = ++_acpNameSeq;
+  _acpResetNames(klass ? 'Loading\u2026' : 'Select your school and class first\u2026');
+  if (!school || !klass) return;
+
+  try {
+    var r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school) +
+                        '&class=' + encodeURIComponent(klass), { headers: _acHeaders() });
+    var j = await r.json();
+    if (seq !== _acpNameSeq) return;
+    var names = (j && j.names) || [];
+    if (!names.length) {
+      _acpResetNames('No students found for this class');
+      if (err) { err.textContent = 'No students found for that school and class. Please check with your teacher.'; err.style.display = 'block'; }
+      return;
+    }
+    if (err) err.style.display = 'none';
+    sel.innerHTML = '<option value="">Select your name\u2026</option>';
+    names.forEach(function (n) {
+      var o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
+    });
+    sel.disabled = false;
+  } catch (_) {
+    if (seq !== _acpNameSeq) return;
+    _acpResetNames('Could not load names');
+    if (err) { err.textContent = 'Could not load names. Please check your connection.'; err.style.display = 'block'; }
+  }
+}
+
+/* Submit the access-code login. On success, the server returns the same
+   payload shape as /api/counsellor-verify-pin, so _acApplySession consumes
+   it without modification. */
+var _acpAccessBusy = false;
+async function acpAccessLogin() {
+  if (_acpAccessBusy) return;
+  var err  = document.getElementById('acp-code-err');
+  var btn  = document.getElementById('acp-code-btn');
+  var school = ((document.getElementById('acp-code-school') || {}).value || '').trim();
+  var klass  = ((document.getElementById('acp-code-class')  || {}).value || '').trim();
+  var name   = ((document.getElementById('acp-code-name')   || {}).value || '').trim();
+  var code   = ((document.getElementById('acp-code-code')   || {}).value || '').trim().toUpperCase();
+
+  if (!school || !klass || !name || !code) {
+    if (err) { err.textContent = 'Please fill in all four fields.'; err.style.display = 'block'; }
+    return;
+  }
+  _acpAccessBusy = true;
+  if (btn) { btn.disabled = true; btn.textContent = 'Unlocking…'; }
+  if (err) err.style.display = 'none';
+
+  try {
+    var resp = await fetch('/api/counsellor-access-login', {
+      method: 'POST', headers: _acHeaders(),
+      body: JSON.stringify({ school: school, class: klass, name: name, code: code }),
+    });
+    var data = await resp.json().catch(function() { return {}; });
+    if (!resp.ok || !data.unlocked) {
+      if (err) {
+        err.textContent = data.error || 'Those details do not match. Please check with your teacher.';
+        err.style.display = 'block';
+      }
+      if (btn) { btn.disabled = false; btn.textContent = 'Unlock with Access Code'; }
+      return;
+    }
+    // Populate _LOCK just enough for _acApplySession to pick up the identity.
+    _LOCK.email = data.email || '';   // synthetic 'access:<session_id>' — treated as opaque by frontend
+    _acApplySession(data);
+  } catch (_) {
+    if (err) { err.textContent = 'Connection error. Please try again.'; err.style.display = 'block'; }
+    if (btn) { btn.disabled = false; btn.textContent = 'Unlock with Access Code'; }
+  } finally {
+    _acpAccessBusy = false;
+  }
+}
+
+window.acpSwitchLockTab   = acpSwitchLockTab;
+window.acpLoadCodeClasses = acpLoadCodeClasses;
+window.acpLoadCodeNames   = acpLoadCodeNames;
+window.acpAccessLogin     = acpAccessLogin;
+
 window.acUnlock              = acUnlock;
 window.acSend                = acSend;
 window.acClearHistory        = acClearHistory;

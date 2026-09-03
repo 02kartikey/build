@@ -183,27 +183,57 @@ let _accessBusy = false;
 /* Populate the Class dropdown from the server for the typed school. The old
    hardcoded Grade 9-12 options could never match free-text imported classes
    like "10-B", which made every such student unreachable from this form. */
+/* Request sequencing.
+
+   The school field fires both onchange and onblur, and each keystroke can
+   start another lookup, so several requests are in flight at once. Without a
+   guard each one clears the dropdown and appends its own results: two
+   overlapping class lookups produced the duplicated "9, X, XI, XII, 9, X, XI,
+   XII" list, and a slow names lookup for the previously-selected class could
+   land after a newer one and repaint the list with the wrong class's students.
+
+   Each loader owns a counter. A response only paints if it is still the most
+   recent request for that loader; anything older is discarded. */
+let _accessClassSeq = 0;
+let _accessNameSeq  = 0;
+
+function _resetNameSelect(msg) {
+  const sel = document.getElementById('ac-name');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">' + msg + '</option>';
+  sel.disabled = true;
+}
+
+/* Populate the Class dropdown from the server for the typed school. The old
+   hardcoded Grade 9-12 options could never match free-text imported classes
+   like "10-B", which made every such student unreachable from this form. */
 async function loadAccessClasses() {
   const sch = document.getElementById('ac-school');
   const cls = document.getElementById('ac-class');
-  const sel = document.getElementById('ac-name');
   const err = document.getElementById('ac-err');
   if (!sch || !cls) return;
   const school = (sch.value || '').trim();
+
+  const seq = ++_accessClassSeq;
+  // Selecting a different school invalidates the class AND the name below it.
+  _resetNameSelect('Select your school and class first\u2026');
   cls.innerHTML = '<option value="">Select\u2026</option>';
-  if (sel) { sel.innerHTML = '<option value="">Select your school and class first\u2026</option>'; sel.disabled = true; }
   if (!school) return;
+
   try {
     const r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school));
     const j = await r.json();
+    if (seq !== _accessClassSeq) return;          // a newer lookup superseded this one
     const classes = (j && j.classes) || [];
     if (!classes.length) {
       if (err) { err.textContent = 'No students with access codes found for that school. Please check the spelling with your teacher.'; err.style.display = 'block'; }
       return;
     }
     if (err) err.style.display = 'none';
+    cls.innerHTML = '<option value="">Select\u2026</option>';
     classes.forEach(c => { const o = document.createElement('option'); o.value = c; o.textContent = c; cls.appendChild(o); });
   } catch (_) {
+    if (seq !== _accessClassSeq) return;
     if (err) { err.textContent = 'Could not load classes. Please check your connection.'; err.style.display = 'block'; }
   }
 }
@@ -215,24 +245,34 @@ async function loadAccessNames() {
   const err = document.getElementById('ac-err');
   if (!sch || !cls || !sel) return;
   const school = (sch.value || '').trim(), klass = (cls.value || '').trim();
-  sel.innerHTML = '<option value="">Select your name…</option>';
-  sel.disabled = true;
+
+  const seq = ++_accessNameSeq;
+  // Blank the list immediately. Leaving the previous class's students on screen
+  // while the new request is in flight is what made it look like the class
+  // filter was being ignored.
+  _resetNameSelect(klass ? 'Loading\u2026' : 'Select your school and class first\u2026');
   if (!school || !klass) return;
+
   try {
     const r = await fetch('/api/student-access/names?school=' + encodeURIComponent(school) +
                           '&class=' + encodeURIComponent(klass));
     const j = await r.json();
+    if (seq !== _accessNameSeq) return;           // stale response — discard
     const names = (j && j.names) || [];
     if (!names.length) {
+      _resetNameSelect('No students found for this class');
       if (err) { err.textContent = 'No students found for that school and class. Please check with your teacher.'; err.style.display = 'block'; }
       return;
     }
     if (err) err.style.display = 'none';
+    sel.innerHTML = '<option value="">Select your name\u2026</option>';
     names.forEach(n => {
       const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o);
     });
     sel.disabled = false;
   } catch (_) {
+    if (seq !== _accessNameSeq) return;
+    _resetNameSelect('Could not load names');
     if (err) { err.textContent = 'Could not load names. Please check your connection.'; err.style.display = 'block'; }
   }
 }
