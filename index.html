@@ -277,25 +277,86 @@ window.switchEntryMode = switchEntryMode;
 // registration form uses. It is a <datalist>, so it stays a free-text field —
 // a student whose school is not listed can still type it, and the server
 // matches case/whitespace-insensitively.
-function _initAccessSchoolList() {
-  var dl = document.getElementById('ac-school-list');
-  if (!dl || dl.childElementCount) return;
-  var seen = {}, names = [];
-  try {
-    Object.keys(_INDIA_DATA).forEach(function (st) {
-      Object.keys(_INDIA_DATA[st] || {}).forEach(function (city) {
-        (_INDIA_DATA[st][city] || []).forEach(function (n) {
-          if (n && n !== 'Other (type below)' && !seen[n]) { seen[n] = 1; names.push(n); }
-        });
-      });
+// Populate the access-code screens' school suggestions from the DATABASE —
+// specifically, schools that actually have code-holding students. The previous
+// version filled this from the hardcoded INDIA_DATA list of well-known schools,
+// which meant the only schools whose students can use these forms (the ones a
+// staff member imported) were exactly the ones never suggested. A student at
+// "ABPS,BAGA" saw a list of Delhi Public Schools and no way to find their own.
+//
+// The full list is fetched ONCE per page load and filtered in the browser as
+// the student types. Querying the server per keystroke would be far worse than
+// it looks: a school computer lab puts 40 students behind a single public IP,
+// and the endpoint's per-IP limit is 60 requests/minute — the whole class would
+// be rate-limited into an empty suggestion list at exactly the moment they all
+// need it. One request each, filtered locally, also makes typing instant.
+var _ACCESS_SCHOOLS = null;
+var _accessSchoolsLoading = null;
+
+function _loadAccessSchools() {
+  if (_ACCESS_SCHOOLS) return Promise.resolve(_ACCESS_SCHOOLS);
+  if (_accessSchoolsLoading) return _accessSchoolsLoading;
+  _accessSchoolsLoading = fetch('/api/student-access/schools')
+    .then(function (r) { return r.json(); })
+    .then(function (j) {
+      _ACCESS_SCHOOLS = (j && j.schools) || [];
+      return _ACCESS_SCHOOLS;
+    })
+    .catch(function () { _ACCESS_SCHOOLS = []; return _ACCESS_SCHOOLS; })
+    .finally(function () { _accessSchoolsLoading = null; });
+  return _accessSchoolsLoading;
+}
+
+// Same tolerant comparison the server uses (match-utils.schoolMatches), kept
+// deliberately simple here: strip case and punctuation, then prefix-match.
+// A mismatch only costs a missing suggestion — the student can still type the
+// name in full and the server decides.
+function _schoolNorm(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function _renderSchoolOptions(datalistId, query) {
+  var dl = document.getElementById(datalistId);
+  if (!dl || !_ACCESS_SCHOOLS) return;
+  var q = _schoolNorm(query);
+  var list = _ACCESS_SCHOOLS;
+  if (q.length >= 2) {
+    list = _ACCESS_SCHOOLS.filter(function (n) {
+      var nn = _schoolNorm(n);
+      return nn.indexOf(q) === 0 || q.indexOf(nn) === 0 || nn.indexOf(q) > -1;
     });
-  } catch (e) { return; }
-  names.sort();
+  }
   var frag = document.createDocumentFragment();
-  names.forEach(function (n) { var o = document.createElement('option'); o.value = n; frag.appendChild(o); });
+  list.slice(0, 200).forEach(function (n) {
+    var o = document.createElement('option'); o.value = n; frag.appendChild(o);
+  });
+  dl.innerHTML = '';
   dl.appendChild(frag);
 }
+
+function _fillSchoolDatalist(datalistId, query) {
+  return _loadAccessSchools().then(function () {
+    _renderSchoolOptions(datalistId, query || '');
+  });
+}
+
+function _initAccessSchoolList() {
+  _fillSchoolDatalist('ac-school-list', '');
+}
 window._initAccessSchoolList = _initAccessSchoolList;
+
+function acSchoolSuggest() {
+  var el = document.getElementById('ac-school');
+  if (el) _fillSchoolDatalist('ac-school-list', el.value);
+}
+window.acSchoolSuggest = acSchoolSuggest;
+
+function acpSchoolSuggest() {
+  var el = document.getElementById('acp-code-school');
+  if (el) _fillSchoolDatalist('acp-code-school-list', el.value);
+}
+window.acpSchoolSuggest = acpSchoolSuggest;
+window._fillSchoolDatalist = _fillSchoolDatalist;
 
 function _regHideOther() {
   var w = document.getElementById('r-sch-other-wrap');
@@ -757,16 +818,22 @@ document.addEventListener('DOMContentLoaded', function() {
     <!-- ACCESS CODE ENTRY -->
     <div class="card cp" id="entry-code">
       <div style="font-size:13px;color:var(--ink3);line-height:1.7;margin-bottom:1.25rem">
-        Your school has already added you. Pick your school and class, find your name, then enter
-        the access code your teacher gave you.
+        Your school has already added you. Enter your school and the access code your teacher gave you,
+        then pick your class and name.
+      </div>
+      <div class="field">
+        <label>School *</label>
+        <input id="ac-school" list="ac-school-list" placeholder="Start typing your school name"
+               oninput="acSchoolSuggest()" onchange="loadAccessClasses()" spellcheck="false" autocomplete="off">
+        <datalist id="ac-school-list"></datalist>
+        <div style="font-size:11px;color:var(--ink4);margin-top:4px">Part of the name is enough — e.g. "ABPS" finds "ABPS,BAGA".</div>
+      </div>
+      <div class="field">
+        <label>Access Code *</label>
+        <input id="ac-code" placeholder="e.g. ZNEPLGHR" maxlength="12" autocapitalize="characters"
+               autocomplete="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:.12em;font-weight:700">
       </div>
       <div class="frow">
-        <div class="field">
-          <label>School *</label>
-          <input id="ac-school" list="ac-school-list" placeholder="Type your school name"
-                 onchange="loadAccessClasses()" onblur="loadAccessClasses()" spellcheck="false">
-          <datalist id="ac-school-list"></datalist>
-        </div>
         <div class="field">
           <label>Class *</label>
           <!-- Options come from the server per school (loadAccessClasses):
@@ -775,15 +842,10 @@ document.addEventListener('DOMContentLoaded', function() {
             <option value="">Select…</option>
           </select>
         </div>
-      </div>
-      <div class="field">
-        <label>Your Name *</label>
-        <select id="ac-name" disabled><option value="">Select your school and class first…</option></select>
-      </div>
-      <div class="field">
-        <label>Access Code *</label>
-        <input id="ac-code" placeholder="e.g. Y6UWTN3M" maxlength="12" autocapitalize="characters"
-               spellcheck="false" style="text-transform:uppercase;letter-spacing:.12em;font-weight:700">
+        <div class="field">
+          <label>Your Name *</label>
+          <select id="ac-name" disabled><option value="">Select your school and class first…</option></select>
+        </div>
       </div>
       <div class="ferr" id="ac-err" style="display:none"></div>
       <button class="btn btn-primary btn-full" id="ac-submit" style="margin-top:8px" onclick="doAccessLogin()">
@@ -1173,7 +1235,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="chart-grid-2">
             <div class="chart-box">
               <div class="chart-box-title">SEAA Domain Scores</div>
-              <div class="chart-box-sub">⚠ Higher bar = MORE concern · 🟢 0-8 Well-Established &nbsp;🟡 8-14 Developing &nbsp;🔴 14-20 Needs Support</div>
+              <div class="chart-box-sub">⚠ Higher bar = MORE concern &nbsp;·&nbsp; 🟢 Well-Established &nbsp;🟡 Developing &nbsp;🔴 Needs Support</div>
               <div class="chart-canvas-wrap" style="height:260px">
                 <canvas id="chart-sel-bar"></canvas>
               </div>
@@ -1418,16 +1480,98 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="nc-cap"><span class="nc-cap-dot" style="background:#fb7185"></span>Answers wellbeing &amp; growth questions honestly</div>
         </div>
         <div class="nc-lock-form">
-          <label class="nc-lock-label">Your registration email</label>
-          <div class="nc-lock-iw">
-            <svg class="nc-lock-ii" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            <input id="acp-email-input" type="email" autocomplete="email" placeholder="yourname@example.com" class="nc-lock-input" onkeydown="if(event.key==='Enter')acUnlock()">
+          <!-- Tab switcher: email login vs access-code login.
+               Styles are inline/scoped here so this block does not depend on
+               the registration page's .entry-tab rules in styles.css and
+               matches the nc-* lock-card aesthetic. -->
+          <style>
+            /* .entry-tabs / .entry-tab come from styles.css and are already
+               designed for a light card with a brand-coloured active state —
+               the same pair the registration screen uses, so both entry points
+               look identical. An earlier version of this block styled its own
+               tabs with white overlays, which were invisible against this
+               card's light background.
+
+               Only two things need scoping here: .nc-lock-input carries a 37px
+               left padding to clear the icon in .nc-lock-iw, and these four
+               fields have no icon, so the text would sit oddly inset; and a
+               <select> needs its own chevron since the native arrow is
+               suppressed by the shared border/background styling. */
+            .acp-fld { margin-bottom: 10px; }
+            .acp-fld .nc-lock-input { padding-left: 13px; }
+            .acp-fld .nc-lock-label { display:block; margin-bottom:5px; }
+            .acp-fld select.nc-lock-input {
+              appearance:none; -webkit-appearance:none; cursor:pointer;
+              background-image:url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23888' stroke-width='2'%3e%3cpolyline points='6 9 12 15 18 9'/%3e%3c/svg%3e");
+              background-repeat:no-repeat; background-position:right 10px center;
+              background-size:16px; padding-right:34px;
+            }
+            .acp-fld select.nc-lock-input:disabled { opacity:.55; cursor:not-allowed; }
+            .acp-hint { font-size:11px; color:var(--ink4); margin-top:4px; }
+          </style>
+          <div class="entry-tabs" role="tablist" style="margin-bottom:16px">
+            <button class="entry-tab active" id="acp-tab-email" role="tab" aria-selected="true"
+                    onclick="acpSwitchLockTab('email')" type="button">✉️ Email</button>
+            <button class="entry-tab" id="acp-tab-code" role="tab" aria-selected="false"
+                    onclick="acpSwitchLockTab('code')" type="button">🔑 Access Code</button>
           </div>
-          <div id="acp-email-err" class="nc-lock-err"></div>
-          <button id="acp-unlock-btn" class="nc-lock-btn" onclick="acUnlock()">
-            Continue
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
-          </button>
+
+          <!-- EMAIL LOGIN (existing flow, unchanged) -->
+          <div id="acp-mode-email">
+            <label class="nc-lock-label">Your registration email</label>
+            <div class="nc-lock-iw">
+              <svg class="nc-lock-ii" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+              <input id="acp-email-input" type="email" autocomplete="email" placeholder="yourname@example.com" class="nc-lock-input" onkeydown="if(event.key==='Enter')acUnlock()">
+            </div>
+            <div id="acp-email-err" class="nc-lock-err"></div>
+            <button id="acp-unlock-btn" class="nc-lock-btn" onclick="acUnlock()">
+              Continue
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+          </div>
+
+          <!-- ACCESS CODE LOGIN (email-less, school-issued credential)
+               Field order matches the slip a student is holding: school, then
+               the code itself, then the two fields that identify which student
+               within that school. -->
+          <div id="acp-mode-code" style="display:none">
+            <div style="font-size:12px;color:var(--ink3);line-height:1.6;margin-bottom:12px">
+              If your school gave you an access code, use it here — no email needed.
+            </div>
+            <div class="acp-fld">
+              <label class="nc-lock-label" for="acp-code-school">School</label>
+              <input id="acp-code-school" class="nc-lock-input" list="acp-code-school-list"
+                     placeholder="Start typing your school name" spellcheck="false" autocomplete="off"
+                     oninput="acpSchoolSuggest()" onchange="acpLoadCodeClasses()">
+              <datalist id="acp-code-school-list"></datalist>
+              <div class="acp-hint">Part of the name is enough — e.g. "ABPS" finds "ABPS,BAGA".</div>
+            </div>
+            <div class="acp-fld">
+              <label class="nc-lock-label" for="acp-code-code">Access code</label>
+              <input id="acp-code-code" class="nc-lock-input" placeholder="e.g. ZNEPLGHR" maxlength="12"
+                     autocapitalize="characters" autocomplete="off" spellcheck="false"
+                     style="text-transform:uppercase;letter-spacing:.12em;font-weight:700"
+                     onkeydown="if(event.key==='Enter')acpAccessLogin()">
+            </div>
+            <div class="acp-fld">
+              <label class="nc-lock-label" for="acp-code-class">Class</label>
+              <select id="acp-code-class" class="nc-lock-input" onchange="acpLoadCodeNames()">
+                <option value="">Select…</option>
+              </select>
+            </div>
+            <div class="acp-fld">
+              <label class="nc-lock-label" for="acp-code-name">Your name</label>
+              <select id="acp-code-name" class="nc-lock-input" disabled>
+                <option value="">Select your school and class first…</option>
+              </select>
+            </div>
+            <div id="acp-code-err" class="nc-lock-err"></div>
+            <button id="acp-code-btn" class="nc-lock-btn" onclick="acpAccessLogin()">
+              Unlock with Access Code
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+          </div>
+
           <p class="nc-lock-footer">No results yet? <a href="javascript:void(0)" onclick="goPage('register')">Complete the assessment first →</a></p>
         </div>
       </div>

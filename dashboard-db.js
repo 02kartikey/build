@@ -24,6 +24,7 @@
 
 const crypto = require('crypto');
 const pg     = require('./pg-core.js');
+const match  = require('./match-utils.js');
 
 let _ready = false;
 
@@ -324,18 +325,32 @@ function _studentWhere(schools, { class: cls, section, search, status } = {}) {
   return { where, p, nextIdx: n };
 }
 
+/* Progress across the FOUR assessment modules: NMAP, DAAB, CPI, SEAA.
+
+   This used to sum eleven columns — the three single-sitting modules plus each
+   of DAAB's eight subtests — while the dashboards render exactly four dots and
+   the student drawer prints the value as "n/4". The two never agreed: a student
+   who had finished NMAP, CPI, SEAA and a single DAAB subtest showed four filled
+   dots and looked finished at roughly a third of the way through, and anyone
+   further along produced labels like "8/4" and "11/4". The bar saturated early
+   and then stopped moving, which is why it read as broken.
+
+   DAAB counts as one module and only when all eight subtests are recorded, so
+   a partially-completed aptitude battery does not read as a finished module.
+   Keep this in step with MODULES in db.js if a module is ever added. */
 const _MODULES_DONE_EXPR = `
-  (CASE WHEN a.cpi_completed_at      IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.sea_completed_at      IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.nmap_completed_at     IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_va_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_pa_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_na_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_lsa_completed_at IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_hma_completed_at IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_ar_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_ma_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
-   CASE WHEN a.daab_sa_completed_at  IS NOT NULL THEN 1 ELSE 0 END)`;
+  (CASE WHEN a.nmap_completed_at IS NOT NULL THEN 1 ELSE 0 END +
+   CASE WHEN a.cpi_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
+   CASE WHEN a.sea_completed_at  IS NOT NULL THEN 1 ELSE 0 END +
+   CASE WHEN a.daab_va_completed_at  IS NOT NULL
+         AND a.daab_pa_completed_at  IS NOT NULL
+         AND a.daab_na_completed_at  IS NOT NULL
+         AND a.daab_lsa_completed_at IS NOT NULL
+         AND a.daab_hma_completed_at IS NOT NULL
+         AND a.daab_ar_completed_at  IS NOT NULL
+         AND a.daab_ma_completed_at  IS NOT NULL
+         AND a.daab_sa_completed_at  IS NOT NULL
+        THEN 1 ELSE 0 END)`;
 
 async function getStudentsBySchool(schools, opts = {}) {
   const { limit = 200, offset = 0 } = opts;
@@ -970,50 +985,118 @@ async function setStudentAccessCode(sessionId, code) {
 async function redeemAccessCode({ school, klass, name, code }) {
   const sc = String(school || '').trim();
   const kl = String(klass  || '').trim();
-  const nm = String(name   || '').trim().toLowerCase();
+  const nm = String(name   || '').trim();
   const cd = String(code   || '').trim().toUpperCase();
   if (!sc || !kl || !nm || !cd) return null;
 
+  // Narrow in SQL only by "has a code" — school/class/name are compared with
+  // match-utils below so "ABPS" finds "ABPS,BAGA" and "9" finds "IX". Widening
+  // the candidate set does not weaken the credential: the access code is still
+  // compared byte-for-byte in constant time, and a wrong code matches nothing.
   const rows = await pg.many(
     `SELECT session_id, first_name, last_name, full_name, class, section,
             school, school_state, school_city, email, age, gender, access_code
        FROM students
-      WHERE lower(btrim(school)) = lower(btrim($1))
-        AND lower(btrim(class))  = lower(btrim($2))
-        AND access_code IS NOT NULL
-        AND lower(btrim(full_name)) = $3`,
-    [sc, kl, nm]
+      WHERE access_code IS NOT NULL`
   );
   for (const r of rows) {
+    if (!match.schoolMatches(sc, r.school))  continue;
+    if (!match.classMatches(kl, r.class))    continue;
+    if (!match.nameMatches(nm, r.full_name)) continue;
     if (_codesEqual(r.access_code, cd)) { delete r.access_code; return r; }
   }
   return null;
 }
 
+/* ── Access-code entry lookups ───────────────────────────────────────
+   All three of these used to compare school/class with
+   lower(btrim(x)) = lower(btrim($1)) — exact equality after trimming.
+   That made the entry form unusable in practice: a student whose row says
+   "ABPS,BAGA" got nothing for "ABPS", and a row that says "IX" never matched
+   the "9" they picked. The candidate set is now fetched with a cheap SQL
+   prefilter and narrowed in JS by match-utils, which understands punctuation,
+   partial school names, and roman-numeral / "Class 9" / "9th" grade labels.
+   Row counts per school are small (hundreds at most), so the JS pass is
+   negligible next to the round-trip it replaces. */
+
+/* Every school that has at least one code-holding student. This is the source
+   for the entry form's school suggestions. It MUST come from the database:
+   the form previously suggested from a hardcoded list of well-known schools,
+   so any school a staff member had actually imported — the only schools whose
+   students can use this form at all — never appeared. */
+async function listAccessSchools(query) {
+  const rows = await pg.many(
+    `SELECT DISTINCT btrim(school) AS school
+       FROM students
+      WHERE access_code IS NOT NULL
+        AND school IS NOT NULL AND btrim(school) <> ''
+      ORDER BY school`
+  );
+  const all = rows.map(r => r.school).filter(Boolean);
+  const q = String(query || '').trim();
+  if (!q) return all;
+  return all.filter(s => match.schoolMatches(q, s));
+}
+
 // Names available for the school+class picker on the student entry screen.
 // Only students who actually have a code are listed.
 async function listAccessNames(school, klass) {
-  return pg.many(
-    `SELECT full_name FROM students
-      WHERE lower(btrim(school)) = lower(btrim($1))
-        AND lower(btrim(class))  = lower(btrim($2))
-        AND access_code IS NOT NULL
-      ORDER BY full_name`,
-    [String(school || '').trim(), String(klass || '').trim()]
+  const rows = await pg.many(
+    `SELECT full_name, school, class FROM students
+      WHERE access_code IS NOT NULL
+        AND full_name IS NOT NULL AND btrim(full_name) <> ''
+      ORDER BY full_name`
   );
+  const seen = new Set();
+  const out  = [];
+  for (const r of rows) {
+    if (!match.schoolMatches(school, r.school)) continue;
+    if (!match.classMatches(klass, r.class))    continue;
+    const key = match.normName(r.full_name);
+    if (seen.has(key)) continue;      // same student listed once
+    seen.add(key);
+    out.push({ full_name: r.full_name });
+  }
+  return out;
 }
 
 /* Distinct classes for a school that have at least one code-holding student.
    Bulk import stores class as free text ("10-B", "Class 10 DS"), so the entry
-   form cannot use a fixed Grade 9-12 list — it must offer these values. */
+   form cannot use a fixed Grade 9-12 list — it must offer these values.
+   Rows whose labels differ only in notation ("IX" and "9") are collapsed to a
+   single option so the student is not asked to guess which spelling is theirs. */
 async function listAccessClasses(school) {
-  return pg.many(
-    `SELECT DISTINCT class FROM students
-      WHERE lower(btrim(school)) = lower(btrim($1))
-        AND access_code IS NOT NULL AND class IS NOT NULL AND btrim(class) <> ''
-      ORDER BY class`,
-    [String(school || '').trim()]
+  const rows = await pg.many(
+    `SELECT DISTINCT btrim(class) AS class, school FROM students
+      WHERE access_code IS NOT NULL
+        AND class IS NOT NULL AND btrim(class) <> ''
+      ORDER BY class`
   );
+  const labelsByGrade = new Map();  // grade number → Set of distinct raw labels
+  const other         = [];
+  for (const r of rows) {
+    if (!match.schoolMatches(school, r.school)) continue;
+    const label = String(r.class || '').trim();
+    const g = match.classGradeNumber(label);
+    if (g == null) { if (!other.includes(label)) other.push(label); continue; }
+    if (!labelsByGrade.has(g)) labelsByGrade.set(g, new Set());
+    labelsByGrade.get(g).add(label);
+  }
+
+  /* One option per grade. Which label to show:
+       - exactly one raw label for this grade  → show it verbatim ("IX", "10-B")
+       - several labels ("IX-A" and "IX-B", or "IX" and "9") → show the plain
+         grade number.
+     Showing an arbitrary section here would be actively misleading: a student
+     in IX-B would be offered only "IX-A" and reasonably conclude their class
+     is missing. Grade-level matching means one option per grade is correct;
+     the label just has to be honest about that. */
+  const graded = [...labelsByGrade.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([grade, labels]) => ({
+      class: labels.size === 1 ? [...labels][0] : String(grade),
+    }));
+  return graded.concat(other.sort().map(c => ({ class: c })));
 }
 
 async function runImportTransaction(rows) {
@@ -1308,6 +1391,7 @@ module.exports = {
   upsertStudent, deleteStudent, resetStudentAssessment, moveStudent, runImportTransaction, getStudentByEmail,
   /* access codes */
   generateAccessCode, setStudentAccessCode, redeemAccessCode, listAccessNames, listAccessClasses,
+  listAccessSchools,
   /* notes & tags */
   addStudentNote, getStudentNotes, deleteStudentNote,
   setStudentTags, getStudentTags,

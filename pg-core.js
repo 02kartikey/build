@@ -60,8 +60,17 @@ function _makePool() {
   // Pool sizing: default modest so a single node stays under Postgres'
   // max_connections when running PM2 cluster mode (each worker owns a pool).
   cfg.max                     = parseInt(process.env.PG_POOL_MAX || '10', 10);
+  // Idle timeout kept well below typical managed-Postgres server-side idle kill
+  // (Render ~5 min, RDS default 5 min). Recycling ours first means we never
+  // hand out a socket the server has already half-closed → no mid-query resets.
   cfg.idleTimeoutMillis       = parseInt(process.env.PG_IDLE_MS   || '30000', 10);
   cfg.connectionTimeoutMillis = parseInt(process.env.PG_CONN_MS   || '5000', 10);
+  // TCP keepalive: OS pings the peer periodically so a NAT / load-balancer that
+  // silently dropped the flow surfaces as a real error immediately instead of
+  // stalling the next query for ~2 min. Kernel default first probe is ~2h, so
+  // the initial delay must be explicit.
+  cfg.keepAlive               = true;
+  cfg.keepAliveInitialDelayMillis = 10_000;
 
   const pool = new Pool(cfg);
   // A pool 'error' on an idle client would otherwise crash the process.
@@ -79,26 +88,47 @@ function pool() {
 
 /* ── Query helpers ──────────────────────────────────────────────────── */
 
+/* Transient connection failures a stale pooled socket can throw AFTER the
+   query was dispatched but BEFORE we got a reply. These are safe to retry
+   once because the query never reached the server (pg emits these from the
+   socket layer, not from a SQL error). A SQL error keeps its own message
+   and will not match. Kept narrow deliberately — do NOT retry on generic
+   Errors, deadlocks, or unique-violation. */
+const _TRANSIENT_CONN_RE = /Connection terminated|ECONNRESET|EPIPE|read ECONNRESET|Client has encountered a connection error/i;
+
+async function _queryWithRetry(text, params) {
+  try {
+    return await pool().query(text, params);
+  } catch (err) {
+    if (_TRANSIENT_CONN_RE.test(err && err.message || '')) {
+      // eslint-disable-next-line no-console
+      console.error('[pg-core] transient conn error, retrying once:', err.message);
+      return await pool().query(text, params);
+    }
+    throw err;
+  }
+}
+
 /** Raw query → full pg result object ({ rows, rowCount, ... }). */
 async function q(text, params = []) {
-  return pool().query(text, params);
+  return _queryWithRetry(text, params);
 }
 
 /** First row, or null. Mirrors better-sqlite3 stmt.get(). */
 async function one(text, params = []) {
-  const r = await pool().query(text, params);
+  const r = await _queryWithRetry(text, params);
   return r.rows[0] || null;
 }
 
 /** All rows. Mirrors stmt.all(). */
 async function many(text, params = []) {
-  const r = await pool().query(text, params);
+  const r = await _queryWithRetry(text, params);
   return r.rows;
 }
 
 /** Fire-and-return rowCount. Mirrors stmt.run() when you only need `changes`. */
 async function exec(text, params = []) {
-  const r = await pool().query(text, params);
+  const r = await _queryWithRetry(text, params);
   return { rowCount: r.rowCount, rows: r.rows };
 }
 

@@ -19,11 +19,21 @@ const pg = require('./pg-core.js');
 
 const _norm = (email) => String(email || '').toLowerCase().trim();
 
+/* Access-code students carry a synthetic identifier `access:<session_id>`
+   in every place other students have an email. Detect the prefix here so
+   goals + milestones + custom context queries route straight to the row
+   without an email lookup that would return null and drop the data. */
+const _AC_ID_PREFIX = 'access:';
+
 /* Light email → session_id lookup (the full report assembly in
    counsellor-db.getReportByEmail is far heavier than we need here). */
 async function _sessionIdFor(email) {
-  const norm = _norm(email);
-  if (!norm) return null;
+  const raw = String(email || '').trim();
+  if (!raw) return null;
+  if (raw.toLowerCase().startsWith(_AC_ID_PREFIX)) {
+    return raw.slice(_AC_ID_PREFIX.length) || null;
+  }
+  const norm = raw.toLowerCase();
   const row = await pg.one('SELECT session_id FROM students WHERE email = $1 LIMIT 1', [norm]);
   return row ? row.session_id : null;
 }
@@ -201,7 +211,16 @@ function _validDate(v) {
    Atomically CLAIM up to `limit` due, active, not-yet-reminded milestones
    by stamping reminder_sent_at, then join students for the send. FOR UPDATE
    SKIP LOCKED + the reminder_sent_at stamp mean that with N cluster workers
-   each milestone is handed to exactly one worker exactly once. */
+   each milestone is handed to exactly one worker exactly once.
+
+   The email filter must be strict, not just IS NOT NULL. Staff-created and
+   bulk-imported students are stored with email = '' (empty string, not NULL)
+   by dashboard-db.upsertStudent. An IS NOT NULL check passes for '', so those
+   rows were returned to the sender, emailFn({ to: '' }) threw, and the caller's
+   unclaimReminder() put the milestone straight back — an endless retry loop
+   every sweep. Requiring a non-empty address containing '@' means milestones
+   belonging to email-less students are claimed and dropped (marked reminded,
+   never sent), which is the intended behaviour: there is no address to mail. */
 async function claimDueMilestoneReminders(limit = 200) {
   const rows = await pg.many(
     `WITH claimed AS (
@@ -222,7 +241,9 @@ async function claimDueMilestoneReminders(limit = 200) {
      SELECT c.id, c.title, c.detail, c.target_date, s.email, s.first_name
        FROM claimed c
        JOIN students s ON s.session_id = c.session_id
-      WHERE s.email IS NOT NULL`,
+      WHERE s.email IS NOT NULL
+        AND btrim(s.email) <> ''
+        AND position('@' in s.email) > 1`,
     [limit]
   );
   return rows.map((r) => ({

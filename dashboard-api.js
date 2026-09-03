@@ -30,7 +30,17 @@ const _core = require('./db.js'); // shared class-matching helper (single source
    comparisons must normalise identically — otherwise a padded name silently
    fails a permission check and a legitimate user is denied. One helper so the
    two sides can never drift apart. */
-const _schoolKey = (v) => String(v || '').trim().toLowerCase();
+/* Access-control key for a school name. Normalises case, punctuation and
+   whitespace so "ABPS,BAGA", "ABPS, BAGA" and "abps baga" are one school —
+   these are formatting differences in the same name, and treating them as
+   distinct hid students from the counsellor assigned to them.
+
+   Deliberately NOT fuzzy beyond that: no prefix or partial matching here.
+   "Delhi Public School" and "Delhi Public School Noida" are different schools
+   in the same chain, and a looser key would let a counsellor for one reach
+   students at the other. Divergent spellings are prevented at the source
+   instead, by db.js _canonicalSchoolName() at registration time. */
+const _schoolKey = (v) => require('./match-utils.js').normSchool(v);
 let _sendEmail = null;
 let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 
@@ -740,7 +750,7 @@ async function _importStudents(req, res) {
   if (user.role !== 'admin') {
     const schools = (await _userSchools(user)).map(_schoolKey);
     const before = rows.length;
-    rows = rows.filter(r => schools.includes(String_schoolKey(r.school)));
+    rows = rows.filter(r => schools.includes(_schoolKey(r.school)));
     scopeRejected = before - rows.length;
     if (!rows.length) {
       return _json(res, 403, { error: 'None of the rows match your assigned school(s).' });
@@ -911,10 +921,17 @@ async function _studentInsights(req, res) {
     const schools = (await _userSchools(user)).map(_schoolKey);
     if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
   }
-  if (!stu.email) {
+  // Identity resolution: students imported in bulk (or added by staff without
+  // an email) are stored with email = '' and talk to Aria via the access-code
+  // login, which keys their chat_history rows on the synthetic identifier
+  // `access:<session_id>`. Falling back to that identifier here is what makes
+  // their Aria conversations visible to staff — gating on stu.email alone
+  // returned an empty panel for every access-code student.
+  const identity = stu.email || _cdb.accessIdentityFor(stu.session_id);
+  if (!identity) {
     return _json(res, 200, { insights: { totalQuestions: 0, questions: [], themes: [], summaries: [], lastActivity: null } });
   }
-  const insights = await _cdb.getStudentInsights(stu.email);
+  const insights = await _cdb.getStudentInsights(identity);
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_insights', target: sessionId });
   _json(res, 200, { insights });
 }
@@ -1036,6 +1053,26 @@ function _publicIP(req) {
 }
 
 // Names for the school+class picker. Rate limited because it is a roster read.
+/* Schools that have at least one code-holding student. Public, like the
+   names/classes lookups — it exposes only school names, which are already
+   printed on the access-code slips handed to students, and it is what makes
+   the entry form's school suggestions reflect reality instead of a hardcoded
+   list of well-known schools. */
+async function handleAccessSchools(req, res) {
+  const qs = new URLSearchParams((req.url.split('?')[1]) || '');
+  const q  = qs.get('q') || '';
+  if (_rl && !(await _rl('access-schools', _publicIP(req), 60))) {
+    return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
+  }
+  try {
+    const schools = await _ddb.listAccessSchools(q);
+    _json(res, 200, { schools });
+  } catch (e) {
+    process.stderr.write('[ERROR] [access-schools] ' + e.message + '\n');
+    _json(res, 500, { error: 'Server error' });
+  }
+}
+
 async function handleAccessNames(req, res) {
   const qs = new URLSearchParams((req.url.split('?')[1]) || '');
   const school = qs.get('school') || '';
@@ -1092,4 +1129,4 @@ async function handleAccessRedeem(req, res) {
   }
 }
 
-module.exports = { init, handle, handleAccessNames, handleAccessRedeem };
+module.exports = { init, handle, handleAccessNames, handleAccessSchools, handleAccessRedeem };

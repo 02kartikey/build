@@ -38,6 +38,7 @@ const dbModule = require('./db.js');
 const cdb      = require('./counsellor-db.js');
 const rag      = require('./counsellor-rag.js');
 const goals    = require('./counsellor-goals-db.js');
+const buildAccessLoginHandler = require('./access-login-handler.js');
 const dashApi  = require('./dashboard-api.js');
 
 const PORT             = parseInt(process.env.PORT            || '3000', 10);
@@ -1577,6 +1578,7 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/counsellor-request-otp')   return await _handleCounsellorRequestOtp(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-identity') return await _handleCounsellorVerifyIdentity(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-verify-pin')   return await _handleCounsellorVerifyPin(req, res);
+    if (method === 'POST' && pathname === '/api/counsellor-access-login') return await _handleCounsellorAccessLogin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-set-pin')      return await _handleCounsellorSetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-reset-pin')    return await _handleCounsellorResetPin(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-chat')          return await _handleCounsellorChat(req, res);
@@ -1611,6 +1613,7 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/dashboard/insights')       return await _handleDashboardInsights(req, res);
     // PUBLIC access-code routes for the student entry screen. Declared BEFORE the
     // /api/dashboard catch-all so they are not swallowed by the staff auth gate.
+    if (method === 'GET'  && pathname === '/api/student-access/schools')    return await dashApi.handleAccessSchools(req, res);
     if (method === 'GET'  && pathname === '/api/student-access/names')      return await dashApi.handleAccessNames(req, res);
     if (method === 'POST' && pathname === '/api/student-access/redeem')     return await dashApi.handleAccessRedeem(req, res);
     if (pathname.startsWith('/api/dashboard'))                             return await dashApi.handle(req, res);
@@ -1717,6 +1720,18 @@ const goalRoutes = require('./counsellor-goals-routes.js')({
   readBody:              _readBody,
   verifyCounsellorToken: _verifyCounsellorToken,
   checkToken:            _checkToken,
+});
+
+/* Access-code login for the Aria counsellor gate. See access-login-handler.js.
+   Injected with the same helpers the other counsellor routes use so it stays
+   consistent (rate limits, JSON writer, body reader, token guard). Reuses
+   _jsonUnlocked so the response shape matches /api/counsellor-verify-pin,
+   which means the existing frontend handler consumes it unchanged. */
+const _handleCounsellorAccessLogin = buildAccessLoginHandler({
+  cdb, log,
+  _json, _readBody, _checkToken, _rlCheckDb, _jsonUnlocked,
+  RL_WINDOW_MS: RL_WINDOW,
+  RL_LIMIT:     15,
 });
 
 const server = http.createServer(_handleRequest);

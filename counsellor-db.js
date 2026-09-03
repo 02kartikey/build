@@ -22,6 +22,34 @@
 
 const crypto = require('crypto');
 const pg     = require('./pg-core.js');
+const match  = require('./match-utils.js');
+
+/* Access-code identity prefix. Students imported in bulk have no email; the
+   counsellor layer identifies them by the synthetic string
+   `access:<session_id>` wherever other students have an email.
+
+   CRITICAL: session_id is case-sensitive in Postgres (plain TEXT, e.g.
+   'NMSRV-a1b2c3…'), but every counsellor helper historically ran
+   .toLowerCase() on the email it was given. Lowercasing an access identity
+   would mangle the session_id and every downstream lookup would miss.
+   _normIdentity() is the single normalizer used by all identity-carrying
+   functions: it lowercases real emails (unchanged behaviour) but preserves
+   the session_id portion of an access identity verbatim. */
+const _AC_ID_PREFIX = 'access:';
+
+function _normIdentity(id) {
+  const raw = String(id || '').trim();
+  if (!raw) return '';
+  if (raw.slice(0, _AC_ID_PREFIX.length).toLowerCase() === _AC_ID_PREFIX) {
+    // Normalise the prefix to lowercase, keep the session_id exactly as issued.
+    return _AC_ID_PREFIX + raw.slice(_AC_ID_PREFIX.length);
+  }
+  return raw.toLowerCase();
+}
+
+function _isAccessId(id) {
+  return String(id || '').slice(0, _AC_ID_PREFIX.length).toLowerCase() === _AC_ID_PREFIX;
+}
 
 let _ready = false;
 
@@ -158,7 +186,7 @@ function _reportCacheSet(norm, report, stamp) {
 
 function _invalidateReportCache(email) {
   if (!email) return;
-  _reportCache.delete(String(email).toLowerCase().trim());
+  _reportCache.delete(_normIdentity(email));
 }
 
 /* Clear every cached entry belonging to a session. The email key is not always
@@ -201,8 +229,18 @@ async function getReportBySessionId(sessionId) {
 
 /* ─── Report lookup by email ────────────────────────────────────── */
 async function getReportByEmail(email) {
-  const norm = String(email || '').toLowerCase().trim();
-  if (!norm) return null;
+  const raw = String(email || '').trim();
+  if (!raw) return null;
+
+  // Access-code students have no email; the counsellor token stores
+  // `access:<session_id>` in the email column. Route those through the
+  // session-based lookup transparently so every server-side call site
+  // (chat handler, unlock, dashboards) works unchanged.
+  if (_isAccessId(raw)) {
+    return getReportBySessionId(raw.slice(_AC_ID_PREFIX.length));
+  }
+
+  const norm = _normIdentity(raw);
 
   // One indexed lookup establishes both which row is current and whether the
   // report has changed since we cached it. Cheap next to the 6-query payload
@@ -343,6 +381,15 @@ async function _buildReportPayload(student) {
 
 /* ─── Longitudinal journey (delegates to db.js) ─────────────────── */
 async function getJourney(email) {
+  // Access-code students have no email → no rows in report_history keyed by
+  // email → journey is empty. Return the canonical empty shape rather than
+  // send `access:...` into db.getJourney which does WHERE email = $1.
+  // Longitudinal tracking for access-code students can be added later by
+  // querying report_history by session_id; for now, empty is the honest
+  // answer (they have exactly one attempt anyway).
+  if (_isAccessId(email)) {
+    return { attempts: [], deltas: [], overall: null, has_journey: false };
+  }
   return require('./db.js').getJourney(email);
 }
 
@@ -378,7 +425,7 @@ function _classifyThemes(texts) {
 }
 
 async function getStudentInsights(email, { questionLimit = 25, scanLimit = 300 } = {}) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   if (!norm) return { totalQuestions: 0, questions: [], themes: [], summaries: [], lastActivity: null };
 
   const rows = await pg.many(
@@ -418,7 +465,7 @@ async function getStudentInsights(email, { questionLimit = 25, scanLimit = 300 }
 
 /* ─── Check if student has completed assessment (by email) ──────── */
 async function hasCompletedAssessment(email) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   if (!norm) return false;
   const row = await pg.one(
     `SELECT 1 FROM students s
@@ -449,7 +496,7 @@ async function saveMessage({ email, sessionId, conversationId, role, content }) 
      VALUES ($1,$2,$3,$4,$5,$6)
      RETURNING id`,
     [
-      String(email || '').trim().toLowerCase().slice(0, 200), // trim: every read uses .trim().toLowerCase()
+      _normIdentity(email).slice(0, 200), // identity-aware: preserves access:<session_id> case
       sessionId      ? String(sessionId).slice(0, 64)      : null,
       conversationId ? String(conversationId).slice(0, 64) : null,
       role === 'assistant' ? 'assistant' : 'user',
@@ -461,7 +508,7 @@ async function saveMessage({ email, sessionId, conversationId, role, content }) 
 }
 
 async function getHistory(email, { limit = 60, conversationId } = {}) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   if (!norm) return [];
   let rows;
   if (conversationId) {
@@ -483,7 +530,7 @@ async function getHistory(email, { limit = 60, conversationId } = {}) {
 }
 
 async function getConversations(email) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   if (!norm) return [];
   const convs = await pg.many(
     `SELECT
@@ -513,13 +560,13 @@ async function getConversations(email) {
 }
 
 async function clearHistory(email) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   await pg.exec(`DELETE FROM chat_history WHERE email = $1`, [norm]);
 }
 
 /* ─── Conversation summaries ────────────────────────────────────── */
 async function saveConversationSummary({ email, conversationId, summary, messageCount }) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   const now  = new Date().toISOString();
   await pg.exec(
     `INSERT INTO conversation_summaries
@@ -534,7 +581,7 @@ async function saveConversationSummary({ email, conversationId, summary, message
 }
 
 async function getConversationSummary(email, conversationId) {
-  const norm = String(email || '').toLowerCase().trim();
+  const norm = _normIdentity(email);
   return pg.one(
     `SELECT summary, message_count, updated_at FROM conversation_summaries
      WHERE email = $1 AND conversation_id = $2`,
@@ -552,7 +599,7 @@ async function issueToken(email) {
   await pg.exec(
     `INSERT INTO counsellor_sessions (token, email, created_at, expires_at)
      VALUES ($1,$2,$3,$4)`,
-    [token, String(email).toLowerCase().trim(), now.toISOString(), expiresAt]
+    [token, _normIdentity(email), now.toISOString(), expiresAt]
   );
   return token;
 }
@@ -730,6 +777,89 @@ async function pruneOtpStageTokens() {
   await pg.exec('DELETE FROM otp_stage_tokens WHERE expires_at <= $1', [new Date().toISOString()]);
 }
 
+/* ─── Access-code login (Aria for email-less bulk-imported students) ─
+   Access codes are already the primary credential for students who were
+   bulk-imported by a school and never gave an email. `redeemAccessCode`
+   exists in dashboard-db for the assessment-start flow — the verification
+   below is the same logic, duplicated here to avoid a circular require
+   (dashboard-db already requires counsellor-db).
+
+   Downstream tables (chat_history, counsellor_sessions, conversation_summaries)
+   are all keyed on the `email` column. Rather than change every schema, we
+   store a synthetic identifier `access:<session_id>` in that slot for
+   access-code students. It's unique per student, never collides with a real
+   email (no @), and every existing WHERE email = $1 query works unchanged
+   because _normIdentity() (top of file) preserves the session_id's case. */
+
+function accessIdentityFor(sessionId) {
+  return _AC_ID_PREFIX + String(sessionId);
+}
+
+function isAccessIdentity(id) {
+  return _isAccessId(id);
+}
+
+function sessionIdFromAccessIdentity(id) {
+  return _isAccessId(id) ? String(id).slice(_AC_ID_PREFIX.length) : null;
+}
+
+function _codesEqualCT(a, b) {
+  const ba = Buffer.from(String(a || ''), 'utf8');
+  const bb = Buffer.from(String(b || ''), 'utf8');
+  if (ba.length !== bb.length || ba.length === 0) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
+
+/* Redeem an access code for the counsellor gate. Returns the student row
+   on success, null otherwise. Constant-time compare so an attacker can't
+   probe which of school/class/name/code was wrong from response timing. */
+async function redeemAccessCodeForCounsellor({ school, klass, name, code }) {
+  const sc = String(school || '').trim();
+  const kl = String(klass  || '').trim();
+  const nm = String(name   || '').trim();
+  const cd = String(code   || '').trim().toUpperCase();
+  if (!sc || !kl || !nm || !cd) return null;
+
+  // School/class/name are matched tolerantly (see match-utils): a student
+  // whose row reads "ABPS,BAGA" / "IX" can type "ABPS" / "9" and still get in.
+  // The access code remains an exact constant-time comparison, so the wider
+  // candidate set costs nothing in credential strength.
+  const rows = await pg.many(
+    `SELECT session_id, first_name, last_name, full_name, class, section,
+            school, school_state, school_city, email, age, gender, access_code
+       FROM students
+      WHERE access_code IS NOT NULL`
+  );
+  for (const r of rows) {
+    if (!match.schoolMatches(sc, r.school))  continue;
+    if (!match.classMatches(kl, r.class))    continue;
+    if (!match.nameMatches(nm, r.full_name)) continue;
+    if (_codesEqualCT(r.access_code, cd)) {
+      delete r.access_code; // never leak plaintext code back to caller
+      return r;
+    }
+  }
+  return null;
+}
+
+/* Issue an 8-hour counsellor token bound to a session_id (for access-code
+   students who have no email). Stores `access:<session_id>` in the email
+   column so every downstream table looks up by the same identifier without
+   any schema change. */
+async function issueTokenForSession(sessionId) {
+  if (!sessionId) throw new Error('issueTokenForSession: sessionId required');
+  const token     = crypto.randomBytes(32).toString('hex');
+  const now       = new Date();
+  const expiresAt = new Date(now.getTime() + COUNSELLOR_TTL_MS).toISOString();
+  const identity  = accessIdentityFor(sessionId);
+  await pg.exec(
+    `INSERT INTO counsellor_sessions (token, email, created_at, expires_at)
+     VALUES ($1,$2,$3,$4)`,
+    [token, identity, now.toISOString(), expiresAt]
+  );
+  return { token, identity };
+}
+
 async function close() { /* pool owned by pg-core; nothing to do here */ }
 
 module.exports = {
@@ -745,5 +875,8 @@ module.exports = {
   rlCheck, rlPrune,
   hasPinSet, verifyStudentPin, setStudentPin, clearStudentPin,
   createOtp, verifyOtp, pruneOtps,
+  // Access-code login (for email-less students)
+  redeemAccessCodeForCounsellor, issueTokenForSession,
+  accessIdentityFor, isAccessIdentity, sessionIdFromAccessIdentity,
   close,
 };
