@@ -1099,24 +1099,165 @@ async function listAccessClasses(school) {
   return graded.concat(other.sort().map(c => ({ class: c })));
 }
 
-async function runImportTransaction(rows) {
-  let imported = 0, skipped = 0;
-  await pg.tx(async (c) => {
-    for (const r of rows) {
-      if (!r.first_name && !r.full_name && !r.name) { skipped++; continue; }
-      try {
-        const fullName = r.full_name || r.name || '';
-        const fn = r.first_name || fullName.split(' ')[0];
-        const ln = r.last_name  || fullName.split(' ').slice(1).join(' ');
-        const norm = String(r.email || '').toLowerCase().trim();
-        const now  = new Date().toISOString();
+/* Bulk roster import.
 
-        let sid = null;
-        if (norm) {
-          const existing = await c.query('SELECT session_id FROM students WHERE email = $1', [norm]);
-          if (existing.rows[0]) sid = existing.rows[0].session_id;
+   Three things this has to get right that the previous version did not:
+
+   1. IDENTITY. Rows were de-duplicated by email only. Bulk rosters usually
+      carry no email at all, so every row fell through to a fresh random
+      session_id and re-importing the same file created a complete second copy
+      of the roster. Rows without an email are now matched on the natural key
+      a school actually uses — school + class + name — which is the same tuple
+      the access-code login already treats as identifying a student.
+
+   2. ACCESS CODES. The importer ignored any access_code column and always
+      generated a new one. Since the CSV export includes access codes, the
+      obvious round-trip (export a roster, edit it, import it back) silently
+      re-issued every code and invalidated the slips already handed out. A code
+      supplied in the file is now honoured, and an existing code is never
+      overwritten.
+
+   3. VISIBLE FAILURES. Every error was swallowed by `catch (_) { skipped++ }`,
+      so a rejected row was indistinguishable from a blank one and nobody could
+      tell why an import "worked" but came up short. Each skip now records a row
+      number and a reason, returned to the caller for display. */
+/* Bulk roster import.
+
+   Four things this has to get right that the previous version did not:
+
+   1. IDENTITY. Rows were de-duplicated by email only. Bulk rosters usually
+      carry no email at all, so every row fell through to a fresh random
+      session_id and re-importing the same file created a complete second copy
+      of the roster. Rows without an email are now matched on the natural key
+      a school actually uses — school + class + name — which is the same tuple
+      the access-code login already treats as identifying a student. Rows are
+      matched against students already in the database AND against students
+      created earlier in this same file, so a roster that lists someone twice
+      produces one record rather than two.
+
+   2. ACCESS CODES. The importer ignored any access_code column and always
+      generated a new one. Since the CSV export includes access codes, the
+      obvious round-trip (export a roster, edit it, import it back) silently
+      re-issued every code and invalidated the slips already handed out. A code
+      supplied in the file is now honoured — unless it already belongs to a
+      different student, in which case the row keeps its own code rather than
+      creating two students who can log in with the same string. Nothing
+      enforces uniqueness at the schema level (idx_students_access is a plain
+      index), so this check is the only thing standing behind that invariant.
+
+   3. VISIBLE FAILURES. Every error was swallowed by `catch (_) { skipped++ }`,
+      so a rejected row was indistinguishable from a blank one and nobody could
+      tell why an import "worked" but came up short. Each skip now records a row
+      number and a reason, returned to the caller for display.
+
+   4. COST. Matching on the natural key needs the existing email-less students,
+      and querying for them per row would mean one full scan per row — 683 rows
+      against a 683-student school is 683 queries and ~466k comparisons, all
+      holding a transaction open. They are fetched once, up front, and indexed
+      in memory by normalised (school, grade, name). */
+async function runImportTransaction(rows) {
+  let imported = 0, updated = 0, skipped = 0;
+  /* Two distinct lists. `errors` means the row did NOT go in; `warnings` means
+     it did, with something the user should know. Collapsing them (an earlier
+     version did) put successfully imported rows under a heading that said they
+     had not been imported — worse than saying nothing. */
+  const errors   = [];   // { row, name, reason } — row rejected
+  const warnings = [];   // { row, name, reason } — row imported with a caveat
+
+  /* Natural key for an email-less student. Normalised through match-utils so
+     "ABPS"/"ABPS,BAGA", "IX"/"9" and "MAMTA  SHARMA"/"Mamta Sharma" collapse
+     to the same key. Grade is used rather than the raw class label because a
+     roster re-exported from elsewhere often changes notation. */
+  const natKey = (school, klass, name) => {
+    const g = match.classGradeNumber(klass);
+    return match.normSchool(school) + '|' + (g == null
+      ? String(klass || '').toLowerCase().replace(/[^a-z0-9]+/g, '')
+      : 'g' + g) + '|' + match.normName(name);
+  };
+
+  await pg.tx(async (c) => {
+    // One read, up front, instead of one per row.
+    const existing = await c.query(
+      `SELECT session_id, school, class, full_name, email, access_code FROM students`
+    );
+    const byEmail = new Map();   // normalised email      → session_id
+    const byNat   = new Map();   // school|grade|name     → session_id (exact)
+    const codeOwner = new Map(); // access_code           → session_id
+    /* Email-less students kept as a list as well as a map. The map gives an
+       O(1) hit for the common case, but a hashed key cannot express a partial
+       school name: "ABPS" and "ABPS,BAGA" normalise to different strings even
+       though schoolMatches() treats them as the same school. Rows that miss the
+       map fall back to a scan of this list, which is already in memory — so the
+       fuzzy case costs JS comparisons, never another database round-trip. */
+    const emailless = [];
+    for (const r of existing.rows) {
+      const em = String(r.email || '').toLowerCase().trim();
+      if (em) byEmail.set(em, r.session_id);
+      else if (r.full_name && r.school) {
+        const k = natKey(r.school, r.class, r.full_name);
+        if (!byNat.has(k)) byNat.set(k, r.session_id);
+        emailless.push({ session_id: r.session_id, school: r.school, class: r.class, full_name: r.full_name });
+      }
+      if (r.access_code) codeOwner.set(String(r.access_code).toUpperCase(), r.session_id);
+    }
+
+    const fuzzyFind = (school, klass, name) => {
+      for (const row of emailless) {
+        if (!match.schoolMatches(school, row.school)) continue;
+        if (klass && !match.classMatches(klass, row.class)) continue;
+        if (!match.nameMatches(name, row.full_name)) continue;
+        return row.session_id;
+      }
+      return null;
+    };
+
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i];
+      const rowNo = i + 2;   // +2: 1-based, and row 1 is the header
+      const fullName = String(r.full_name || r.name || '').trim();
+      const fn = String(r.first_name || fullName.split(' ')[0] || '').trim();
+      const ln = String(r.last_name  || fullName.split(' ').slice(1).join(' ') || '').trim();
+      const display = fullName || (fn + ' ' + ln).trim();
+
+      if (!fn && !fullName) {
+        skipped++; errors.push({ row: rowNo, name: '', reason: 'No name in this row' });
+        continue;
+      }
+
+      try {
+        const norm   = String(r.email  || '').toLowerCase().trim();
+        const school = String(r.school || r.School || '').trim().replace(/\s+/g, ' ');
+        const klass  = String(r.class  || r.Class  || '').trim().replace(/\s+/g, ' ');
+        const now    = new Date().toISOString();
+
+        // Locate an existing student: email is authoritative, else natural key.
+        let sid = null, natk = null;
+        if (norm) sid = byEmail.get(norm) || null;
+        if (!sid && display && school) {
+          natk = natKey(school, klass, display);
+          sid  = byNat.get(natk) || fuzzyFind(school, klass, display);
         }
+        const isUpdate = !!sid;
         if (!sid) sid = crypto.randomBytes(16).toString('hex');
+
+        /* Honour a code from the file only if it is free or already this
+           student's. Handing the same code to two students would let one of
+           them log in as the other. */
+        let code = String(r.access_code || '').trim().toUpperCase() || null;
+        if (code) {
+          const owner = codeOwner.get(code);
+          if (owner && owner !== sid) {
+            warnings.push({ row: rowNo, name: display,
+              reason: 'Access code ' + code + ' already belongs to another student — this row kept its own code' });
+            code = null;
+          }
+        }
+        /* Always offer a code. The ON CONFLICT below COALESCEs against the
+           stored value, so an existing code is never overwritten — which means
+           this only ever fills a gap. Gating it on `!isUpdate` (an earlier
+           version of this function) meant re-importing a roster to backfill
+           codes left already-known students without one, silently. */
+        if (!code) code = generateAccessCode();
 
         await c.query(
           `INSERT INTO students (session_id, first_name, last_name, full_name, email, class, section, school, school_state, school_city, age, gender, registered_at, access_code, access_code_set_at)
@@ -1131,18 +1272,33 @@ async function runImportTransaction(rows) {
              -- invalidates codes already handed out to students
              access_code = COALESCE(students.access_code, EXCLUDED.access_code),
              access_code_set_at = COALESCE(students.access_code_set_at, EXCLUDED.access_code_set_at)`,
-          [sid, fn || '', ln || '', fullName || (fn + ' ' + (ln || '')).trim(), norm,
-           String(r.class || r.Class || '').trim().replace(/\s+/g, ' '), r.section || r.Section || '',
-           String(r.school || r.School || '').trim().replace(/\s+/g, ' '),
-           r.school_state || '', r.school_city || '', r.age || '', r.gender || '', now,
-           generateAccessCode(), now]
+          [sid, fn || '', ln || '', display, norm,
+           klass, r.section || r.Section || '',
+           school, r.school_state || '', r.school_city || '',
+           r.age || '', r.gender || '', now,
+           code, now]
         );
-        imported++;
-      } catch (_) { skipped++; }
+
+        // Register this student so later rows in the SAME file match them
+        // instead of creating a second record.
+        if (norm) byEmail.set(norm, sid);
+        if (natk && !byNat.has(natk)) byNat.set(natk, sid);
+        if (!norm && !isUpdate && display && school) {
+          emailless.push({ session_id: sid, school, class: klass, full_name: display });
+        }
+        if (code) codeOwner.set(code, sid);
+
+        if (isUpdate) updated++; else imported++;
+      } catch (e) {
+        skipped++;
+        errors.push({ row: rowNo, name: display, reason: e.message.slice(0, 160) });
+      }
     }
   });
   _invalidateSchoolCache();
-  return { imported, skipped };
+  return { imported, updated, skipped,
+           errors:   errors.slice(0, 50),
+           warnings: warnings.slice(0, 50) };
 }
 
 async function deleteStudent(sessionId) {

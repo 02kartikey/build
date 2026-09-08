@@ -748,9 +748,21 @@ async function _importStudents(req, res) {
   // is visible to the caller via the existing skipped counter.
   let scopeRejected = 0;
   if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(_schoolKey);
+    const assigned = await _userSchools(user);
     const before = rows.length;
-    rows = rows.filter(r => schools.includes(_schoolKey(r.school)));
+    const kept = [];
+    for (const r of rows) {
+      // Match tolerantly, then rewrite the row's school to the assigned
+      // spelling. A staff member typing "ABPS" in a roster for the school they
+      // are assigned to as "ABPS,BAGA" previously had the whole row rejected
+      // with no explanation; and had it been let through as typed, the students
+      // would have landed under a school name nobody is scoped to and vanished
+      // from that counsellor's roster. Canonicalising here fixes both.
+      const hit = assigned.find(a => _schoolKey(a) === _schoolKey(r.school))
+               || assigned.find(a => require('./match-utils.js').schoolMatches(r.school, a));
+      if (hit) kept.push(Object.assign({}, r, { school: hit }));
+    }
+    rows = kept;
     scopeRejected = before - rows.length;
     if (!rows.length) {
       return _json(res, 403, { error: 'None of the rows match your assigned school(s).' });
@@ -759,12 +771,15 @@ async function _importStudents(req, res) {
 
   // One _dbWrite slot + one SQLite transaction: atomic, and never blocks
   // the event loop with thousands of individual auto-transactions.
-  let imported = 0, skipped = 0;
+  let imported = 0, updated = 0, skipped = 0, errors = [], warnings = [];
   try {
     await _dbWrite(async () => {
       const doImport = await _ddb.runImportTransaction(rows.slice(0, 2000));
       imported = doImport.imported;
+      updated  = doImport.updated || 0;
       skipped  = doImport.skipped;
+      errors   = doImport.errors   || [];
+      warnings = doImport.warnings || [];
     });
   } catch (e) {
     process.stderr.write('[ERROR] [import_students] ' + e.message + '\n');
@@ -772,8 +787,10 @@ async function _importStudents(req, res) {
   }
 
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'import_students',
-                  detail: `imported=${imported} skipped=${skipped} scopeRejected=${scopeRejected}` });
-  _json(res, 200, { ok: true, imported, skipped, scopeRejected });
+                  detail: `imported=${imported} updated=${updated} skipped=${skipped} scopeRejected=${scopeRejected}` });
+  // errors carry the row number and reason for each skip so the UI can tell the
+  // user WHICH rows failed and why, instead of only a count.
+  _json(res, 200, { ok: true, imported, updated, skipped, scopeRejected, errors, warnings });
 }
 
 /* ══════════════════════════════════════════════════════════════════
