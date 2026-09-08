@@ -1883,7 +1883,50 @@ function parseCsv(text){
     return o;
   });
 }
-async function runImport(){if(!_parsedRows.length){toast('Select a CSV file first.','error');return;}setLoad('import-lbl','import-sp','import-btn',true);try{const{imported,skipped}=await _api('POST','/api/dashboard/students/import',{rows:_parsedRows});toast('✓ Imported '+imported+' students, skipped '+skipped+'. Access codes generated — see the Access Code column.','success');closeModal('import-modal');loadStudents();}catch(e){toast('Import error: '+e.message,'error');}finally{setLoad('import-lbl','import-sp','import-btn',false);}
+async function runImport(){
+  if(!_parsedRows.length){toast('Select a CSV file first.','error');return;}
+  setLoad('import-lbl','import-sp','import-btn',true);
+  try{
+    const res=await _api('POST','/api/dashboard/students/import',{rows:_parsedRows});
+    const added=res.imported||0, upd=res.updated||0, skip=res.skipped||0,
+          scoped=res.scopeRejected||0, errs=res.errors||[], warns=res.warnings||[];
+
+    // Report what actually happened. The old message said only "imported N,
+    // skipped M", which could not distinguish a new student from an updated
+    // one, and gave no reason for a skip — an import that silently dropped
+    // rows looked identical to one that worked.
+    let msg='✓ '+added+' new';
+    if(upd)    msg+=', '+upd+' updated';
+    if(skip)   msg+=', '+skip+' skipped';
+    if(scoped) msg+=', '+scoped+' outside your school(s)';
+    toast(msg, skip||scoped?'error':'success');
+
+    const prev=document.getElementById('import-prev');
+    if((errs.length||warns.length)&&prev){
+      // Keep the modal open when anything needs attention, so the reasons can
+      // be read and the file corrected. Closing on a partial failure is how
+      // people end up believing everything imported.
+      // Rejected rows and imported-with-a-caveat rows are listed separately —
+      // filing a row that DID import under "not imported" is its own bug.
+      const line=function(e){
+        return '<div style="font-size:12px;margin-bottom:3px">Row '+e.row+
+               (e.name?' ('+_esc(e.name)+')':'')+' — '+_esc(e.reason)+'</div>';
+      };
+      let html='';
+      if(errs.length) html+='<div style="font-weight:700;margin-bottom:6px">Not imported:</div>'+errs.map(line).join('');
+      if(warns.length) html+='<div style="font-weight:700;margin:10px 0 6px">Imported, but check these:</div>'+warns.map(line).join('');
+      prev.style.display='block';
+      prev.innerHTML=html;
+      loadStudents();
+      return;
+    }
+    closeModal('import-modal');
+    loadStudents();
+  }catch(e){
+    toast('Import error: '+e.message,'error');
+  }finally{
+    setLoad('import-lbl','import-sp','import-btn',false);
+  }
 }
 function exportCsv(){const school=document.getElementById('stu-school').value,cls=document.getElementById('stu-class').value,status=document.getElementById('stu-status').value;const p=new URLSearchParams();if(school)p.set('school',school);if(cls)p.set('class',cls);if(status)p.set('status',status);fetch('/api/dashboard/students/export?'+p,{headers:{Authorization:'Bearer '+_token}}).then(r=>r.blob()).then(b=>{const url=URL.createObjectURL(b);const a=document.createElement('a');a.href=url;a.download='students.csv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}).catch(e=>toast('Export failed: '+e.message,'error'));}
 
