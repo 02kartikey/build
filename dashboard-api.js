@@ -1078,7 +1078,7 @@ function _publicIP(req) {
 async function handleAccessSchools(req, res) {
   const qs = new URLSearchParams((req.url.split('?')[1]) || '');
   const q  = qs.get('q') || '';
-  if (_rl && !(await _rl('access-schools', _publicIP(req), 60))) {
+  if (_rl && !(await _rl('access-schools', _publicIP(req), parseInt(process.env.ACCESS_SCHOOLS_MAX || '600', 10)))) {
     return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
   }
   try {
@@ -1095,7 +1095,10 @@ async function handleAccessNames(req, res) {
   const school = qs.get('school') || '';
   const klass  = qs.get('class')  || '';
   if (!school) return _json(res, 400, { error: 'school is required' });
-  if (_rl && !(await _rl('access-names', _publicIP(req), 60))) {
+  /* A lookup, not a login attempt: every student triggers a few of these while
+     filling the form, so the ceiling has to scale with a whole class on one IP
+     (60/hour exhausted after roughly fifteen students). */
+  if (_rl && !(await _rl('access-names', _publicIP(req), parseInt(process.env.ACCESS_NAMES_MAX || '1200', 10)))) {
     return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
   }
   try {
@@ -1128,10 +1131,31 @@ async function handleAccessRedeem(req, res) {
   if (!school || !klass || !name || !code) {
     return _json(res, 400, { error: 'School, class, name and access code are all required.' });
   }
-  // Tight IP limit: 8 attempts/window. With a 30^8 keyspace this makes
-  // guessing infeasible while staying generous for a mistyped code.
-  if (_rl && !(await _rl('access-redeem', _publicIP(req), 8))) {
-    return _json(res, 429, { error: 'Too many attempts. Please wait before trying again.' });
+  /* Brute-force throttle, keyed per STUDENT rather than per IP.
+
+     This was keyed on the public IP alone with a limit of 8 per hour. A school
+     computer lab NATs every student to a single public address, so the ninth
+     student of the day to start the assessment was told "Too many attempts"
+     with perfectly correct details — the entire class was sharing one budget.
+     The original comment ("generous for a mistyped code") was reasoning about
+     one person retyping, not forty people on one router.
+
+     Keying on IP + the student's name gives each student their own budget, so
+     a lab of any size works, while repeated guesses against any ONE student
+     from the same network are still capped. Combined with the 30^8 code
+     keyspace that keeps guessing infeasible.
+
+     A deliberately high pure-IP ceiling stays as a backstop against automated
+     enumeration; ACCESS_REDEEM_IP_MAX can be raised for very large single-IP
+     schools without a code change. */
+  const _who = require('./match-utils.js').normName(name).replace(/\s+/g, '') || 'anon';
+  const _perStudent = parseInt(process.env.ACCESS_REDEEM_MAX    || '8',   10);
+  const _perIp      = parseInt(process.env.ACCESS_REDEEM_IP_MAX || '600', 10);
+  if (_rl && !(await _rl('access-redeem', _publicIP(req) + '|' + _who, _perStudent))) {
+    return _json(res, 429, { error: 'Too many attempts for this student. Please check the code with your teacher and try again shortly.' });
+  }
+  if (_rl && !(await _rl('access-redeem-ip', _publicIP(req), _perIp))) {
+    return _json(res, 429, { error: 'Too many requests from this network. Please wait a moment.' });
   }
   try {
     const stu = await _ddb.redeemAccessCode({ school, klass, name, code });
