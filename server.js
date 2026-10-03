@@ -39,6 +39,7 @@ const cdb      = require('./counsellor-db.js');
 const rag      = require('./counsellor-rag.js');
 const goals    = require('./counsellor-goals-db.js');
 const buildAccessLoginHandler = require('./access-login-handler.js');
+const signupGate = require('./signup-gate.js');
 const dashApi  = require('./dashboard-api.js');
 
 const PORT             = parseInt(process.env.PORT            || '3000', 10);
@@ -606,6 +607,21 @@ async function _handleSaveRegistration(req, res) {
   catch (e) { return _json(res, e.message === 'body_too_large' ? 413 : 400, { error: e.message }); }
   const { student, sessionId } = body || {};
   if (!sessionId) return _json(res, 400, { error: 'sessionId is required' });
+
+  /* Registration gate. Both the access-code flow and self-registration land
+     here, so the endpoint cannot simply be switched off — see signup-gate.js
+     for how the two are told apart. Controlled by ALLOW_SELF_SIGNUP in .env;
+     absent means closed, so a lost config cannot silently reopen free signups. */
+  {
+    const gate = await signupGate.checkSignupAllowed({
+      sessionId,
+      email: student && student.email,
+    });
+    if (!gate.allow) {
+      log.warn('[signup-gate] blocked (' + gate.reason + ') session=' + String(sessionId).slice(0, 12));
+      return _json(res, gate.status, gate.body);
+    }
+  }
 
   try {
     const reg = await _dbWrite(() => dbModule.saveRegistration(student || {}, sessionId));
@@ -1592,6 +1608,8 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/counsellor-summarise')     return await _handleCounsellorSummarise(req, res);
     if (method === 'POST' && pathname === '/api/counsellor-query')         return await _handleCounsellorQuery(req, res);
     if (method === 'POST' && pathname === '/api/save-registration')        return await _handleSaveRegistration(req, res);
+    // Lets the lock screen reflect the real server setting instead of assuming.
+    if (method === 'GET'  && pathname === '/api/signup-status')            return _json(res, 200, signupGate.publicStatus());
     if (method === 'POST' && pathname === '/api/save-section')             return await _handleSaveSection(req, res);
     if (method === 'POST' && pathname === '/api/save-report')              return await _handleSaveReport(req, res);
     if (method === 'POST' && pathname === '/api/ai-report')                return await _handleAIReport(req, res);

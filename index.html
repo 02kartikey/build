@@ -2986,5 +2986,10 @@ document.addEventListener('DOMContentLoaded',function(){
 <script type="module" src="./js/main.js?v=20260816"></script>
 <script type="module" src="./js/ai-counsellor.js?v=20260816"></script>
 <script src="./js/counsellor-goals-ui.js?v=4"></script>
+<!-- Registration gate: keeps the "Register myself" tab visible but swaps the
+     form for an explanation while ALLOW_SELF_SIGNUP is off. A plain (non-module)
+     script so it runs BEFORE the deferred module graph and can hold its
+     override of window.doRegister against main.js's Object.assign. -->
+<script src="./js/signup-gate-ui.js?v=1"></script>
 </body>
 </html>
