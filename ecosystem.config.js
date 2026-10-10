@@ -28,7 +28,7 @@ module.exports = {
     script:  './server.js',
     cwd:     path.resolve(__dirname),   // always resolve relative to this file
 
-    instances:  'max',       // one per CPU core
+    instances:  4,       // one per CPU core
     exec_mode:  'cluster',
     watch:      false,
 
