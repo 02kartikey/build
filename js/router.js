@@ -178,6 +178,22 @@ var _registering = false;
 ══════════════════════════════════════════════════════════════════ */
 
 let _accessBusy = false;
+let _accessIdMode = 'name';   // 'name' = class + name, 'uid' = Unique School ID
+
+/* Switch how the student identifies themselves within their school. */
+function acSetIdMode(mode) {
+  _accessIdMode = mode === 'uid' ? 'uid' : 'name';
+  const byName = document.getElementById('ac-by-name'), byUid = document.getElementById('ac-by-uid');
+  if (byName) byName.style.display = _accessIdMode === 'uid' ? 'none' : '';
+  if (byUid)  byUid.style.display  = _accessIdMode === 'uid' ? '' : 'none';
+  ['name', 'uid'].forEach(m => {
+    const t = document.getElementById('ac-idtab-' + m);
+    if (t) { t.classList.toggle('active', m === _accessIdMode); t.setAttribute('aria-selected', String(m === _accessIdMode)); }
+  });
+  const err = document.getElementById('ac-err'); if (err) err.style.display = 'none';
+  if (_accessIdMode === 'uid') { const u = document.getElementById('ac-uid'); if (u) u.focus(); }
+}
+window.acSetIdMode = acSetIdMode;
 
 // Populate the name dropdown once school + class are chosen.
 /* Populate the Class dropdown from the server for the typed school. The old
@@ -285,9 +301,13 @@ async function doAccessLogin() {
   const klass  = (document.getElementById('ac-class')  || {}).value || '';
   const name   = (document.getElementById('ac-name')   || {}).value || '';
   const code   = ((document.getElementById('ac-code')  || {}).value || '').trim().toUpperCase();
+  const uid    = _accessIdMode === 'uid' ? ((document.getElementById('ac-uid') || {}).value || '').trim() : '';
 
-  if (!school || !klass || !name || !code) {
-    if (err) { err.textContent = 'Please fill in all four fields.'; err.style.display = 'block'; }
+  if (_accessIdMode === 'uid' ? (!school || !uid || !code) : (!school || !klass || !name || !code)) {
+    if (err) {
+      err.textContent = _accessIdMode === 'uid' ? 'Please enter your school, Unique School ID and access code.' : 'Please fill in all four fields.';
+      err.style.display = 'block';
+    }
     return;
   }
   _accessBusy = true;
@@ -297,7 +317,7 @@ async function doAccessLogin() {
   try {
     const r = await fetch('/api/student-access/redeem', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ school, class: klass, name, code }),
+      body: JSON.stringify(_accessIdMode === 'uid' ? { school, uid, code } : { school, class: klass, name, code }),
     });
     const j = await r.json().catch(() => ({}));
     if (!r.ok || !j.ok || !j.student) {
@@ -323,6 +343,7 @@ async function doAccessLogin() {
       schoolState: st.school_state || '', schoolCity: st.school_city || '',
       schoolLocation: [st.school_city, st.school_state].filter(Boolean).join(', '),
       age: st.age || '', gender: st.gender || '', email: st.email || '',
+      uniqueId: st.student_uid || '',
       registeredAt: new Date().toISOString(),
     };
 
@@ -389,6 +410,7 @@ async function doRegister() {
       schoolLocation: city + ', ' + state,
       age:document.getElementById('r-age').value,
       gender:gen, email:email,
+      uniqueId: ((document.getElementById('r-uid') || {}).value || '').trim(),
       registeredAt:new Date().toISOString(),
     };
     // SECURITY: registration is an explicit new-identity claim, so ALWAYS
@@ -441,7 +463,7 @@ async function doRegister() {
       // Do NOT proceed into the assessment on a failed registration save.
       // S.sessionId is preserved (not regenerated) so the retry below reuses
       // the same id and will not create a duplicate row once it succeeds.
-      showDbStatus('error', 'Could not save your details. Please check your connection and try again.');
+      showDbStatus('error', error.status === 409 ? error.message : 'Could not save your details. Please check your connection and try again.');
       if (submitBtn) { submitBtn.disabled = false; submitBtn.style.opacity = '1'; }
       _registering = false;
       return;

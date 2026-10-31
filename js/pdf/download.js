@@ -12,7 +12,19 @@ import { NMAP_DIMS } from '../engine/nmap.js';
 import { getStanine } from '../engine/daab.js';
 import { CPI_AREAS } from '../engine/cpi.js';
 
-async function downloadPDF(override) {
+/* Brand assets are fetched once per page and shared by every report rendered
+   in that page, so a bulk download of hundreds of reports does not refetch
+   the logo and icons for each one. A reload picks up newly added files. */
+let _logoPromise = null;
+const _iconCache = {};
+
+/* downloadPDF(override, opts)
+     override         — saved report data (dashboards) instead of live state S
+     opts.returnBlob  — return { blob, filename } instead of saving the file,
+                        and throw on failure instead of showing an alert
+                        (used by the dashboards' bulk ZIP download). */
+async function downloadPDF(override, opts = {}) {
+  const returnBlob = !!(opts && opts.returnBlob);
   /* ════════════════════════════════════════════════════════════════════
      NuMind MAPS — Template-faithful 10-page A4 report
      Mirrors numind_maps_jspdf_template-1.jsx, wired to live S + AI data
@@ -32,7 +44,8 @@ async function downloadPDF(override) {
       });
     }
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    // compress: deflate page streams — without it every report was ~13 MB.
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4', compress: true });
 
     // Brand typeface: register Poppins (subset) OVER the built-in 'helvetica'
     // family, so every setFont('helvetica', …) in this file renders in Poppins
@@ -56,8 +69,7 @@ async function downloadPDF(override) {
     // changes, no embedded base64. If the file is missing or slow (>1.5s),
     // the vector wordmark below renders instead, so the PDF never blocks
     // or ships without branding.
-    let _logo = null; // { dataUrl, w, h } in px
-    try {
+    if (!_logoPromise) _logoPromise = (async () => { try {
       const ctl = new AbortController();
       const tm  = setTimeout(() => ctl.abort(), 1500);
       const rsp = await fetch('/assets/numind-logo.png', { signal: ctl.signal });
@@ -75,9 +87,11 @@ async function downloadPDF(override) {
           im.onerror = () => res(null);
           im.src = dataUrl;
         });
-        if (dim && dim.w && dim.h) _logo = { dataUrl, w: dim.w, h: dim.h };
+        if (dim && dim.w && dim.h) return { dataUrl, w: dim.w, h: dim.h };
       }
     } catch (_) { /* fall through to wordmark */ }
+    return null; })();
+    const _logo = await _logoPromise; // { dataUrl, w, h } in px, or null
 
     // Right-aligned logo: rightX = right edge, hMM = target height in mm.
     const drawLogo = (rightX, midY, hMM, onDark) => {
@@ -304,8 +318,14 @@ async function downloadPDF(override) {
               : ((typeof S !== 'undefined' && S && S.daab) ? S.daab : null);
     const cpi  = _ov && _ov.cpi ? _ov.cpi
               : ((typeof S !== 'undefined' && S && S.cpi && S.cpi.scores) ? S.cpi.scores : { ranked: [], top3: [] });
-    const sea  = _ov && _ov.sea ? _ov.sea
+    const _seaRaw = _ov && _ov.sea ? _ov.sea
               : ((typeof S !== 'undefined' && S && S.sea && S.sea.scores) ? S.sea.scores : { domScores: { E:0, S:0, A:0 }, cls: {} });
+    // Older or partially saved wellbeing results can lack domScores/cls; fill
+    // the shape here so every page below can read it safely.
+    const sea = Object.assign({}, _seaRaw, {
+      domScores: Object.assign({ E: 0, S: 0, A: 0 }, (_seaRaw && _seaRaw.domScores) || {}),
+      cls: (_seaRaw && _seaRaw.cls) || {},
+    });
     // Snapshot the AI report once so every subsequent read in this render
     // is guaranteed to be consistent — avoids race conditions where
     // window._lastAIReport changes mid-generation.
@@ -734,7 +754,6 @@ async function downloadPDF(override) {
        derived from live data (pillar codes, trait/gauge keys) — no hardcoded
        master list to maintain.
     ═══════════════════════════════════════════════ */
-    const _iconCache = {};
     const iconSlug = (s) => String(s).toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
     const loadIcon = async (name) => {
       const key = iconSlug(name);
@@ -1820,18 +1839,11 @@ async function downloadPDF(override) {
         studentBar(25); cy = 40;
       }
       cy = subHeading('RECOMMENDED SUBJECT PATHWAYS', cy);
-      const subjectMap = {
-        'Science & Technology':         'PCM + Computer Science',
-        'Health & Medical Science':     'PCB + Psychology',
-        'Language & Communication':     'Languages + Media Studies',
-        'Creative Design & Perf. Arts': 'Arts + Design + Performing Arts',
-        'Legal & Judiciary':            'Humanities + Political Science',
-        'Administration & Governance':  'Humanities + Economics + Pol. Science',
-        'Education & Research':         'Humanities + Subject Specialisation',
-        'Business & Entrepreneurship':  'Mathematics + Economics + Business',
-        'People & Service':             'Humanities + Psychology + Sociology',
-        'Sports & Physical Perf.':      'PE + Biology + Psychology',
-      };
+      // Subject combination per career area — read from CPI_AREAS (engine/cpi.js),
+      // the same definition the staff dashboards use for their stream view.
+      const subjectMap = Object.fromEntries(
+        CPI_AREAS.filter(a => a.subjects).map(a => [a.label, a.subjects])
+      );
       // Resolve each recommendation to a CLUSTER label (not the career-pathway
       // text) so subjectMap actually matches. row[7] carries the cluster for AI
       // rows; score-driven rows put the cluster in row[0]. Previously these
@@ -2039,10 +2051,12 @@ async function downloadPDF(override) {
 
     // SAVE
     const fname = 'NuMind_MAPS_' + safe(studentName).replace(/\s+/g, '_') + '_' + new Date().toISOString().slice(0, 10) + '.pdf';
+    if (returnBlob) return { blob: doc.output('blob'), filename: fname };
     doc.save(fname);
 
   } catch (err) {
     console.error('[downloadPDF] failed:', err);
+    if (returnBlob) throw err;
     alert('PDF generation failed: ' + (err.message || err));
   } finally {
     if (btn) { btn.classList.remove('loading'); btn.disabled = false; }

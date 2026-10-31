@@ -70,7 +70,10 @@ const DB = {
       if (!res.ok) {
         const msg = await res.text();
         _log.error('[DB] saveRegistration HTTP ' + res.status + ':', msg);
-        return { data: null, error: { message: msg } };
+        // A 409 carries a message written for the student (e.g. their Unique
+        // School ID is already registered by the school).
+        let body = null; try { body = JSON.parse(msg); } catch (_) {}
+        return { data: null, error: { message: (body && body.error) || msg, status: res.status, code: body && body.code } };
       }
       const data = await res.json();
       _log.log('[DB] Registration saved. sessionId:', data.sessionId || sessionId);

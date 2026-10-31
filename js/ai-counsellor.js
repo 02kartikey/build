@@ -1190,6 +1190,18 @@ async function acpLoadCodeNames() {
    payload shape as /api/counsellor-verify-pin, so _acApplySession consumes
    it without modification. */
 var _acpAccessBusy = false;
+var _acpIdMode = 'name';   // 'name' = class + name, 'uid' = Unique School ID
+function acpSetIdMode(mode) {
+  _acpIdMode = mode === 'uid' ? 'uid' : 'name';
+  var byName = document.getElementById('acp-by-name'), byUid = document.getElementById('acp-by-uid');
+  if (byName) byName.style.display = _acpIdMode === 'uid' ? 'none' : '';
+  if (byUid)  byUid.style.display  = _acpIdMode === 'uid' ? '' : 'none';
+  ['name', 'uid'].forEach(function (m) {
+    var t = document.getElementById('acp-idtab-' + m);
+    if (t) { t.classList.toggle('active', m === _acpIdMode); t.setAttribute('aria-selected', String(m === _acpIdMode)); }
+  });
+  var err = document.getElementById('acp-code-err'); if (err) err.style.display = 'none';
+}
 async function acpAccessLogin() {
   if (_acpAccessBusy) return;
   var err  = document.getElementById('acp-code-err');
@@ -1198,9 +1210,13 @@ async function acpAccessLogin() {
   var klass  = ((document.getElementById('acp-code-class')  || {}).value || '').trim();
   var name   = ((document.getElementById('acp-code-name')   || {}).value || '').trim();
   var code   = ((document.getElementById('acp-code-code')   || {}).value || '').trim().toUpperCase();
+  var uid    = _acpIdMode === 'uid' ? ((document.getElementById('acp-code-uid') || {}).value || '').trim() : '';
 
-  if (!school || !klass || !name || !code) {
-    if (err) { err.textContent = 'Please fill in all four fields.'; err.style.display = 'block'; }
+  if (_acpIdMode === 'uid' ? (!school || !uid || !code) : (!school || !klass || !name || !code)) {
+    if (err) {
+      err.textContent = _acpIdMode === 'uid' ? 'Please enter your school, Unique School ID and access code.' : 'Please fill in all four fields.';
+      err.style.display = 'block';
+    }
     return;
   }
   _acpAccessBusy = true;
@@ -1210,7 +1226,7 @@ async function acpAccessLogin() {
   try {
     var resp = await fetch('/api/counsellor-access-login', {
       method: 'POST', headers: _acHeaders(),
-      body: JSON.stringify({ school: school, class: klass, name: name, code: code }),
+      body: JSON.stringify(_acpIdMode === 'uid' ? { school: school, uid: uid, code: code } : { school: school, class: klass, name: name, code: code }),
     });
     var data = await resp.json().catch(function() { return {}; });
     if (!resp.ok || !data.unlocked) {
@@ -1236,6 +1252,7 @@ window.acpSwitchLockTab   = acpSwitchLockTab;
 window.acpLoadCodeClasses = acpLoadCodeClasses;
 window.acpLoadCodeNames   = acpLoadCodeNames;
 window.acpAccessLogin     = acpAccessLogin;
+window.acpSetIdMode       = acpSetIdMode;
 
 window.acUnlock              = acUnlock;
 window.acSend                = acSend;

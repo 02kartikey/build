@@ -3,17 +3,22 @@
    Career Preference Inventory — areas, questions, scorer.
 ════════════════════════════════════════════════════════════════════ */
 
+/* Career-interest areas. Single source of truth for the assessment, the PDF
+   report and the staff dashboards (the server loads this same file).
+   stream   — the broad subject stream this area usually leads to; used to group
+              students on the dashboards' "Subject stream" view.
+   subjects — the specific subject combination the PDF recommends. */
 const CPI_AREAS = [
-  { id:'st',  label:'Science & Technology',         abbr:'S&T',  color:'#0f766e', light:'#ccfbf1', careers:['Engineering','CS','Research','AI/ML'] },
-  { id:'hms', label:'Health & Medical Science',     abbr:'HMS',  color:'#0891b2', light:'#e0f2fe', careers:['Medicine','Allied Health','Public Health'] },
-  { id:'lc',  label:'Language & Communication',     abbr:'L&C',  color:'#b45309', light:'#fef3c7', careers:['Journalism','Content','Linguistics','PR'] },
-  { id:'cd',  label:'Creative Design & Perf. Arts', abbr:'CrD',  color:'#7c3aed', light:'#ede9fe', careers:['UX/UI','Animation','Visual Arts','Performing Arts'] },
-  { id:'lj',  label:'Legal & Judiciary',            abbr:'L&J',  color:'#4f46e5', light:'#eef2ff', careers:['Law','Policy','Civil Services'] },
-  { id:'ag',  label:'Administration & Governance',  abbr:'Adm',  color:'#15803d', light:'#dcfce7', careers:['Public Admin','Management','Civil Services'] },
-  { id:'er',  label:'Education & Research',         abbr:'E&R',  color:'#1d4ed8', light:'#dbeafe', careers:['Teaching','Academia','Research','EdTech'] },
-  { id:'be',  label:'Business & Entrepreneurship',  abbr:'B&E',  color:'#c2410c', light:'#ffedd5', careers:['Business','Finance','Startups','Consulting'] },
-  { id:'ps',  label:'People & Service',             abbr:'P&S',  color:'#be185d', light:'#fce7f3', careers:['Counselling','Social Work','NGO','HR'] },
-  { id:'sp',  label:'Sports & Physical Perf.',      abbr:'Spt',  color:'#64748b', light:'#f1f5f9', careers:['Sports Science','Coaching','Athletics'] }
+  { id:'st',  label:'Science & Technology',         abbr:'S&T',  color:'#0f766e', light:'#ccfbf1', careers:['Engineering','CS','Research','AI/ML'], stream:'Science (PCM)', subjects:'PCM + Computer Science' },
+  { id:'hms', label:'Health & Medical Science',     abbr:'HMS',  color:'#0891b2', light:'#e0f2fe', careers:['Medicine','Allied Health','Public Health'], stream:'Science (PCB)', subjects:'PCB + Psychology' },
+  { id:'lc',  label:'Language & Communication',     abbr:'L&C',  color:'#b45309', light:'#fef3c7', careers:['Journalism','Content','Linguistics','PR'], stream:'Humanities', subjects:'Languages + Media Studies' },
+  { id:'cd',  label:'Creative Design & Perf. Arts', abbr:'CrD',  color:'#7c3aed', light:'#ede9fe', careers:['UX/UI','Animation','Visual Arts','Performing Arts'], stream:'Arts & Design', subjects:'Arts + Design + Performing Arts' },
+  { id:'lj',  label:'Legal & Judiciary',            abbr:'L&J',  color:'#4f46e5', light:'#eef2ff', careers:['Law','Policy','Civil Services'], stream:'Humanities', subjects:'Humanities + Political Science' },
+  { id:'ag',  label:'Administration & Governance',  abbr:'Adm',  color:'#15803d', light:'#dcfce7', careers:['Public Admin','Management','Civil Services'], stream:'Humanities', subjects:'Humanities + Economics + Pol. Science' },
+  { id:'er',  label:'Education & Research',         abbr:'E&R',  color:'#1d4ed8', light:'#dbeafe', careers:['Teaching','Academia','Research','EdTech'], stream:'Humanities', subjects:'Humanities + Subject Specialisation' },
+  { id:'be',  label:'Business & Entrepreneurship',  abbr:'B&E',  color:'#c2410c', light:'#ffedd5', careers:['Business','Finance','Startups','Consulting'], stream:'Commerce', subjects:'Mathematics + Economics + Business' },
+  { id:'ps',  label:'People & Service',             abbr:'P&S',  color:'#be185d', light:'#fce7f3', careers:['Counselling','Social Work','NGO','HR'], stream:'Humanities', subjects:'Humanities + Psychology + Sociology' },
+  { id:'sp',  label:'Sports & Physical Perf.',      abbr:'Spt',  color:'#64748b', light:'#f1f5f9', careers:['Sports Science','Coaching','Athletics'], stream:'Physical Education', subjects:'PE + Biology + Psychology' }
 ];
 const CPI_QS = [
   {q:'Which activity would you enjoy the most?',opts:['Doing experiments or building gadgets','Learning about diseases and treatments','Writing stories or speaking publicly','Drawing, dancing, or designing','Debating on justice and laws','Leading a group activity','Teaching or explaining concepts','Running a small business idea','Helping someone solve a problem','Playing sports or fitness training']},
