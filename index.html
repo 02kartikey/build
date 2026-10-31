@@ -819,7 +819,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="card cp" id="entry-code">
       <div style="font-size:13px;color:var(--ink3);line-height:1.7;margin-bottom:1.25rem">
         Your school has already added you. Enter your school and the access code your teacher gave you,
-        then pick your class and name.
+        then either pick your class and name, or type your Unique School ID.
       </div>
       <div class="field">
         <label>School *</label>
@@ -833,7 +833,13 @@ document.addEventListener('DOMContentLoaded', function() {
         <input id="ac-code" placeholder="e.g. ZNEPLGHR" maxlength="12" autocapitalize="characters"
                autocomplete="off" spellcheck="false" style="text-transform:uppercase;letter-spacing:.12em;font-weight:700">
       </div>
-      <div class="frow">
+      <!-- Identify yourself within the school: class + name, or the Unique
+           School ID the school issued (admission / enrolment number). -->
+      <div class="ac-idswitch" role="tablist" aria-label="How to identify yourself">
+        <button type="button" class="ac-idtab active" id="ac-idtab-name" role="tab" aria-selected="true" onclick="acSetIdMode('name')">Class &amp; name</button>
+        <button type="button" class="ac-idtab" id="ac-idtab-uid" role="tab" aria-selected="false" onclick="acSetIdMode('uid')">Unique School ID</button>
+      </div>
+      <div class="frow" id="ac-by-name">
         <div class="field">
           <label>Class *</label>
           <!-- Options come from the server per school (loadAccessClasses):
@@ -846,6 +852,12 @@ document.addEventListener('DOMContentLoaded', function() {
           <label>Your Name *</label>
           <select id="ac-name" disabled><option value="">Select your school and class first…</option></select>
         </div>
+      </div>
+      <div class="field" id="ac-by-uid" style="display:none">
+        <label>Unique School ID *</label>
+        <input id="ac-uid" placeholder="e.g. ADM2024-1024" maxlength="40" autocomplete="off" spellcheck="false"
+               onkeydown="if(event.key==='Enter')doAccessLogin()">
+        <div style="font-size:11px;color:var(--ink4);margin-top:4px">The student ID your school gave you (admission or enrolment number).</div>
       </div>
       <div class="ferr" id="ac-err" style="display:none"></div>
       <button class="btn btn-primary btn-full" id="ac-submit" style="margin-top:8px" onclick="doAccessLogin()">
@@ -911,6 +923,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="ferr" id="e-sch">Please enter your school name</div>
         </div>
       </div>
+      <div class="field"><label>Unique School ID <span style="font-size:11px;font-weight:400;color:var(--ink3)">(optional — the student ID your school gave you)</span></label><input id="r-uid" placeholder="e.g. ADM2024-1024" maxlength="40" autocomplete="off" spellcheck="false"></div>
       <div class="field"><label>Email Address * <span style="font-size:11px;font-weight:400;color:var(--ink3)">(needed to access your AI Counsellor after the assessment)</span></label><input id="r-email" type="email" placeholder="yourname@example.com" required><div class="ferr" id="e-email">Please enter a valid email address</div></div>
 
       <div class="consent-box" onclick="if(event.target.id!=='r-con'){var cb=document.getElementById('r-con');cb.checked=!cb.checked;}">
@@ -1508,7 +1521,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             .acp-fld select.nc-lock-input:disabled { opacity:.55; cursor:not-allowed; }
             .acp-hint { font-size:11px; color:var(--ink4); margin-top:4px; }
-          </style>
+
+/* Access-code forms: choose class + name, or the Unique School ID */
+.ac-idswitch{display:flex;gap:4px;padding:4px;margin:2px 0 14px;background:rgba(0,0,0,.04);border-radius:10px}
+.ac-idtab{flex:1;border:0;background:transparent;padding:8px 10px;border-radius:8px;font:inherit;font-size:13px;font-weight:600;color:var(--ink3,#555);cursor:pointer}
+.ac-idtab.active{background:#fff;color:var(--ink,#111);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+</style>
           <div class="entry-tabs" role="tablist" style="margin-bottom:16px">
             <button class="entry-tab active" id="acp-tab-email" role="tab" aria-selected="true"
                     onclick="acpSwitchLockTab('email')" type="button">✉️ Email</button>
@@ -1553,17 +1571,29 @@ document.addEventListener('DOMContentLoaded', function() {
                      style="text-transform:uppercase;letter-spacing:.12em;font-weight:700"
                      onkeydown="if(event.key==='Enter')acpAccessLogin()">
             </div>
-            <div class="acp-fld">
-              <label class="nc-lock-label" for="acp-code-class">Class</label>
-              <select id="acp-code-class" class="nc-lock-input" onchange="acpLoadCodeNames()">
-                <option value="">Select…</option>
-              </select>
+            <div class="ac-idswitch" role="tablist" aria-label="How to identify yourself">
+              <button type="button" class="ac-idtab active" id="acp-idtab-name" role="tab" aria-selected="true" onclick="acpSetIdMode('name')">Class &amp; name</button>
+              <button type="button" class="ac-idtab" id="acp-idtab-uid" role="tab" aria-selected="false" onclick="acpSetIdMode('uid')">Unique School ID</button>
             </div>
-            <div class="acp-fld">
-              <label class="nc-lock-label" for="acp-code-name">Your name</label>
-              <select id="acp-code-name" class="nc-lock-input" disabled>
-                <option value="">Select your school and class first…</option>
-              </select>
+            <div id="acp-by-name">
+              <div class="acp-fld">
+                <label class="nc-lock-label" for="acp-code-class">Class</label>
+                <select id="acp-code-class" class="nc-lock-input" onchange="acpLoadCodeNames()">
+                  <option value="">Select…</option>
+                </select>
+              </div>
+              <div class="acp-fld">
+                <label class="nc-lock-label" for="acp-code-name">Your name</label>
+                <select id="acp-code-name" class="nc-lock-input" disabled>
+                  <option value="">Select your school and class first…</option>
+                </select>
+              </div>
+            </div>
+            <div class="acp-fld" id="acp-by-uid" style="display:none">
+              <label class="nc-lock-label" for="acp-code-uid">Unique School ID</label>
+              <input id="acp-code-uid" class="nc-lock-input" placeholder="e.g. ADM2024-1024" maxlength="40"
+                     autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')acpAccessLogin()">
+              <div class="acp-hint">The student ID your school gave you (admission or enrolment number).</div>
             </div>
             <div id="acp-code-err" class="nc-lock-err"></div>
             <button id="acp-code-btn" class="nc-lock-btn" onclick="acpAccessLogin()">
@@ -2983,8 +3013,8 @@ document.addEventListener('DOMContentLoaded',function(){
 })();
 </script>
 
-<script type="module" src="./js/main.js?v=20260816"></script>
-<script type="module" src="./js/ai-counsellor.js?v=20260816"></script>
+<script type="module" src="./js/main.js?v=20261031"></script>
+<script type="module" src="./js/ai-counsellor.js?v=20261031"></script>
 <script src="./js/counsellor-goals-ui.js?v=4"></script>
 <!-- Registration gate: keeps the "Register myself" tab visible but swaps the
      form for an explanation while ALLOW_SELF_SIGNUP is off. A plain (non-module)

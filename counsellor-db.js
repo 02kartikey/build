@@ -387,10 +387,18 @@ async function getJourney(email) {
   // Longitudinal tracking for access-code students can be added later by
   // querying report_history by session_id; for now, empty is the honest
   // answer (they have exactly one attempt anyway).
+  const db = require('./db.js');
   if (_isAccessId(email)) {
-    return { attempts: [], deltas: [], overall: null, has_journey: false };
+    // Access-code students: their journey is keyed by school + name (see
+    // db.journeyIdentity), so resolve the student behind the synthetic id.
+    const sid = sessionIdFromAccessIdentity(email);
+    const stu = sid ? await pg.one(
+      'SELECT email, school, full_name FROM students WHERE session_id = $1', [sid]) : null;
+    const identity = stu ? await db.journeyIdentityFor(sid, stu) : '';
+    if (!identity) return { attempts: [], deltas: [], overall: null, has_journey: false };
+    return db.getJourney(identity);
   }
-  return require('./db.js').getJourney(email);
+  return db.getJourney(email);
 }
 
 /* ─── Student question insights (staff dashboards) ──────────────────
@@ -803,43 +811,13 @@ function sessionIdFromAccessIdentity(id) {
   return _isAccessId(id) ? String(id).slice(_AC_ID_PREFIX.length) : null;
 }
 
-function _codesEqualCT(a, b) {
-  const ba = Buffer.from(String(a || ''), 'utf8');
-  const bb = Buffer.from(String(b || ''), 'utf8');
-  if (ba.length !== bb.length || ba.length === 0) return false;
-  return crypto.timingSafeEqual(ba, bb);
-}
-
 /* Redeem an access code for the counsellor gate. Returns the student row
    on success, null otherwise. Constant-time compare so an attacker can't
    probe which of school/class/name/code was wrong from response timing. */
-async function redeemAccessCodeForCounsellor({ school, klass, name, code }) {
-  const sc = String(school || '').trim();
-  const kl = String(klass  || '').trim();
-  const nm = String(name   || '').trim();
-  const cd = String(code   || '').trim().toUpperCase();
-  if (!sc || !kl || !nm || !cd) return null;
-
-  // School/class/name are matched tolerantly (see match-utils): a student
-  // whose row reads "ABPS,BAGA" / "IX" can type "ABPS" / "9" and still get in.
-  // The access code remains an exact constant-time comparison, so the wider
-  // candidate set costs nothing in credential strength.
-  const rows = await pg.many(
-    `SELECT session_id, first_name, last_name, full_name, class, section,
-            school, school_state, school_city, email, age, gender, access_code
-       FROM students
-      WHERE access_code IS NOT NULL`
-  );
-  for (const r of rows) {
-    if (!match.schoolMatches(sc, r.school))  continue;
-    if (!match.classMatches(kl, r.class))    continue;
-    if (!match.nameMatches(nm, r.full_name)) continue;
-    if (_codesEqualCT(r.access_code, cd)) {
-      delete r.access_code; // never leak plaintext code back to caller
-      return r;
-    }
-  }
-  return null;
+async function redeemAccessCodeForCounsellor({ school, klass, name, uid, code }) {
+  // One implementation for the assessment entry and Aria: school + class +
+  // name + code, or school + Unique School ID + code (see dashboard-db).
+  return require('./dashboard-db.js').redeemAccessCode({ school, klass, name, uid, code });
 }
 
 /* Issue an 8-hour counsellor token bound to a session_id (for access-code
@@ -863,6 +841,7 @@ async function issueTokenForSession(sessionId) {
 async function close() { /* pool owned by pg-core; nothing to do here */ }
 
 module.exports = {
+  classifyThemes: _classifyThemes, THEME_LABELS: _THEME_RULES.map(r => ({ key: r.key, label: r.label })),
   init,
   saveQuery, listQueries, updateQuery,
   getReportByEmail, getReportBySessionId, hasCompletedAssessment, _invalidateReportCache,

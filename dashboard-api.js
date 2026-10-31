@@ -9,7 +9,7 @@
 
    Email:
      _sendEmail is wired up in server.js via init(db, sendEmailFn).
-     Both _sendReminder and _testEmail guard with if (!_sendEmail) → 503
+     _sendReminder guards with if (!_sendEmail) → 503
      so a missing config returns a clean error, not a crash.
 
    Aggregate analytics routes (power dashboard overview panels):
@@ -41,6 +41,8 @@ const _core = require('./db.js'); // shared class-matching helper (single source
    students at the other. Divergent spellings are prevented at the source
    instead, by db.js _canonicalSchoolName() at registration time. */
 const _schoolKey = (v) => require('./match-utils.js').normSchool(v);
+const _match = require('./match-utils.js');
+const _assistant = require('./dashboard-assistant.js');
 let _sendEmail = null;
 let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 
@@ -48,12 +50,16 @@ let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
 // public counsellor endpoints). Left null in tests -> limiter simply not applied.
 let _rl = null;
 
-function init(db, sendEmailFn, dbWriteFn, rateLimitFn) {
+function init(db, sendEmailFn, dbWriteFn, rateLimitFn, opts = {}) {
   _ddb.init(db);
+  // AI (Programme Intelligence + dashboard assistant). opts.ai is the server's
+  // OpenAI chat-completions helper; without it both features answer 503.
+  _assistant.init({ ai: opts.ai, models: opts.models, log: opts.log });
   _cdb.init(db);
   _sendEmail = typeof sendEmailFn === 'function' ? sendEmailFn : null;
   if (typeof dbWriteFn === 'function') _dbWrite = dbWriteFn;
   if (typeof rateLimitFn === 'function') _rl = rateLimitFn;
+  _startScheduleRunner();
   // Purge stale sessions + reset tokens every hour — routed through write queue
   setInterval(() => {
     _dbWrite(() => _ddb.purgeExpiredSessions()).catch(e => {
@@ -115,12 +121,50 @@ async function _userSchools(user, overrideSchool = '') {
   }
   if (overrideSchool) {
     // Non-admins may narrow to one school, but only within their own scope.
-    const match = (user.schools || []).find(
-      s => String(s).toLowerCase() === String(overrideSchool).toLowerCase()
-    );
-    return match ? [match] : [];
+    // Same school-name normalisation as everywhere else, so a spelling that
+    // differs only in case, spaces or punctuation still resolves.
+    const want = _match.normSchool(overrideSchool);
+    const hit = (user.schools || []).find(s => _match.normSchool(s) === want);
+    return hit ? [hit] : [];
   }
   return user.schools;
+}
+
+/* Extra per-user restriction inside their schools (fine-grained permissions),
+   as a predicate over student facts. Mirrors the studentScope handling in
+   _students so the analytics views cannot show more than the student list. */
+function _predicateFor(user) {
+  const p = (user && user.permissions) || {};
+  if (!user || user.role === 'admin') return null;
+  if (p.studentScope === 'class' && Array.isArray(p.allowedClasses) && p.allowedClasses.length) {
+    return (f) => p.allowedClasses.some(ac => _match.classMatches(ac, f.class));
+  }
+  if (p.studentScope === 'section' && Array.isArray(p.allowedSections) && p.allowedSections.length) {
+    return (f) => p.allowedSections.some(as => _core.classKey(as) === _core.classKey(f.section));
+  }
+  return null;
+}
+
+/* The student row if `sessionId` is inside the user's scope, else null. */
+async function _studentInScope(user, sessionId) {
+  const stu = await _ddb.getStudentBySessionId(sessionId);
+  if (!stu) return null;
+  if (user.role === 'admin') return stu;
+  const schools = (await _userSchools(user)).map(_schoolKey);
+  if (!schools.includes(_schoolKey(stu.school))) return null;
+  const pred = _predicateFor(user);
+  return (!pred || pred(stu)) ? stu : null;
+}
+
+function _qs(req) { return new URLSearchParams(req.url.split('?')[1] || ''); }
+
+/* Resolve the `school` query/body value to the user's scoped school list.
+   Returns null (and has answered 403) when a non-admin names a school
+   outside their scope. */
+async function _scopedSchools(user, res, school) {
+  const list = await _userSchools(user, school || '');
+  if (school && !list.length) { _json(res, 403, { error: 'That school is not assigned to you.' }); return null; }
+  return list;
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -145,13 +189,34 @@ async function handle(req, res) {
     if (method === 'GET' && url === '/api/dashboard/career-distribution') return _careerDistribution(req, res);
     if (method === 'GET' && url === '/api/dashboard/module-timing')       return _moduleTiming(req, res);
 
+    // ── Programme analytics (one source for charts, lists, alerts) ─
+    if (method === 'GET'  && url === '/api/dashboard/catalogue')       return await _catalogue(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/classes')         return await _classes(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/breakdown')       return await _breakdown(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/drill')           return await _drill(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/alerts')          return await _alerts(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/school-summary')  return await _schoolSummary(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/aria-themes')     return await _ariaThemes(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/settings')        return await _getSettings(req, res);
+    if (method === 'PUT'  && url === '/api/dashboard/settings')        return await _putSettings(req, res);
+
+    // ── AI: Programme Intelligence + dashboard assistant ─────────
+    if (method === 'POST'   && url === '/api/dashboard/insights')                 return await _insights(req, res);
+    if (method === 'POST'   && url === '/api/dashboard/assistant')                return await _assistantChat(req, res);
+    if (method === 'GET'    && url === '/api/dashboard/assistant/conversations')  return await _assistantList(req, res);
+    if (method === 'GET'    && url === '/api/dashboard/assistant/history')        return await _assistantHistory(req, res);
+    if (method === 'DELETE' && url.match(/^\/api\/dashboard\/assistant\/conversations\/[a-f0-9]{16,40}$/)) return await _assistantDelete(req, res);
+
+    // ── Bulk report download + journey linking ───────────────────
+    if (method === 'POST' && url === '/api/dashboard/students/report-pdf-batch') return await _reportPdfBatch(req, res);
+    if (method === 'POST' && url.match(/^\/api\/dashboard\/students\/[^/]+\/journey\/unlink$/)) return await _journeyUnlink(req, res);
+
     // ── Student data ─────────────────────────────────────────────
     if (method === 'GET'  && url === '/api/dashboard/students')        return _students(req, res);
     if (method === 'GET'  && url === '/api/dashboard/stats')           return _stats(req, res);
     if (method === 'GET'  && url === '/api/dashboard/trend')           return _trend(req, res);
     if (method === 'GET'  && url === '/api/dashboard/students/export') return _exportStudentsCsv(req, res);
     if (method === 'POST' && url === '/api/dashboard/send-reminder')   return await _sendReminder(req, res);
-    if (method === 'POST' && url === '/api/dashboard/test-email')      return await _testEmail(req, res);
 
     // ── Student CRUD ─────────────────────────────────────────────
     if (method === 'POST'   && url === '/api/dashboard/students')                        return await _createStudent(req, res);
@@ -163,6 +228,7 @@ async function handle(req, res) {
     if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/access-code$/)) return await _regenAccessCode(req, res);
 
     // ── Per-student detail ───────────────────────────────────────
+    if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+$/))            return await _studentBasic(req, res);
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/reminders$/)) return _studentReminders(req, res);
     if (method === 'GET'    && url.match(/^\/api\/dashboard\/students\/[^/]+\/notes$/))     return _getNotes(req, res);
     if (method === 'POST'   && url.match(/^\/api\/dashboard\/students\/[^/]+\/notes$/))     return await _addNote(req, res);
@@ -182,6 +248,15 @@ async function handle(req, res) {
     // ── Schools + reminder log (management | admin) ──────────────
     if (method === 'GET' && url === '/api/dashboard/schools')      return _schools(req, res);
     if (method === 'GET' && url === '/api/dashboard/reminder-log') return _reminderLog(req, res);
+    if (method === 'GET'    && url === '/api/dashboard/followups')                    return await _followupsList(req, res);
+    if (method === 'POST'   && url === '/api/dashboard/followups')                    return await _followupsCreate(req, res);
+    if (method === 'PUT'    && url.match(/^\/api\/dashboard\/followups\/\d+$/))        return await _followupsUpdate(req, res);
+    if (method === 'DELETE' && url.match(/^\/api\/dashboard\/followups\/\d+$/))        return await _followupsDelete(req, res);
+    if (method === 'POST'   && url === '/api/dashboard/assistant/note')               return await _assistantNote(req, res);
+    if (method === 'GET'    && url === '/api/dashboard/schedules')                    return await _schedulesList(req, res);
+    if (method === 'POST'   && url === '/api/dashboard/schedules')                    return await _schedulesCreate(req, res);
+    if (method === 'PUT'    && url.match(/^\/api\/dashboard\/schedules\/\d+$/))        return await _schedulesUpdate(req, res);
+    if (method === 'DELETE' && url.match(/^\/api\/dashboard\/schedules\/\d+$/))        return await _schedulesDelete(req, res);
 
     // ── Student Counsellor Queries ──────────────────────────────
     if (method === 'GET'   && url.startsWith('/api/dashboard/queries')) return _listQueries(req, res);
@@ -268,9 +343,11 @@ async function _forgotPassword(req, res) {
     // When SMTP is configured, token travels via email only — never in the response.
     return _json(res, 200, { ok: true });
   }
-  // SMTP not configured: return token in response so admin can relay it manually.
-  // This path should only occur in development / internal admin use.
-  return _json(res, 200, { ok: true, token });
+  // SMTP not configured. The token used to be returned in this response, which
+  // let anyone reset any staff password (admin included) knowing only the
+  // email. It is now written to the server log for an operator to relay.
+  process.stderr.write('[WARN]  [Dashboard] SMTP not configured — password reset token for user ' + u.id + ': ' + token + '\n');
+  return _json(res, 200, { ok: true });
 }
 
 async function _resetPassword(req, res) {
@@ -315,8 +392,11 @@ async function _wellbeingAlerts(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const alerts = await _ddb.getWellbeingAlerts(await _userSchools(user));
-    _json(res, 200, { alerts });
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    const { alerts, total } = await _ddb.getWellbeingAlerts(schools, { limit: qs.get('limit') || 20, predicate: _predicateFor(user) });
+    _json(res, 200, { alerts, total });
   } catch (e) { process.stderr.write('[ERROR] [wellbeing-alerts] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
@@ -324,8 +404,10 @@ async function _careerDistribution(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const distribution = await _ddb.getCareerDistribution(await _userSchools(user));
-    _json(res, 200, { distribution });
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    _json(res, 200, await _ddb.getCareerDistribution(schools, qs.get('by') === 'stream' ? 'stream' : 'career_area', { predicate: _predicateFor(user) }));
   } catch (e) { process.stderr.write('[ERROR] [career-distribution] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
@@ -333,8 +415,9 @@ async function _moduleTiming(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const timing = await _ddb.getModuleTiming(await _userSchools(user));
-    _json(res, 200, { timing });
+    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
+    if (!schools) return;
+    _json(res, 200, { timing: await _ddb.getModuleTiming(schools, { predicate: _predicateFor(user) }) });
   } catch (e) { process.stderr.write('[ERROR] [module-timing] ' + e.message + '\n'); _json(res, 500, { error: 'Server error' }); }
 }
 
@@ -395,13 +478,20 @@ async function _stats(req, res) {
   _json(res, 200, { stats, gender });
 }
 
+/* Programme trend anchored to the first registration in scope: Week 1, Week 2,
+   … up to today, with empty weeks shown as zero. `from`/`to` (YYYY-MM-DD)
+   narrow the visible range without renumbering the weeks. */
 async function _trend(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
-  const qs   = new URLSearchParams(req.url.split('?')[1] || '');
-  const days = Math.min(parseInt(qs.get('days') || '14', 10), 90);
-  // getCompletionTrend is now cache-backed — instant on hit, live on miss
-  const trend = await _ddb.getCompletionTrend(await _userSchools(user, qs.get('school') || ''), days);
+  const qs = _qs(req);
+  const schools = await _scopedSchools(user, res, qs.get('school'));
+  if (!schools) return;
+  const iso = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || '') ? v : null);
+  const trend = await _ddb.getProgrammeTrend(schools, {
+    granularity: qs.get('granularity') === 'day' ? 'day' : 'week', from: iso(qs.get('from')), to: iso(qs.get('to')),
+    predicate: _predicateFor(user),
+  });
   _json(res, 200, { trend });
 }
 
@@ -409,9 +499,15 @@ async function _atRisk(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   const qs   = new URLSearchParams(req.url.split('?')[1] || '');
-  const days = Math.min(Math.max(parseInt(qs.get('days') || '3', 10), 1), 60);
-  const students = await _ddb.getAtRiskStudents(await _userSchools(user, qs.get('school') || ''), { days });
-  _json(res, 200, { students, days });
+  const schools = await _scopedSchools(user, res, qs.get('school'));
+  if (!schools) return;
+  // Same definition as the "Needs follow-up" list (each school's own
+  // follow-up setting, the user's class/section limits), so the numbers agree.
+  const out = await _ddb.getDrillStudents(schools, {
+    dimension: 'attention', groups: ['stalled', 'report_pending'],
+    limit: qs.get('limit') || 500, offset: qs.get('offset') || 0, predicate: _predicateFor(user),
+  });
+  _json(res, 200, { students: out.students, total: out.total });
 }
 
 async function _counsellors(req, res) {
@@ -435,14 +531,18 @@ async function _exportStudentsCsv(req, res) {
   const school = qs.get('school') || '';
   const cls    = qs.get('class')  || '';
   const status = qs.get('status') || '';
-  const filtered = await _ddb.getStudentsBySchool(await _userSchools(user, school), { class: cls, status, limit: 50000 });
-  const esc = v => `"${String(v||'').replace(/"/g,'""')}"`;
+  const pred = _predicateFor(user);
+  const filtered = (await _ddb.getStudentsBySchool(await _userSchools(user, school), { class: cls, status, limit: 50000 }))
+    .filter(s => !pred || pred(s));
+  // Quote every cell; text starting with = + - @ is prefixed so Excel does not run it as a formula.
+  const esc = v => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g,'""')}"`; };
   // pg returns TIMESTAMPTZ as Date objects (SQLite returned ISO strings) — normalise.
   const day = v => v ? new Date(v).toISOString().slice(0,10) : '';
   // Access Code included so staff can print/hand out codes straight from the export.
-  const header = ['Name','Email','School','Class','Section','Gender','Age','Access Code','Status','Modules Done','Registered At','Completed At'];
+  // "Unique School ID" re-imports as-is (the importer accepts that header).
+  const header = ['Name','Unique School ID','Email','School','Class','Section','Gender','Age','Access Code','Status','Modules Done','Registered At','Completed At'];
   const rows = filtered.map(s => [
-    esc(s.full_name), esc(s.email), esc(s.school), esc(s.class), esc(s.section),
+    esc(s.full_name), esc(s.student_uid), esc(s.email), esc(s.school), esc(s.class), esc(s.section),
     esc(s.gender), esc(s.age), esc(s.access_code), esc(s.status), s.modules_done,
     esc(day(s.registered_at)),
     esc(day(s.completed_at)),
@@ -458,6 +558,121 @@ async function _exportStudentsCsv(req, res) {
 /* ══════════════════════════════════════════════════════════════════
    EMAIL — both routes guard against null _sendEmail
 ══════════════════════════════════════════════════════════════════ */
+/* ── Follow-up tasks: each staff member's own list ───────────────── */
+async function _followupsList(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  _json(res, 200, { tasks: await _ddb.listFollowups(user.id), types: _ddb.FOLLOWUP_TYPES });
+}
+async function _followupsCreate(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const b = (await _readBody(req, 8 * 1024)) || {};
+    // A task about a student record must be about one the user can see.
+    if (b.session_id && !(await _studentInScope(user, String(b.session_id)))) return _json(res, 403, { error: 'That student is not in your schools.' });
+    const id = await _ddb.createFollowup({ userId: user.id, sessionId: b.session_id ? String(b.session_id) : null, studentLabel: b.student, type: b.type, notes: b.notes, due: b.due });
+    _json(res, 201, { ok: true, id });
+  } catch (e) { _err(res, e, 'followups'); }
+}
+async function _followupsUpdate(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const b = (await _readBody(req, 2 * 1024)) || {};
+  const n = await _ddb.setFollowupDone(user.id, parseInt(_seg(req.url, -1), 10), !!b.done);
+  if (!n) return _json(res, 404, { error: 'Task not found.' });
+  _json(res, 200, { ok: true });
+}
+async function _followupsDelete(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const n = await _ddb.deleteFollowup(user.id, parseInt(_seg(req.url, -1), 10));
+  if (!n) return _json(res, 404, { error: 'Task not found.' });
+  _json(res, 200, { ok: true });
+}
+
+/* ── Scheduled reminder campaigns ──────────────────────────────────
+   Stored in reminder_schedules and run here, on one worker, every few
+   minutes: each due schedule resolves its students with the creator's own
+   scope (schools, class and section limits), skips anyone reminded within the
+   schedule's frequency, sends through the same email path as a manual
+   reminder, and logs every email to the reminder log. */
+const SCHEDULE_CHECK_MS = 5 * 60 * 1000;
+const _canSchedule = (user) => user.role === 'admin' || (user.role === 'management' && !(user.permissions && user.permissions.can_send_reminders === false));
+
+async function _runSchedule(sch, creator) {
+  if (!_sendEmail) throw new Error('Email is not configured on this server (SMTP settings are missing), so nothing was sent.');
+  const def = _ddb.SCHEDULE_GROUPS[sch.target_group];
+  if (!def) throw new Error('Unknown target group.');
+  const schools = await _userSchools(creator, sch.school || '');
+  if (sch.school && !schools.length) throw new Error(`"${sch.school}" is no longer one of the creator's schools.`);
+  const ids = (await _ddb.getDrillStudents(schools, { dimension: def.dimension, groups: def.groups, idsOnly: true, predicate: _predicateFor(creator) })).ids;
+  const rows = await _ddb.getStudentContacts(ids, null);
+  const withEmail = rows.filter(r => r.email);
+  const recent = await _ddb.recentlyReminded(withEmail.map(r => r.email), sch.frequency_days);
+  let sent = 0, skipped = rows.length - withEmail.length;
+  for (const st of withEmail) {
+    if (recent.has(String(st.email).toLowerCase())) { skipped++; continue; }
+    try {
+      await _sendEmail({ to: st.email, subject: sch.subject,
+        text: [`Dear ${st.full_name || st.first_name || 'Student'},`, '', sch.message, '', 'If you have any questions, please contact your school counsellor.', '', '— NuMind MAPS Team'].join('\n') });
+      await _ddb.logReminder({ studentEmail: st.email, sentBy: creator.id, subject: sch.subject, message: sch.message });
+      sent++;
+    } catch (e) {
+      skipped++;
+      process.stderr.write('[WARN]  [Dashboard] scheduled reminder to ' + st.email + ' failed: ' + e.message + '\n');
+    }
+  }
+  return { sent, skipped };
+}
+function _startScheduleRunner() {
+  // One worker runs schedules under PM2; the SKIP LOCKED claim keeps it safe
+  // even if more than one does.
+  if (process.env.NODE_APP_INSTANCE && process.env.NODE_APP_INSTANCE !== '0') return;
+  const tick = () => _ddb.runDueSchedules(_runSchedule).catch(e => process.stderr.write('[WARN]  [Dashboard] schedule runner: ' + e.message + '\n'));
+  setTimeout(tick, 20 * 1000).unref();
+  setInterval(tick, SCHEDULE_CHECK_MS).unref();
+}
+async function _schedulesList(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management');
+  if (!user) return;
+  const list = await _ddb.listSchedules({ createdBy: user.role === 'admin' ? null : user.id });
+  _json(res, 200, { schedules: list, email_enabled: !!_sendEmail, can_create: _canSchedule(user),
+    groups: Object.entries(_ddb.SCHEDULE_GROUPS).map(([id, g]) => ({ id, label: g.label })), timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata' });
+}
+async function _schedulesCreate(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management');
+  if (!user) return;
+  if (!_canSchedule(user)) return _json(res, 403, { error: 'You do not have permission to send reminders.' });
+  try {
+    const b = (await _readBody(req, 16 * 1024)) || {};
+    const school = String(b.school || '').trim();
+    if (school && !(await _userSchools(user, school)).length) return _json(res, 403, { error: 'That school is not assigned to you.' });
+    const id = await _ddb.createSchedule({ createdBy: user.id, targetGroup: b.target_group, school, frequencyDays: b.frequency_days, sendHour: b.send_hour == null ? 9 : b.send_hour, subject: b.subject, message: b.message });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_schedule', target: String(id), detail: `${b.target_group} · every ${b.frequency_days} day(s)${school ? ' · ' + school : ''}` });
+    _json(res, 201, { ok: true, id, email_enabled: !!_sendEmail });
+  } catch (e) { _err(res, e, 'schedules'); }
+}
+async function _schedulesUpdate(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management');
+  if (!user) return;
+  const id = parseInt(_seg(req.url, -1), 10);
+  const b = (await _readBody(req, 4 * 1024)) || {};
+  const n = await _ddb.setScheduleActive(id, !!b.active, { createdBy: user.role === 'admin' ? null : user.id });
+  if (!n) return _json(res, 404, { error: 'Schedule not found.' });
+  _json(res, 200, { ok: true });
+}
+async function _schedulesDelete(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management');
+  if (!user) return;
+  const id = parseInt(_seg(req.url, -1), 10);
+  const n = await _ddb.deleteSchedule(id, { createdBy: user.role === 'admin' ? null : user.id });
+  if (!n) return _json(res, 404, { error: 'Schedule not found.' });
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_schedule', target: String(id) });
+  _json(res, 200, { ok: true });
+}
+
+const REMINDER_BATCH_MAX = 500;
 async function _sendReminder(req, res) {
   const user = await _requireRole(req, res, 'counsellor', 'management', 'admin');
   if (!user) return;
@@ -472,22 +687,38 @@ async function _sendReminder(req, res) {
     });
   }
 
-  const body = await _readBody(req, 32 * 1024);
-  const { students, subject, message } = body || {};
-  if (!Array.isArray(students) || !students.length) return _json(res, 400, { error: 'students array required' });
+  const body = await _readBody(req, 64 * 1024);
+  const { subject, message } = body || {};
+  let { students } = body || {};
   if (!message) return _json(res, 400, { error: 'message required' });
+
+  // A list of session ids (any drill-down list, the assistant) is resolved
+  // here in one scoped query; students without an email are reported back.
+  let noEmail = 0, preScoped = false;
+  if (Array.isArray(body && body.session_ids)) {
+    preScoped = true; // rows are already limited to the caller's schools and class/section limits
+    if (body.session_ids.length > REMINDER_BATCH_MAX) return _json(res, 400, { error: 'At most ' + REMINDER_BATCH_MAX + ' students per request.' });
+    const pred = _predicateFor(user);
+    const rows = (await _ddb.getStudentContacts(body.session_ids, user.role === 'admin' ? null : await _userSchools(user)))
+      .filter(r => !pred || pred(r));
+    noEmail = rows.filter(r => !r.email).length;
+    students = rows.filter(r => r.email);
+    if (!students.length) return _json(res, 200, { ok: true, sent: 0, failed: 0, no_email: noEmail, scopeRejected: body.session_ids.length - rows.length });
+  }
+  if (!Array.isArray(students) || !students.length) return _json(res, 400, { error: 'students or session_ids required' });
 
   // Scope guard: verify each target email belongs to a real student within
   // the caller's assigned school(s) — prevents using this endpoint to email
   // arbitrary addresses (including ones with no corresponding student at all).
   let inScope = students;
-  if (user.role !== 'admin') {
+  if (user.role !== 'admin' && !preScoped) {
     const schools = (await _userSchools(user)).map(_schoolKey);
+    const pred = _predicateFor(user);
     // Resolve each student's school first (async), then filter synchronously.
     const checked = await Promise.all(students.map(async (st) => {
       if (!st.email) return null;
       const stu = _ddb.getStudentByEmail ? await _ddb.getStudentByEmail(st.email) : null;
-      return (stu && schools.includes(_schoolKey(stu.school))) ? st : null;
+      return (stu && schools.includes(_schoolKey(stu.school)) && (!pred || pred(stu))) ? st : null;
     }));
     inScope = checked.filter(Boolean);
     if (!inScope.length) {
@@ -523,49 +754,8 @@ async function _sendReminder(req, res) {
   }
 
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'send_reminder',
-                  detail: `sent=${sent} failed=${failed} scopeRejected=${students.length - inScope.length}` });
-  _json(res, 200, { ok: true, sent, failed, scopeRejected: students.length - inScope.length });
-}
-
-async function _testEmail(req, res) {
-  const user = await _requireRole(req, res, 'counsellor', 'management', 'admin');
-  if (!user) return;
-
-  // ── Critical null-check ──
-  if (!_sendEmail) {
-    return _json(res, 503, {
-      error: 'Email is not configured on this server. Set SMTP_HOST, SMTP_USER, and SMTP_PASS in your .env file, then restart.',
-    });
-  }
-
-  const body = await _readBody(req, 4 * 1024);
-  const to   = String((body || {}).to || '').trim();
-  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
-    return _json(res, 400, { error: 'Valid recipient email required' });
-  }
-
-  try {
-    await _sendEmail({
-      to,
-      subject: `[NuMind MAPS] Test Email — ${user.role} Dashboard`,
-      text: [
-        `Hi there,`,
-        '',
-        `This is a test email from the NuMind MAPS ${user.role} dashboard.`,
-        '',
-        `Sent by:  ${user.name} (${user.email})`,
-        `Role:     ${user.role}`,
-        `Time:     ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST`,
-        '',
-        'If you received this, your SMTP configuration is working correctly. ✅',
-        '',
-        '— NuMind MAPS System',
-      ].join('\n'),
-    });
-    _json(res, 200, { ok: true, message: `Test email dispatched to ${to}` });
-  } catch (e) {
-    _json(res, 500, { error: 'Failed to send: ' + e.message });
-  }
+                  detail: `sent=${sent} failed=${failed} no_email=${noEmail} scopeRejected=${students.length - inScope.length}` });
+  _json(res, 200, { ok: true, sent, failed, no_email: noEmail, scopeRejected: students.length - inScope.length });
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -683,7 +873,7 @@ async function _createStudent(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
   const body = await _readBody(req, 16 * 1024);
-  const { first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city } = body || {};
+  const { first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city, student_uid } = body || {};
   if (!first_name || !school) return _json(res, 400, { error: 'first_name and school required' });
   // Scope guard: management may only create students under their assigned school(s)
   if (user.role !== 'admin') {
@@ -691,12 +881,18 @@ async function _createStudent(req, res) {
     if (!schools.includes(_schoolKey(school))) {
       return _json(res, 403, { error: 'You can only add students to your assigned school(s).' });
     }
+    const pred = _predicateFor(user);
+    if (pred && !pred({ class: cls || '', section: section || '' })) {
+      return _json(res, 403, { error: 'You can only add students to the classes or sections you are assigned.' });
+    }
   }
-  // Upsert: existing email → update that row in place; otherwise create.
-  const sid = await _ddb.upsertStudent({ first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city });
-  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_student', target: sid,
-                  detail: `${first_name} ${last_name || ''} @ ${school}` });
-  _json(res, 201, { ok: true, session_id: sid });
+  // Upsert: an existing Unique School ID or email updates that row in place; otherwise create.
+  try {
+    const sid = await _ddb.upsertStudent({ first_name, last_name, email, class: cls, section, school, age, gender, school_state, school_city, student_uid });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'create_student', target: sid,
+                    detail: `${first_name} ${last_name || ''} @ ${school}` });
+    _json(res, 201, { ok: true, session_id: sid });
+  } catch (e) { _err(res, e, 'create-student'); }
 }
 
 async function _updateStudent(req, res) {
@@ -704,18 +900,27 @@ async function _updateStudent(req, res) {
   if (!user) return;
   const sessionId = _seg(req.url, -1);
   // IDOR guard: management may only edit students in their assigned schools
+  let stu = null;
   if (user.role !== 'admin') {
-    const stu = await _ddb.getStudentBySessionId(sessionId);
-    if (!stu) return _json(res, 404, { error: 'Student not found' });
-    const schools = (await _userSchools(user)).map(_schoolKey);
-    if (!schools.includes(_schoolKey(stu.school))) {
-      return _json(res, 403, { error: 'Forbidden' });
-    }
+    // School AND class/section limits, before and after the change.
+    stu = await _studentInScope(user, sessionId);
+    if (!stu) return _json(res, (await _ddb.getStudentBySessionId(sessionId)) ? 403 : 404, { error: 'Student not found in your schools.' });
   }
   const body = await _readBody(req, 16 * 1024);
-  await _ddb.moveStudent(sessionId, body);
-  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_student', target: sessionId });
-  _json(res, 200, { ok: true });
+  if (stu) {
+    const pred = _predicateFor(user);
+    const after = { class: body && body.class != null ? body.class : stu.class, section: body && body.section != null ? body.section : stu.section };
+    if (pred && !pred(after)) return _json(res, 403, { error: 'You can only move students within the classes or sections you are assigned.' });
+  }
+  // Moving a student to another school must stay inside the editor's own schools.
+  if (user.role !== 'admin' && body && body.school != null && !(await _userSchools(user)).map(_schoolKey).includes(_schoolKey(body.school))) {
+    return _json(res, 403, { error: 'You can only move students between your assigned schools.' });
+  }
+  try {
+    await _ddb.moveStudent(sessionId, body || {});
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_student', target: sessionId });
+    _json(res, 200, { ok: true });
+  } catch (e) { _err(res, e, 'update-student'); }
 }
 
 async function _delStudent(req, res) {
@@ -834,13 +1039,8 @@ async function _addNote(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
-  // IDOR guard: verify this student belongs to requesting user's schools
-  if (user.role !== 'admin') {
-    const _stu = await _ddb.getStudentBySessionId(sessionId);
-    if (!_stu) return _json(res, 404, { error: 'Student not found' });
-    const _schools = (await _userSchools(user)).map(_schoolKey);
-    if (!_schools.includes(_schoolKey(_stu.school))) return _json(res, 403, { error: 'Forbidden' });
-  }
+  // IDOR guard: the student must be inside the user's schools and class limits.
+  if (!(await _studentInScope(user, sessionId))) return _json(res, 403, { error: 'That student is not in your schools.' });
   const body = await _readBody(req, 8 * 1024);
   const { note } = body || {};
   if (!note || !String(note).trim()) return _json(res, 400, { error: 'note required' });
@@ -882,12 +1082,7 @@ async function _regenAccessCode(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
-  const stu = await _ddb.getStudentBySessionId(sessionId);
-  if (!stu) return _json(res, 404, { error: 'Student not found' });
-  if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(_schoolKey);
-    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
-  }
+  if (!(await _studentInScope(user, sessionId))) return _json(res, 403, { error: 'That student is not in your schools.' });
   try {
     const code = await _dbWrite(() => _ddb.setStudentAccessCode(sessionId));
     await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'regen_access_code', target: sessionId });
@@ -961,16 +1156,15 @@ async function _studentJourney(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
   if (!user) return;
   const sessionId = _seg(req.url, -2);
-  const stu = await _ddb.getStudentBySessionId(sessionId);
-  if (!stu) return _json(res, 404, { error: 'Student not found' });
-  if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(_schoolKey);
-    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
-  }
-  if (!stu.email) {
+  const stu = await _studentInScope(user, sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found in your schools.' });
+  // The identity this student's own snapshot is filed under (email, an
+  // unambiguous school + name match, or their own after an unlink).
+  const identity = await _core.journeyIdentityFor(sessionId, stu);
+  if (!identity) {
     return _json(res, 200, { journey: { attempts: [], deltas: [], has_journey: false } });
   }
-  const journey = await _cdb.getJourney(stu.email);
+  const journey = await _core.getJourney(identity);
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'view_journey', target: sessionId });
   _json(res, 200, { journey });
 }
@@ -1045,6 +1239,275 @@ async function _delSchoolReg(req, res) {
   await _ddb.deleteRegisteredSchool(id);
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_school', target: String(id) });
   _json(res, 200, { ok: true });
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   PROGRAMME ANALYTICS ROUTES
+   Every list a dashboard can open comes from /drill with the same
+   dimension + group keys that /breakdown counted, so a number and the
+   students behind it can never disagree.
+══════════════════════════════════════════════════════════════════ */
+function _err(res, e, tag) {
+  // Errors raised deliberately by our own code carry an HTTP status and a
+  // message written for staff (e.g. "AI is not configured"); pass those on.
+  if (e && Number.isInteger(e.status)) return _json(res, e.status, { error: e.message });
+  process.stderr.write('[ERROR] [' + tag + '] ' + (e && e.stack || e) + '\n');
+  _json(res, 500, { error: 'Server error' });
+}
+
+async function _catalogue(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const schools = await _userSchools(user);
+    const dims = await _ddb.getDimensions();
+    _json(res, 200, {
+      dimensions: Object.entries(dims).map(([id, d]) => ({ id, label: d.label, question: d.question, multi: !!d.multi, population: d.population })),
+      glossary: await _ddb.getGlossary(),
+      settings_schema: _ddb.SETTINGS_SCHEMA,
+      insight_metrics: _assistant.metricCatalogue(),
+      ai_enabled: _assistant.aiEnabled(),
+      schools,
+      can_edit_settings: user.role !== 'counsellor',
+      // Shared bands so every page colours levels and fit scores the same way.
+      bands: { fit_tiers: _core.FIT_TIERS, stanine: _core.STANINE_BANDS },
+      wellbeing_areas: _ddb.WELLBEING_AREAS,
+    });
+  } catch (e) { _err(res, e, 'catalogue'); }
+}
+
+async function _classes(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
+    if (!schools) return;
+    _json(res, 200, { classes: await _ddb.listClasses(schools) });
+  } catch (e) { _err(res, e, 'classes'); }
+}
+
+async function _breakdown(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    _json(res, 200, await _ddb.getBreakdown(schools, qs.get('dimension') || 'completion', { predicate: _predicateFor(user) }));
+  } catch (e) { _err(res, e, 'breakdown'); }
+}
+
+async function _drill(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    const status = qs.get('status');
+    const out = await _ddb.getDrillStudents(schools, {
+      dimension: qs.get('dimension') || null,
+      groups: (qs.get('groups') || qs.get('group') || '').split(',').map(x => x.trim()).filter(Boolean),
+      classKey: qs.get('class') || null,
+      status: ['completed', 'in_progress', 'not_started'].includes(status) ? status : null,
+      search: qs.get('search') || '',
+      limit: qs.get('limit'), offset: qs.get('offset'),
+      idsOnly: qs.get('ids_only') === '1',
+      predicate: _predicateFor(user),
+    });
+    _json(res, 200, out);
+  } catch (e) { _err(res, e, 'drill'); }
+}
+
+async function _alerts(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
+    if (!schools) return;
+    _json(res, 200, await _ddb.getAlerts(schools, { predicate: _predicateFor(user) }));
+  } catch (e) { _err(res, e, 'alerts'); }
+}
+
+async function _schoolSummary(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
+    if (!schools) return;
+    _json(res, 200, { schools: await _ddb.getSchoolSummary(schools, { predicate: _predicateFor(user) }), groups: await _ddb.getFollowUpGroups() });
+  } catch (e) { _err(res, e, 'school-summary'); }
+}
+
+async function _ariaThemes(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    _json(res, 200, await _ddb.getAriaThemes(schools, { classKey: qs.get('class') || null, predicate: _predicateFor(user) }));
+  } catch (e) { _err(res, e, 'aria-themes'); }
+}
+
+async function _getSettings(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
+    if (!schools) return;
+    const m = await _ddb.getSettingsMap(schools);
+    _json(res, 200, {
+      schema: _ddb.SETTINGS_SCHEMA, global: m.global,
+      schools: schools.map(s => ({ school: s, settings: m.forSchool(s) })),
+      can_edit: user.role !== 'counsellor',
+    });
+  } catch (e) { _err(res, e, 'settings'); }
+}
+
+async function _putSettings(req, res) {
+  const user = await _requireRole(req, res, 'management', 'admin');
+  if (!user) return;
+  try {
+    const body = await _readBody(req, 4 * 1024);
+    const school = String((body && body.school) || '').trim();
+    if (!school && user.role !== 'admin') return _json(res, 403, { error: 'Choose one of your schools; only an admin can change the network-wide default.' });
+    if (school && !(await _scopedSchools(user, res, school))) return;
+    // A setting for a school name that does not exist would silently apply to nothing.
+    if (school && user.role === 'admin') {
+      const known = (await _ddb.getAllSchools()).map(r => _schoolKey(r.school));
+      if (!known.includes(_schoolKey(school))) return _json(res, 400, { error: 'No students are registered under that school name.' });
+    }
+    const saved = await _ddb.saveSettings({ school: school || null, values: (body && body.values) || {}, userId: user.id });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'update_settings',
+                          target: school || 'network-wide', detail: JSON.stringify(saved) });
+    _json(res, 200, { ok: true, saved });
+  } catch (e) { _err(res, e, 'settings-put'); }
+}
+
+/* ── AI Programme Intelligence ─────────────────────────────────────── */
+async function _insights(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const body = await _readBody(req, 8 * 1024);
+    const school = String((body && body.school) || '').trim();
+    const schools = await _scopedSchools(user, res, school);
+    if (!schools) return;
+    const force = !!(body && body.force);
+    const mode = body && body.mode === 'cached' ? 'cached' : null;
+    // Only requests that may call the model count against the limits.
+    if (!mode && _rl && !(await _rl('insights', String(user.id), parseInt(process.env.INSIGHTS_MAX_PER_HOUR || '60', 10)))) {
+      return _json(res, 429, { error: 'You have run the AI analysis many times this hour. Please try again later.' });
+    }
+    if (force && _rl && !(await _rl('insights-regen', String(user.id), parseInt(process.env.INSIGHTS_REGEN_MAX || '30', 10)))) {
+      return _json(res, 429, { error: 'You have regenerated insights many times this hour. Press "Analyse" instead — it gives a fresh analysis whenever the numbers have changed.' });
+    }
+    const out = await _assistant.generateInsights({
+      user, schools, predicate: _predicateFor(user),
+      schoolLabel: school || (schools.length === 1 ? schools[0] : schools.length + ' schools'),
+      metricIds: Array.isArray(body && body.metrics) ? body.metrics.map(String) : null, force, mode,
+    });
+    _json(res, 200, { insights: out });
+  } catch (e) { _err(res, e, 'insights'); }
+}
+
+/* ── Dashboard assistant ───────────────────────────────────────────── */
+async function _assistantChat(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    if (_rl && !(await _rl('assistant', String(user.id), parseInt(process.env.ASSISTANT_MAX_PER_HOUR || '120', 10)))) {
+      return _json(res, 429, { error: 'You have reached the hourly limit for the assistant. Please try again later.' });
+    }
+    const body = await _readBody(req, 16 * 1024);
+    const out = await _assistant.chat({
+      user, conversationId: body && body.conversation_id, message: body && body.message, page: body && body.page,
+      env: {
+        user,
+        predicate: _predicateFor(user),
+        resolveSchools: (school) => _userSchools(user, school || ''),
+        canSeeStudent: async (sid) => !!(await _studentInScope(user, sid)),
+      },
+    });
+    _json(res, 200, out);
+  } catch (e) { _err(res, e, 'assistant'); }
+}
+
+/* The page records what a confirmed action did, so the assistant knows on the
+   next turn ("Added 1 student to Class 9"). Stored redacted like every turn. */
+async function _assistantNote(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const b = (await _readBody(req, 4 * 1024)) || {};
+    await _assistant.recordActionResult({ user, conversationId: b.conversation_id, text: b.text, resolveSchools: (sc) => _userSchools(user, sc || ''), predicate: _predicateFor(user) });
+    _json(res, 200, { ok: true });
+  } catch (e) { _err(res, e, 'assistant-note'); }
+}
+
+async function _assistantList(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  _json(res, 200, { conversations: await _assistant.listConversations(user.id) });
+}
+
+async function _assistantHistory(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const id = _qs(req).get('conversation_id') || '';
+  if (!/^[a-f0-9]{16,40}$/.test(id)) return _json(res, 400, { error: 'conversation_id required' });
+  _json(res, 200, { messages: await _assistant.getConversation(user.id, id) });
+}
+
+async function _assistantDelete(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  await _assistant.deleteConversation(user.id, _seg(req.url, -1));
+  _json(res, 200, { ok: true });
+}
+
+/* One student's roster row with status and progress, for opening a profile
+   from anywhere (a drill list, an alert, the assistant) — the drawer used to
+   rely on the currently loaded page of the student list and showed a student
+   from any other list as "not started". */
+async function _studentBasic(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  const stu = await _studentInScope(user, _seg(req.url, -1));
+  if (!stu) return _json(res, 404, { error: 'Student not found in your schools.' });
+  const g = _ddb.classGroupOf(stu.class);
+  _json(res, 200, { student: Object.assign({}, stu, { class_key: g.key, class_label: g.label }) });
+}
+
+/* ── Bulk PDF data (the browser renders + zips) ────────────────────── */
+const PDF_BATCH_MAX = 25;
+async function _reportPdfBatch(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const body = await _readBody(req, 64 * 1024);
+    const ids = [...new Set((Array.isArray(body && body.session_ids) ? body.session_ids : []).map(String))];
+    if (!ids.length) return _json(res, 400, { error: 'session_ids required' });
+    if (ids.length > PDF_BATCH_MAX) return _json(res, 400, { error: 'At most ' + PDF_BATCH_MAX + ' students per request.' });
+    const allowed = [];
+    for (const sid of ids) if (await _studentInScope(user, sid)) allowed.push(sid);
+    const items = await _ddb.getReportPdfDataBatch(allowed);
+    for (const sid of ids) if (!allowed.includes(sid)) items.push({ session_id: sid, data: null, error: 'Not in your schools' });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'download_report_batch',
+                          detail: `requested=${ids.length} served=${items.filter(i => i.data).length}` });
+    _json(res, 200, { ok: true, items, max: PDF_BATCH_MAX });
+  } catch (e) { _err(res, e, 'report-pdf-batch'); }
+}
+
+async function _journeyUnlink(req, res) {
+  const user = await _requireRole(req, res, 'admin', 'management', 'counsellor');
+  if (!user) return;
+  const sessionId = _seg(req.url, -3);
+  if (!(await _studentInScope(user, sessionId))) return _json(res, 403, { error: 'Forbidden' });
+  const n = await _core.unlinkJourneyAttempt(sessionId);
+  await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'unlink_journey', target: sessionId });
+  _json(res, 200, { ok: true, unlinked: n });
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1127,9 +1590,13 @@ async function handleAccessRedeem(req, res) {
   const school = String((body && body.school) || '').trim();
   const klass  = String((body && body.class)  || '').trim();
   const name   = String((body && body.name)   || '').trim();
+  const uid    = String((body && body.uid)    || '').trim();
   const code   = String((body && body.code)   || '').trim();
-  if (!school || !klass || !name || !code) {
-    return _json(res, 400, { error: 'School, class, name and access code are all required.' });
+  // Two ways in: school + class + name + code, or school + Unique School ID + code.
+  if (!school || !code || (!uid && (!klass || !name))) {
+    return _json(res, 400, { error: uid || !(klass || name)
+      ? 'School, Unique School ID and access code are all required.'
+      : 'School, class, name and access code are all required.' });
   }
   /* Brute-force throttle, keyed per STUDENT rather than per IP.
 
@@ -1148,7 +1615,8 @@ async function handleAccessRedeem(req, res) {
      A deliberately high pure-IP ceiling stays as a backstop against automated
      enumeration; ACCESS_REDEEM_IP_MAX can be raised for very large single-IP
      schools without a code change. */
-  const _who = require('./match-utils.js').normName(name).replace(/\s+/g, '') || 'anon';
+  const _mu = require('./match-utils.js');
+  const _who = uid ? 'uid:' + _mu.normUid(uid) : (_mu.normName(name).replace(/\s+/g, '') || 'anon');
   const _perStudent = parseInt(process.env.ACCESS_REDEEM_MAX    || '8',   10);
   const _perIp      = parseInt(process.env.ACCESS_REDEEM_IP_MAX || '600', 10);
   if (_rl && !(await _rl('access-redeem', _publicIP(req) + '|' + _who, _perStudent))) {
@@ -1158,7 +1626,7 @@ async function handleAccessRedeem(req, res) {
     return _json(res, 429, { error: 'Too many requests from this network. Please wait a moment.' });
   }
   try {
-    const stu = await _ddb.redeemAccessCode({ school, klass, name, code });
+    const stu = await _ddb.redeemAccessCode({ school, klass, name, uid: uid || null, code });
     if (!stu) {
       // Single generic message — never disclose which field failed.
       return _json(res, 401, { error: 'Those details do not match. Please check with your teacher.' });

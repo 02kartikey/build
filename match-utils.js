@@ -179,6 +179,36 @@ function classMatches(a, b) {
    Collapse case, punctuation and repeated whitespace. Does NOT reorder
    words: "Sharma Mamta" is deliberately not treated as "Mamta Sharma",
    because the dropdown shows the stored spelling and the student picks it. */
+/* ── Unique School ID ────────────────────────────────────────────────
+   An ID is unique within a school. Both halves of the key are compared in a
+   way that never depends on the database locale, so JavaScript and
+   PostgreSQL always agree (the SQL forms are below and in the
+   uq_students_school_uid_v2 index in pg-core.js, all using COLLATE "C"):
+     school: ASCII letters lower-cased, ASCII spaces and punctuation removed;
+             every other character (Devanagari, accented letters) is kept, so
+             "DPS Noida" = "dps-noida" but two Hindi-named schools stay apart.
+     ID:     ASCII spaces removed and ASCII letters upper-cased; other
+             characters such as / and - are kept ("2023/1024").
+   cleanUid() is applied to every ID before it is stored, so a non-breaking
+   space or full-width digit pasted from a spreadsheet is stored as plain
+   text and both sides see the same characters. */
+const _ASCII_WS = /[\t\n\v\f\r ]+/g;
+function cleanUid(s) {
+  return String(s == null ? '' : s).normalize('NFKC').replace(/\s+/g, ' ').trim();
+}
+function normUid(s) {
+  return cleanUid(s).replace(_ASCII_WS, '').replace(/[a-z]+/g, (c) => c.toUpperCase());
+}
+function uidSchoolKey(s) {
+  return String(s == null ? '' : s).replace(/\s+/g, ' ')
+    .replace(/[A-Z]+/g, (c) => c.toLowerCase())
+    .replace(/[\t\n\v\f\r !-\/:-@\[-`{-~]+/g, '');
+}
+const sqlUidSchoolKey = (col) => `regexp_replace(lower((${col}) COLLATE "C"), '[[:space:][:punct:]]+', '', 'g')`;
+const sqlUid          = (col) => `upper(regexp_replace((${col}) COLLATE "C", '[[:space:]]+', '', 'g'))`;
+// Rows that can hold an ID; repeating it in a query lets PostgreSQL use the partial index.
+const sqlHasUid       = (col) => `(${col} IS NOT NULL AND btrim(${col}) <> '')`;
+
 function normName(s) {
   return String(s || '')
     .toLowerCase()
@@ -198,4 +228,5 @@ module.exports = {
   normSchool, tokenSchool, schoolMatches,
   romanToInt, classGradeNumber, classMatches,
   normName, nameMatches,
+  cleanUid, normUid, uidSchoolKey, sqlUidSchoolKey, sqlUid, sqlHasUid,
 };

@@ -65,6 +65,109 @@ function classMatches(a, b) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   REPORT VOCABULARY  (single source of truth)
+   The words _deriveSummary writes into report_summary, and the thresholds
+   behind them. Dashboards, alerts, the glossary and the AI assistant read
+   these instead of repeating the literals, so a threshold change here is
+   reflected everywhere it is explained.
+══════════════════════════════════════════════════════════════════ */
+const SUMMARY_STATUS = Object.freeze({
+  STRONG:     'Strength',
+  DEVELOPING: 'Developing',
+  SUPPORT:    'Support Needed',
+});
+// Average 1–9 level at or above which a domain counts as a Strength / Developing.
+const STATUS_THRESHOLDS = Object.freeze({ strong: 6.5, developing: 4 });
+// Top career-interest score (out of 20) bands, same scale the CPI scorer uses.
+const INTEREST_THRESHOLDS = Object.freeze({ strong: 15, developing: 8, max: 20 });
+// Integrated Fit Score tiers, highest first. `min` is inclusive.
+const FIT_TIERS = Object.freeze([
+  Object.freeze({ key: 'Strong Fit',      min: 75 }),
+  Object.freeze({ key: 'Emerging Fit',    min: 55 }),
+  Object.freeze({ key: 'Exploratory Fit', min: 0 }),
+]);
+// Bands for a single 1–9 trait/ability level (standard stanine bands):
+// 7–9 strength, 4–6 developing, 1–3 needs support.
+const STANINE_BANDS = Object.freeze({ strength: 7, developing: 4 });
+const fitTierFor = (score) => (FIT_TIERS.find(t => score >= t.min) || FIT_TIERS[FIT_TIERS.length - 1]).key;
+
+/* ── Year-on-year journey identity ───────────────────────────────────
+   report_history keeps one snapshot per (identity, class); a student's
+   journey is every snapshot under one identity. Identities:
+     <email>              the student's email (lower-cased)
+     uid:<school>|<ID>    the school's Unique School ID, when there is no
+                          usable email (school and ID normalised as in
+                          match-utils normSchool / normUid)
+     sid:<session_id>     stands alone: no email or ID, an ambiguous match,
+                          or a member of staff unlinked it
+   Students are never linked by name alone — two children can share a name. */
+function journeyIdentity({ email, school, student_uid } = {}) {
+  const em = String(email || '').toLowerCase().trim();
+  if (em) return em;
+  return uidIdentity(school, student_uid);
+}
+function uidIdentity(school, uid) {
+  const mu = require('./match-utils.js');
+  const sc = mu.uidSchoolKey(school), id = mu.normUid(uid);
+  return sc && id ? 'uid:' + sc + '|' + id : '';
+}
+
+/* The identity a snapshot for `sessionId` is filed under (and the one its
+   journey is read from). In order:
+     1. a snapshot already saved for this session (keeps a link or unlink)
+     2. the email, when its earlier snapshots belong to a student with the
+        same name — a sibling sharing a parent's email is not merged
+     3. the school + Unique School ID, when that school already has a
+        snapshot for a student holding the same ID
+     4. a new email identity, else a new Unique ID identity
+     5. otherwise the assessment stands on its own
+   `query(sql, params)` returns rows, so this also runs inside a transaction. */
+async function resolveJourneyIdentity(query, sessionId, who, { forSnapshot = false } = {}) {
+  const sid = String(sessionId);
+  const own = 'sid:' + sid;
+  const stored = (await query('SELECT email FROM report_history WHERE session_id = $1 LIMIT 1', [sid]))[0];
+  if (stored) return stored.email;
+  const mu = require('./match-utils.js');
+  const em = String((who && who.email) || '').toLowerCase().trim();
+  const cls = String((who && who.class) || '').trim();
+  // When filing a snapshot: joining an identity that already has an attempt
+  // in this class from another session would overwrite that attempt (one
+  // snapshot per identity and class), so such an identity is not joined.
+  // Reads (journey view, retake lock) skip this check.
+  const classTaken = async (ident) => forSnapshot && !!cls && (await query(
+    `SELECT class FROM report_history WHERE email = $1 AND session_id <> $2`, [ident, sid])).some(r => mu.classMatches(r.class, cls));
+
+  // 1. Email, only when the earlier attempts on it are by a student with the same name.
+  let emailClash = false;
+  if (em) {
+    const prior = await query(
+      `SELECT s.full_name FROM report_history rh LEFT JOIN students s ON s.session_id = rh.session_id
+        WHERE rh.email = $1 AND rh.session_id <> $2`, [em, sid]);
+    if (prior.length) {
+      // A name must be on both sides: an attempt whose student row is gone
+      // cannot be confirmed as the same child.
+      if (prior.some(p => p.full_name && mu.nameMatches(who.full_name, p.full_name)) && !(await classTaken(em))) return em;
+      emailClash = true;
+    }
+  }
+  // 2. School + Unique School ID, when the school already has this ID on record.
+  const uid = mu.normUid(who && who.student_uid), sc = mu.uidSchoolKey(who && who.school);
+  if (uid && sc) {
+    const prior = await query(
+      `SELECT rh.email FROM report_history rh JOIN students s ON s.session_id = rh.session_id
+        WHERE rh.session_id <> $1 AND ${mu.sqlHasUid('s.student_uid')}
+          AND ${mu.sqlUidSchoolKey('s.school')} = $2 AND ${mu.sqlUid('s.student_uid')} = $3
+        ORDER BY rh.generated_at DESC LIMIT 1`, [sid, sc, uid]);
+    if (prior[0] && !(await classTaken(prior[0].email))) return prior[0].email;
+    const ident = uidIdentity(who && who.school, who && who.student_uid);
+    if (!em || emailClash) return ident && !(await classTaken(ident)) ? ident : own;
+  }
+  // 3. A first attempt on this email; otherwise the attempt stands alone.
+  if (em && !emailClash) return em;
+  return own;
+}
+
+/* ══════════════════════════════════════════════════════════════════
    PUBLIC API
 ══════════════════════════════════════════════════════════════════ */
 
@@ -79,9 +182,16 @@ async function saveRegistration(student, sessionId) {
   // counts here so the client can gate same-class retakes and welcome-back a
   // returning student whose class has advanced.
   const cls = String(student.class || '').trim();
-  const _hist = norm
-    ? await pg.many(`SELECT class FROM report_history WHERE email = $1 ORDER BY attempt_no ASC`, [norm])
+  // Email, or for an access-code student their journey identity (school +
+  // Unique School ID), so the same-class retake lock covers them too.
+  const _ident = await journeyIdentityFor(sessionId, {
+    email: norm, full_name: student.fullName || `${student.firstName || ''} ${student.lastName || ''}`.trim(),
+    school: student.school, student_uid: student.uniqueId || student.student_uid || null, class: student.class });
+  const _hist = _ident
+    ? await pg.many(`SELECT class FROM report_history WHERE email = $1 ORDER BY attempt_no ASC`, [_ident])
     : [];
+  const uid = require('./match-utils.js').cleanUid(student.uniqueId || student.student_uid) || null;
+  const regSchool = String(student.school || '').trim().replace(/\s+/g, ' ');
   const attemptsCount = _hist.length;
   const attemptedThisClass = !!(cls && _hist.some(h => classMatches(h.class, cls)));
   const _lock = {
@@ -122,12 +232,27 @@ async function saveRegistration(student, sessionId) {
         }
       }
 
+      // A Unique School ID is one student per school: if the school already
+      // added this ID, the student must sign in with the school's access code
+      // rather than create a second record.
+      if (uid) {
+        const mu = require('./match-utils.js');
+        const holder = (await c.query(
+          `SELECT session_id FROM students WHERE ${mu.sqlHasUid('student_uid')}
+             AND ${mu.sqlUidSchoolKey('school')} = $1 AND ${mu.sqlUid('student_uid')} = $2 LIMIT 1`,
+          [mu.uidSchoolKey(regSchool), mu.normUid(uid)])).rows[0];
+        if (holder && holder.session_id !== effectiveSessionId) {
+          throw Object.assign(new Error('This Unique School ID is already registered at your school. Please sign in with the access code your school gave you, or check the ID with your teacher.'), { status: 409, code: 'UID_TAKEN' });
+        }
+      }
+
       await c.query(
         `INSERT INTO students (
            session_id, first_name, last_name, full_name, class, section,
-           school, school_state, school_city, age, gender, email, registered_at
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           school, school_state, school_city, age, gender, email, registered_at, student_uid
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
          ON CONFLICT (session_id) DO UPDATE SET
+           student_uid  = COALESCE(EXCLUDED.student_uid, students.student_uid),
            first_name   = EXCLUDED.first_name,
            last_name    = EXCLUDED.last_name,
            full_name    = EXCLUDED.full_name,
@@ -156,6 +281,7 @@ async function saveRegistration(student, sessionId) {
           student.gender || '',
           norm,
           student.registeredAt || nowIso,
+          uid,
         ]
       );
 
@@ -192,6 +318,11 @@ async function saveRegistration(student, sessionId) {
       return { session_id: effectiveSessionId, existing: false, testTaken: false, ..._lock };
     });
   } catch (e) {
+    // Two registrations with the same Unique School ID at once: the index
+    // decides, and the loser gets the same 409 as the check above.
+    if (e.code === '23505' && /uq_students_school_uid/.test(String(e.constraint || e.message || ''))) {
+      throw Object.assign(new Error('This Unique School ID is already registered at your school. Please sign in with the access code your school gave you, or check the ID with your teacher.'), { status: 409, code: 'UID_TAKEN' });
+    }
     // Concurrent insert committed the same email first — reuse its row.
     // Postgres unique violation is SQLSTATE 23505.
     if (norm && (e.code === '23505')) {
@@ -481,8 +612,10 @@ async function saveReport({ sessionId, student, assessments, report }) {
       /* 5b) Longitudinal snapshot — one immutable row per (email, class).
          Powers the growth-journey mapping and the same-class retake lock,
          without disturbing the live report_* tables (which hold the latest). */
-      const _who   = (await c.query(`SELECT email, class FROM students WHERE session_id = $1`, [sessionId])).rows[0] || {};
-      const _email = String(_who.email || '').toLowerCase().trim();
+      const _who   = (await c.query(`SELECT email, class, school, full_name, student_uid FROM students WHERE session_id = $1`, [sessionId])).rows[0] || {};
+      // Identity, not raw email: email + matching name, else school + Unique
+      // School ID. See resolveJourneyIdentity().
+      const _email = await resolveJourneyIdentity((q, v) => c.query(q, v).then(r => r.rows), sessionId, _who, { forSnapshot: true });
       const _cls   = String(_who.class  || '').trim();
       if (_email && _cls) {
         const _metrics = {
@@ -655,7 +788,7 @@ async function getStudentBySessionId(sessionId) {
    Consumed by the student banner, the AI counsellor (Aria), and staff
    dashboards.
 ══════════════════════════════════════════════════════════════════ */
-const _JOURNEY_BAND = (s) => (typeof s === 'number' ? (s >= 7 ? 'Strength' : s >= 4 ? 'Developing' : 'Needs Attention') : null);
+const _JOURNEY_BAND = (s) => (typeof s === 'number' ? (s >= STANINE_BANDS.strength ? 'Strength' : s >= STANINE_BANDS.developing ? 'Developing' : 'Needs Attention') : null);
 const _STATUS_RANK  = { 'Support Needed': 0, 'Needs Attention': 0, 'Emerging': 0, 'Developing': 1, 'Strength': 2, 'Strong': 2 };
 const _readyRank = (s) => {
   const t = String(s || '').toLowerCase();
@@ -852,16 +985,20 @@ async function getJourney(email) {
    first attempt (and get the same-class retake lock instead of the legacy
    overwrite dialog). Idempotent — ON CONFLICT (email, class) DO NOTHING, so it
    is safe to re-run. Dry-run by default; pass { commit:true } to write. */
-async function backfillJourneyHistory({ commit = false, email = null } = {}) {
+async function backfillJourneyHistory({ commit = false, email = null, quiet = false } = {}) {
   await _initDb();
+  // Pre-release builds linked email-less students by school + name ("nat:").
+  // Name-only links are no longer allowed: those attempts now stand alone.
+  if (commit) await pg.exec(`UPDATE report_history SET email = 'sid:' || session_id, attempt_no = 1 WHERE email LIKE 'nat:%'`);
   const params = [];
+  // Every completed student gets a snapshot; resolveJourneyIdentity() decides
+  // whether it links to earlier years (email + name, or school + Unique ID).
   let where = `WHERE rs.session_id IS NOT NULL
-                 AND COALESCE(TRIM(s.class), '') <> ''
-                 AND COALESCE(TRIM(s.email::text), '') <> ''`;
+                 AND COALESCE(TRIM(s.class), '') <> ''`;
   if (email) { params.push(String(email).toLowerCase().trim()); where += ` AND s.email = $1`; }
 
   const students = await pg.many(
-    `SELECT s.session_id, s.email, s.class,
+    `SELECT s.session_id, s.email, s.class, s.school, s.full_name, s.student_uid,
             rs.generated_at, rs.fit_score, rs.fit_tier,
             rs.avg_personality_stanine, rs.avg_aptitude_stanine, rs.top_interest_score,
             rs.personality_status, rs.aptitude_status, rs.interest_status, rs.seaa_status,
@@ -869,18 +1006,17 @@ async function backfillJourneyHistory({ commit = false, email = null } = {}) {
        FROM students s
        JOIN report_summary rs ON rs.session_id = s.session_id
        ${where}
-      ORDER BY s.email, rs.generated_at ASC`,
+      ORDER BY rs.generated_at ASC`,
     params
   );
 
   let created = 0, skipped = 0;
   for (const st of students) {
-    const norm = String(st.email || '').toLowerCase().trim();
     const cls  = String(st.class  || '').trim();
-    if (!norm || !cls) { skipped++; continue; }
-
-    const exists = await pg.one(`SELECT 1 FROM report_history WHERE email = $1 AND class = $2`, [norm, cls]);
-    if (exists) { skipped++; continue; }
+    // Already snapshotted under any identity (e.g. a row staff unlinked)? Leave it.
+    if (!cls || await pg.one('SELECT 1 FROM report_history WHERE session_id = $1 LIMIT 1', [st.session_id])) { skipped++; continue; }
+    const norm = await resolveJourneyIdentity((q, v) => pg.many(q, v), st.session_id, st, { forSnapshot: true });
+    if (!norm) { skipped++; continue; }
 
     const [apt, pers, ints, seaa] = await Promise.all([
       pg.many(`SELECT key, name, stanine   FROM report_aptitude    WHERE session_id = $1 ORDER BY position`, [st.session_id]),
@@ -895,7 +1031,7 @@ async function backfillJourneyHistory({ commit = false, email = null } = {}) {
       seaa:        seaa.map(s => ({ key: s.key, title: s.title, cat_label: s.cat_label })),
     };
 
-    console.log(`[backfill-journey] ${norm} — ${cls} (fit ${st.fit_score == null ? '?' : st.fit_score}, ${st.fit_tier || '?'})`);
+    if (!quiet) console.log(`[backfill-journey] ${norm} — ${cls} (fit ${st.fit_score == null ? '?' : st.fit_score}, ${st.fit_tier || '?'})`);
     if (!commit) { created++; continue; }
 
     const cntRow    = await pg.one(`SELECT COUNT(*)::int AS n FROM report_history WHERE email = $1`, [norm]);
@@ -918,8 +1054,36 @@ async function backfillJourneyHistory({ commit = false, email = null } = {}) {
     if (res.rowCount) created++; else skipped++;
   }
 
-  console.log(`[backfill-journey] ${commit ? 'COMMITTED' : 'dry-run'}: ${created} snapshot(s) ${commit ? 'created' : 'would be created'}, ${skipped} skipped`);
+  if (!quiet || created) console.log(`[backfill-journey] ${commit ? 'COMMITTED' : 'dry-run'}: ${created} snapshot(s) ${commit ? 'created' : 'would be created'}, ${skipped} skipped`);
   return { created, skipped, committed: commit };
+}
+
+/* Detach one attempt from a journey it was wrongly linked into (two different
+   students with the same name at the same school). The row keeps its data; it
+   just gets an identity of its own, so it stops appearing in the other
+   student's journey. */
+/* The journey identity a student's own assessment is filed under: what is
+   stored for their session (which reflects an unlink), else the identity
+   their details produce today. */
+async function journeyIdentityFor(sessionId, stu) {
+  await _initDb();
+  const row = sessionId ? await pg.one('SELECT email FROM report_history WHERE session_id = $1 LIMIT 1', [String(sessionId)]) : null;
+  if (row) return row.email;
+  // No snapshot of their own yet: the identity their next one would get, so
+  // earlier years still show (same rules, read-only).
+  const full = stu && stu.full_name !== undefined && stu.student_uid !== undefined ? stu
+    : await pg.one('SELECT email, school, class, full_name, student_uid FROM students WHERE session_id = $1', [String(sessionId)]);
+  const id = await resolveJourneyIdentity((q, v) => pg.many(q, v), sessionId, full || stu || {});
+  return id.startsWith('sid:') ? '' : id;
+}
+
+async function unlinkJourneyAttempt(sessionId) {
+  await _initDb();
+  const r = await pg.exec(
+    `UPDATE report_history SET email = $1, attempt_no = 1 WHERE session_id = $2 AND email NOT LIKE 'sid:%'`,
+    ['sid:' + String(sessionId), String(sessionId)]
+  );
+  return r.rowCount;
 }
 
 async function close() {
@@ -1193,17 +1357,18 @@ function _deriveSummary(personality, aptitude, interests, seaa, careers, report)
     else if (c.cat_label === 'Developing Readiness') fitRaw -= 3;
   }
   const fitScore = Math.max(0, Math.min(100, Math.round(fitRaw)));
-  const fitTier  = fitScore >= 75 ? 'Strong Fit' : fitScore >= 55 ? 'Emerging Fit' : 'Exploratory Fit';
+  const fitTier  = fitTierFor(fitScore);
 
-  const persStatus = avgPers >= 6.5 ? 'Strength' : avgPers >= 4 ? 'Developing' : 'Support Needed';
-  const aptStatus  = avgApt  >= 6.5 ? 'Strength' : avgApt  >= 4 ? 'Developing' : 'Support Needed';
-  const cpiStatus  = topInterestScore >= 15 ? 'Strength' : topInterestScore >= 8 ? 'Developing' : 'Support Needed';
+  const _band = (v, t) => v >= t.strong ? SUMMARY_STATUS.STRONG : v >= t.developing ? SUMMARY_STATUS.DEVELOPING : SUMMARY_STATUS.SUPPORT;
+  const persStatus = _band(avgPers, STATUS_THRESHOLDS);
+  const aptStatus  = _band(avgApt,  STATUS_THRESHOLDS);
+  const cpiStatus  = _band(topInterestScore, INTEREST_THRESHOLDS);
 
   const seaWorst = seaa.reduce((w, c) => {
-    if (c.cat_label === 'Support Needed') return 'Support Needed';
-    if (c.cat_label === 'Developing Readiness' && w !== 'Support Needed') return 'Developing';
+    if (c.cat_label === 'Support Needed') return SUMMARY_STATUS.SUPPORT;
+    if (c.cat_label === 'Developing Readiness' && w !== SUMMARY_STATUS.SUPPORT) return SUMMARY_STATUS.DEVELOPING;
     return w;
-  }, 'Strength');
+  }, SUMMARY_STATUS.STRONG);
 
   const strongFits   = careers.filter(c => (c.alignment||'').includes('Strong')).map(c => c.career);
   const emergingFits = careers.filter(c => (c.alignment||'').includes('Emerging')).map(c => c.career);
@@ -1247,12 +1412,17 @@ module.exports = {
   getFullReport,
   getSectionProgress,
   getSessionProgress,
-  getSessionProgress,
   getStudentByEmail,
   resolveStudentByEmail,
   getStudentBySessionId,
   getJourney,
   backfillJourneyHistory,
+  unlinkJourneyAttempt,
+  journeyIdentityFor,
+  resolveJourneyIdentity,
+  uidIdentity,
+  journeyIdentity,
+  SUMMARY_STATUS, STATUS_THRESHOLDS, INTEREST_THRESHOLDS, FIT_TIERS, STANINE_BANDS, fitTierFor,
   rescoreDaabStanines,
   rescoreDaabFemale,
   classKey,

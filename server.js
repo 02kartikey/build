@@ -281,7 +281,9 @@ function _openaiReqRaw(endpoint, body) {
       port:     parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
       path:     parsed.pathname + (parsed.search || ''),
       method:   'POST',
-      agent:    _httpsAgent,
+      // The keep-alive agent is HTTPS-only; passing it to http.request threw
+      // ERR_INVALID_PROTOCOL for an http:// OPENAI_BASE_URL (e.g. a local proxy).
+      agent:    parsed.protocol === 'https:' ? _httpsAgent : undefined,
       headers:  {
         'Content-Type':   'application/json',
         'Content-Length': buf.length,
@@ -441,8 +443,37 @@ const _CSP =
   "style-src 'self' 'unsafe-inline' fonts.googleapis.com fonts.gstatic.com; " +
   "font-src 'self' fonts.gstatic.com fonts.googleapis.com data:; " +
   "img-src 'self' data: blob: https://numind.co.in; " +
-  "connect-src 'self' https://api.openai.com https://cdnjs.cloudflare.com; " +
+  "connect-src 'self' https://cdnjs.cloudflare.com; " +
   "object-src 'none'; frame-ancestors 'none';" ;
+
+/* ── Public-file gate ─────────────────────────────────────────────────
+   The static handler used to serve ANY file under the app folder, so /.env,
+   /server.js, /numind.db and logs were downloadable. Only browser assets are
+   served now. A file is public when its extension is a browser asset type
+   and it is not server code: anything the server process itself has loaded,
+   and any .js that uses CommonJS / Node APIs (require, module.exports,
+   process.env). That covers both the repo layout and a flat deploy where
+   browser modules sit next to server.js, with no hand-kept file list. */
+const _PUBLIC_EXT = new Set(['.html', '.js', '.mjs', '.css', '.png', '.jpg', '.jpeg', '.svg', '.ico', '.woff', '.woff2', '.ttf']);
+const _publicCache = new Map();
+function _isPublicFile(file) {
+  const ext  = path.extname(file).toLowerCase();
+  const name = path.basename(file);
+  if (!_PUBLIC_EXT.has(ext) || name.startsWith('.')) return false;
+  if (path.relative(__dirname, file).split(path.sep).some(seg => seg.startsWith('.') || seg === 'node_modules')) return false;
+  if (ext !== '.js' && ext !== '.mjs') return true;
+  if (require.cache[file]) return false;                       // loaded by this server process
+  let st; try { st = fs.statSync(file); } catch (_) { return false; }
+  const hit = _publicCache.get(file);
+  if (hit && hit.mtime === st.mtimeMs) return hit.ok;
+  let ok = false;
+  try {
+    const head = fs.readFileSync(file, 'utf8');
+    ok = !/\brequire\s*\(|module\.exports|process\.env|^#!/m.test(head);
+  } catch (_) { ok = false; }
+  _publicCache.set(file, { mtime: st.mtimeMs, ok });
+  return ok;
+}
 
 function _injectToken(html) {
   if (!APP_TOKEN) return html;
@@ -645,6 +676,7 @@ async function _handleSaveRegistration(req, res) {
         retry_after: 3,
       }));
     }
+    if (err && err.status === 409) return _json(res, 409, { error: err.message, code: err.code || 'CONFLICT' });
     log.error('[save-registration]', err.message);
     _json(res, 500, { error: 'Server error' });
   }
@@ -1628,7 +1660,6 @@ async function _handleRequest(req, res) {
       }
       return await dashApi.handle(req, res);
     }
-    if (method === 'POST' && pathname === '/api/dashboard/insights')       return await _handleDashboardInsights(req, res);
     // PUBLIC access-code routes for the student entry screen. Declared BEFORE the
     // /api/dashboard catch-all so they are not swallowed by the staff auth gate.
     if (method === 'GET'  && pathname === '/api/student-access/schools')    return await dashApi.handleAccessSchools(req, res);
@@ -1648,13 +1679,13 @@ async function _handleRequest(req, res) {
       res.writeHead(403); return res.end('Forbidden');
     }
 
-    if (!fs.existsSync(filePath)) {
+    let target = filePath;
+    if (!fs.existsSync(target)) {
       const base = path.join(__dirname, path.basename(filePath));
-      if (base !== filePath && fs.existsSync(base)) {
-        return _serveStatic(res, base, req);
-      }
+      if (base !== filePath && fs.existsSync(base)) target = base;
     }
-    return _serveStatic(res, filePath, req);
+    if (!_isPublicFile(target)) { res.writeHead(404); return res.end('Not found'); }
+    return _serveStatic(res, target, req);
 
   } catch (err) {
     if (_isDbBusy(err)) {
@@ -1670,61 +1701,27 @@ async function _handleRequest(req, res) {
   }
 }
 
-async function _handleDashboardInsights(req, res) {
-  const auth  = req.headers['authorization'] || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return _json(res, 401, { error: 'Unauthorized' });
-
-  const dashUser = await require('./dashboard-db.js').verifyToken(token);
-  if (!dashUser) return _json(res, 401, { error: 'Unauthorized' });
-
-  if (!OPENAI_KEY) return _json(res, 503, { error: 'OpenAI not configured on this server.' });
-
-  let body;
-  try { body = await _readBody(req, 32 * 1024); }
-  catch { return _json(res, 400, { error: 'Bad request' }); }
-
-  const { prompt } = body || {};
-  if (!prompt || typeof prompt !== 'string') return _json(res, 400, { error: 'prompt required' });
-
-  try {
-    const upstream = await _openaiReq('/v1/chat/completions', {
-      model: AI_MODEL, max_tokens: 900, temperature: 0.4,
-      messages: [
-        { role: 'system', content: 'You are a concise education analyst. Respond ONLY with valid JSON — no markdown, no backticks, no preamble.' },
-        { role: 'user', content: prompt },
-      ],
-    });
-
-    const raw = await new Promise(r => {
-      const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => r(Buffer.concat(c).toString()));
-    });
-
-    if (upstream.statusCode !== 200) {
-      let msg = 'AI service error', code = '';
-      try { const e = JSON.parse(raw)?.error; msg = e?.message || msg; code = e?.code || e?.type || ''; } catch (_) {}
-      // 429 hides two very different problems — say which one it is, because
-      // "Insights unavailable: rate limit" sends staff chasing the wrong fix.
-      if (code === 'insufficient_quota' || /quota|billing/i.test(msg)) {
-        msg = 'The OpenAI account for this server is out of credits. Add billing/credits at platform.openai.com, then retry — this is not a NuMind bug.';
-      } else if (upstream.statusCode === 429) {
-        msg = 'OpenAI is rate-limiting this server right now. Wait ~1 minute and retry.';
-      }
-      return _json(res, upstream.statusCode, { error: msg });
+/* Non-streaming chat-completions call returning the parsed JSON body. Used by
+   the staff dashboards (AI Programme Intelligence + assistant); the prompt is
+   always built on the server — the old /insights route forwarded any prompt
+   the browser sent. 429s already retry inside _openaiReq. */
+async function _aiJson(body) {
+  if (!OPENAI_KEY) throw Object.assign(new Error('AI is not configured on this server.'), { status: 503 });
+  const upstream = await _openaiReq('/v1/chat/completions', Object.assign({}, body, { stream: false }));
+  const raw = await new Promise((resolve, reject) => {
+    const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => resolve(Buffer.concat(c).toString())); upstream.on('error', reject);
+  });
+  if (upstream.statusCode !== 200) {
+    let msg = 'AI service error', code = '';
+    try { const e = JSON.parse(raw).error; msg = (e && e.message) || msg; code = (e && (e.code || e.type)) || ''; } catch (_) {}
+    if (code === 'insufficient_quota' || /quota|billing/i.test(msg)) {
+      msg = 'The OpenAI account for this server is out of credits. Add billing/credits at platform.openai.com, then retry.';
+    } else if (upstream.statusCode === 429) {
+      msg = 'OpenAI is rate-limiting this server right now. Wait about a minute and retry.';
     }
-
-    let text = '';
-    try { text = JSON.parse(raw)?.choices?.[0]?.message?.content || ''; } catch (_) {}
-
-    let parsed;
-    try { parsed = JSON.parse(text.replace(/```json|```/g, '').trim()); }
-    catch (_) { return _json(res, 502, { error: 'AI returned unparseable response' }); }
-
-    _json(res, 200, { insights: parsed });
-  } catch (err) {
-    log.error('[dashboard-insights]', err.message);
-    _json(res, 502, { error: 'AI service error: ' + err.message });
+    throw Object.assign(new Error(msg), { status: upstream.statusCode === 429 ? 429 : 502 });
   }
+  return JSON.parse(raw);
 }
 
 async function _issueCounsellorToken(email) { return cdb.issueToken(email); }
@@ -1774,6 +1771,13 @@ async function _bootstrap() {
   dashApi.init(_db, _emailFn, _dbWrite, async (scope, key, limit) => {
     const r = await _rlCheckDb(scope, key, limit, RL_WINDOW);
     return !!(r && r.allowed);
+  }, {
+    ai: OPENAI_KEY ? _aiJson : null,
+    models: {
+      insights:  process.env.DASHBOARD_INSIGHTS_MODEL  || AI_MODEL,
+      assistant: process.env.DASHBOARD_ASSISTANT_MODEL || AI_MODEL,
+    },
+    log,
   });
 }
 

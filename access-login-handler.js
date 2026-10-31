@@ -11,7 +11,8 @@
 
    HOW IT WORKS
    ────────────
-   1. Verifies (school + class + name + code) against students.access_code
+   1. Verifies (school + class + name + code), or (school + Unique School ID
+      + code), against students.access_code
       via the same constant-time compare the dashboard/registration flow uses.
    2. Loads the student's report by session_id.
    3. If no report yet, refuses — the student must finish the assessment first.
@@ -64,10 +65,12 @@ module.exports = function buildAccessLoginHandler(deps) {
     const school = String(body?.school || '').trim();
     const klass  = String(body?.class  || '').trim();
     const name   = String(body?.name   || '').trim();
+    const uid    = String(body?.uid    || '').trim();
     const code   = String(body?.code   || '').trim().toUpperCase();
 
-    if (!school || !klass || !name || !code) {
-      return _json(res, 400, { error: 'All four fields are required.' });
+    // Two ways in: school + class + name + code, or school + Unique School ID + code.
+    if (!school || !code || (!uid && (!klass || !name))) {
+      return _json(res, 400, { error: uid ? 'School, Unique School ID and access code are all required.' : 'All four fields are required.' });
     }
     if (!CODE_SHAPE.test(code)) {
       // Cheap shape reject before hitting the DB. Doesn't leak which field
@@ -77,7 +80,12 @@ module.exports = function buildAccessLoginHandler(deps) {
 
     // 3. Rate-limit by school+class+name — bounds brute-force attempts on any
     //    one code without penalising unrelated students on the same box.
-    const rlKey = 'ac:' + school.toLowerCase() + '|' + klass.toLowerCase() + '|' + name.toLowerCase();
+    //    School is matched forgivingly ("ABPS" = "ABPS,BAGA"), so it is left
+    //    out of the key: every spelling of a school shares one budget per student.
+    const _mu = require('./match-utils.js');
+    const rlKey = uid
+      ? 'acu:' + _mu.normUid(uid)
+      : 'ac:' + _mu.normName(name).replace(/\s+/g, '');
     const rl = await _rlCheckDb('access-login', rlKey, RL_LIMIT, RL_WINDOW_MS);
     if (!rl.allowed) {
       res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
@@ -87,7 +95,7 @@ module.exports = function buildAccessLoginHandler(deps) {
     // 4. Verify the four-field credential.
     let student;
     try {
-      student = await cdb.redeemAccessCodeForCounsellor({ school, klass, name, code });
+      student = await cdb.redeemAccessCodeForCounsellor({ school, klass, name, uid: uid || null, code });
     } catch (e) {
       log.error('[counsellor-access-login] verify error:', e.message);
       return _json(res, 500, { error: 'Something went wrong. Please try again.' });

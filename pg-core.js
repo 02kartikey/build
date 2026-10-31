@@ -3,7 +3,7 @@
    --------------------------------------------------------------------
    Replaces the better-sqlite3 core. Provides:
      • a single shared connection Pool (safe across PM2 cluster workers)
-     • the full schema (all 27 tables) in PostgreSQL dialect
+     • the full schema in PostgreSQL dialect
      • async query helpers: q / one / many / exec / tx
 
    Design notes vs the old SQLite layer:
@@ -158,7 +158,7 @@ async function tx(fn) {
 }
 
 /* ── Schema ─────────────────────────────────────────────────────────── */
-/*  All 27 tables, PostgreSQL dialect. Idempotent (IF NOT EXISTS).
+/*  Full schema, PostgreSQL dialect. Idempotent (IF NOT EXISTS).
     citext requires the extension; we create it first. Timestamps are
     TIMESTAMPTZ; the app currently passes ISO-8601 strings which Postgres
     parses natively, so no call-site changes are required for inserts.  */
@@ -193,6 +193,19 @@ ALTER TABLE students ADD COLUMN IF NOT EXISTS access_code_set_at TIMESTAMPTZ;
 -- Lookup index matches the redeem query (school + class + code).
 CREATE INDEX IF NOT EXISTS idx_students_access
   ON students (school, class, access_code) WHERE access_code IS NOT NULL;
+
+-- Unique School ID: the identifier a school issues to each student (admission
+-- or enrolment number), used instead of email/personal details. Unique within
+-- a school, so two schools may both issue "1024". The key matches
+-- match-utils uidSchoolKey()/normUid() exactly; COLLATE "C" keeps it
+-- independent of the database locale. "DPS Noida" and "dps-noida", or
+-- "ADM 1024" and "adm1024", are the same student.
+ALTER TABLE students ADD COLUMN IF NOT EXISTS student_uid TEXT;
+DROP INDEX IF EXISTS uq_students_school_uid;
+CREATE UNIQUE INDEX IF NOT EXISTS uq_students_school_uid_v2
+  ON students (regexp_replace(lower((school) COLLATE "C"), '[[:space:][:punct:]]+', '', 'g'),
+               upper(regexp_replace((student_uid) COLLATE "C", '[[:space:]]+', '', 'g')))
+  WHERE (student_uid IS NOT NULL AND btrim(student_uid) <> '');
 
 CREATE TABLE IF NOT EXISTS assessments (
   session_id            TEXT PRIMARY KEY REFERENCES students(session_id) ON DELETE CASCADE,
@@ -318,6 +331,8 @@ CREATE INDEX IF NOT EXISTS idx_interests_label      ON report_interests(label);
 CREATE INDEX IF NOT EXISTS idx_summary_fit_tier     ON report_summary(fit_tier);
 CREATE INDEX IF NOT EXISTS idx_summary_generated    ON report_summary(generated_at);
 CREATE INDEX IF NOT EXISTS idx_summary_seaa         ON report_summary(seaa_status);
+CREATE INDEX IF NOT EXISTS idx_assess_saved         ON assessments(saved_at);
+CREATE INDEX IF NOT EXISTS idx_students_name_lower  ON students(LOWER(full_name));
 
 /* ══ Counsellor / chat / auth tables (from counsellor-db.js) ══ */
 CREATE TABLE IF NOT EXISTS counsellor_queries (
@@ -558,6 +573,76 @@ CREATE TABLE IF NOT EXISTS report_history (
 );
 CREATE INDEX IF NOT EXISTS idx_rhist_email     ON report_history(email);
 CREATE INDEX IF NOT EXISTS idx_rhist_email_gen ON report_history(email, generated_at);
+CREATE INDEX IF NOT EXISTS idx_rhist_session   ON report_history(session_id);
+
+/* ══ Dashboard programme settings ══
+   Editable per school (scope 'school:<normalised name>') or network-wide
+   (scope 'global'): completion target, when an in-progress student counts as
+   stalled, etc. Replaces the 60/80% thresholds that were written into the
+   dashboard pages. Keys and defaults live in dashboard-db.js SETTINGS_SCHEMA. */
+CREATE TABLE IF NOT EXISTS dashboard_settings (
+  scope      TEXT PRIMARY KEY,
+  settings   JSONB NOT NULL DEFAULT '{}'::jsonb,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by BIGINT
+);
+
+/* ══ AI Programme Intelligence cache ══
+   Keyed by a fingerprint of the exact data the insight was written from, so a
+   cached insight is reused only while that data is unchanged — any new
+   completion, alert or score produces a new fingerprint and a fresh insight. */
+CREATE TABLE IF NOT EXISTS ai_insights_cache (
+  cache_key  TEXT PRIMARY KEY,
+  payload    JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+/* ══ Staff follow-up tasks (a counsellor's own to-do list) ══ */
+CREATE TABLE IF NOT EXISTS followup_tasks (
+  id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id       BIGINT NOT NULL REFERENCES dashboard_users(id) ON DELETE CASCADE,
+  session_id    TEXT,                 -- the student, when the task is about one
+  student_label TEXT,                 -- name as typed, for tasks not linked to a record
+  task_type     TEXT   NOT NULL,      -- call | checkin | email | report | meeting | other
+  notes         TEXT,
+  due_date      DATE,
+  done          BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  done_at       TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_fu_user ON followup_tasks(user_id, done, due_date);
+
+/* ══ Scheduled reminder campaigns (run by the server, see dashboard-api) ══ */
+CREATE TABLE IF NOT EXISTS reminder_schedules (
+  id               BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  created_by       BIGINT NOT NULL REFERENCES dashboard_users(id) ON DELETE CASCADE,
+  target_group     TEXT   NOT NULL,          -- not_started | in_progress | all_pending | stalled
+  school           TEXT,                     -- NULL: every school the creator can see
+  frequency_days   INTEGER NOT NULL,
+  send_hour        INTEGER NOT NULL DEFAULT 9,
+  subject          TEXT   NOT NULL,
+  message          TEXT   NOT NULL,
+  active           BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+  next_run_at      TIMESTAMPTZ NOT NULL,
+  last_run_at      TIMESTAMPTZ,
+  last_run_sent    INTEGER,
+  last_run_skipped INTEGER,
+  last_error       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_rsched_due ON reminder_schedules(next_run_at) WHERE active;
+
+/* ══ Staff dashboard assistant (chatbot) conversation history ══ */
+CREATE TABLE IF NOT EXISTS dashboard_chat (
+  id              BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id         BIGINT NOT NULL REFERENCES dashboard_users(id) ON DELETE CASCADE,
+  conversation_id TEXT   NOT NULL,
+  role            TEXT   NOT NULL,
+  content         TEXT   NOT NULL,
+  meta            JSONB,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_dchat_user_conv ON dashboard_chat(user_id, conversation_id, created_at);
 `;
 
 /**

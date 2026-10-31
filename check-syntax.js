@@ -22,6 +22,11 @@ const FILES = [
   'dashboard-db.js',
   'counsellor-db.js',
   'counsellor-rag.js',
+  'dashboard-assistant.js',
+  'pg-core.js',
+  'match-utils.js',
+  // Browser scripts loaded as classic <script> tags by the dashboards
+  'js/dashboard-common.js',
 ];
 
 let passed = 0, failed = 0;
