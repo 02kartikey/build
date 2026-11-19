@@ -1,28 +1,20 @@
 /* ════════════════════════════════════════════════════════════════════
    counsellor-db.js — NuMind MAPS  |  Counsellor feature layer (PostgreSQL)
    --------------------------------------------------------------------
-   Async rewrite on pg-core.js. Schema now lives in pg-core (initSchema);
-   this module keeps only behaviour. Every DB function is async.
+   OTPs and PINs, the AI counsellor's conversations and summaries, student
+   queries, and the shared rate limiter. The schema lives in pg-core
+   (initSchema); every DB function is async.
 
-   Conversions from better-sqlite3:
-     • ? → $1,$2,…; .get/.all/.run → pg.one/pg.many/pg.exec/pg.tx.
-     • lastInsertRowid → RETURNING id.
-     • LOWER(email) comparisons dropped where the column is app-normalised
-       to lowercase on write (email stored lowercased). The students.email
-       column is CITEXT, so joins on it are case-insensitive without LOWER().
-     • used 0/1 → BOOLEAN; UPDATE ... used = TRUE.
-     • rlCheck transaction → pg.tx with the same upsert-then-read logic.
-
-   The in-memory report cache is unchanged (not DB-bound). init() no longer
-   receives a db handle — it just triggers schema readiness via db.js._initDb.
-   The parameter is kept for call-site compatibility but ignored.
+   Conventions: positional placeholders; emails are lower-cased on write and
+   students.email is CITEXT, so comparisons need no LOWER(); the rate limiter
+   upserts and reads in one transaction. The report cache is in memory, per
+   worker.
    ════════════════════════════════════════════════════════════════════ */
 
 'use strict';
 
 const crypto = require('crypto');
 const pg     = require('./pg-core.js');
-const match  = require('./match-utils.js');
 
 /* Access-code identity prefix. Students imported in bulk have no email; the
    counsellor layer identifies them by the synthetic string
@@ -54,9 +46,8 @@ function _isAccessId(id) {
 let _ready = false;
 
 /* ─── Init ──────────────────────────────────────────────────────── */
-/* Legacy signature init(db) — the argument is ignored now; schema creation
-   is owned by pg-core via db.js._initDb(). Kept so server.js needn't change. */
-async function init(_db) {
+/* Ensures the schema (owned by pg-core via db.js._initDb). Idempotent. */
+async function init() {
   if (_ready) return;
   await require('./db.js')._initDb();
   _ready = true;
@@ -280,7 +271,7 @@ async function _buildReportPayload(student) {
     pg.many(`SELECT career, alignment, suitability_pct, rationale FROM report_careers WHERE session_id = $1 ORDER BY position`, [student.session_id]),
   ]);
 
-  // Legacy backfill: derive missing child sections from raw assessment scores.
+  // Older reports may lack child sections: derive them from the raw assessment scores.
   if (!personality.length || !aptitude.length || !interests.length || !seaa.length || !careers.length) {
     try {
       const row = await pg.one('SELECT * FROM assessments WHERE session_id = $1', [student.session_id]);
@@ -384,9 +375,8 @@ async function getJourney(email) {
   // Access-code students have no email → no rows in report_history keyed by
   // email → journey is empty. Return the canonical empty shape rather than
   // send `access:...` into db.getJourney which does WHERE email = $1.
-  // Longitudinal tracking for access-code students can be added later by
-  // querying report_history by session_id; for now, empty is the honest
-  // answer (they have exactly one attempt anyway).
+  // An access-code student's journey is keyed by session, and they have a
+  // single attempt here, so the empty journey is accurate.
   const db = require('./db.js');
   if (_isAccessId(email)) {
     // Access-code students: their journey is keyed by school + name (see

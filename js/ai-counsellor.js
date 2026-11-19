@@ -174,10 +174,9 @@ function _lockStep(step, opts) {
     resend.addEventListener('click', _acResendOtp);
     p3.appendChild(resend);
     wrap.appendChild(p3);
-    // Escape hatch: the identity route used to be reachable ONLY when the
-    // server failed to SEND the OTP. If the mail is accepted but never
-    // arrives (blocked SMTP ports, spam filtering, wrong address), the student
-    // was stranded on this screen with no way forward. Offer it explicitly.
+    // Escape hatch: if the email is accepted but never arrives (blocked SMTP
+    // ports, spam filtering, wrong address), the student can still verify by
+    // identity instead of being stranded here.
     var p3b = document.createElement('p');
     p3b.style.cssText = 'font-size:11.5px;color:#93aab1;text-align:center;margin:8px 0 0';
     p3b.appendChild(document.createTextNode("Can't access your email? "));
@@ -825,9 +824,8 @@ function goToCounsellor() {
   // pre-fill the email and auto-trigger unlock so they skip the gate.
   const email = window.S && window.S.student && window.S.student.email;
   const sid   = window.S && window.S.sessionId;
-  // Email-less students (imported via access code without an email) could
-  // previously NEVER pass this gate — the email form was a dead end for
-  // them. A live session is sufficient; try it silently first.
+  // Email-less students (imported with an access code and no email) cannot
+  // use the email form; a live session is sufficient, so try it silently first.
   if (!email && sid && !_AC.unlocked) {
     setTimeout(function() {
       const lockLoader = document.getElementById('acp-lock-loading');
@@ -888,8 +886,8 @@ function goToCounsellor() {
 function goBackFromCounsellor() {
   // Determine whether we have in-memory assessment data to show results.
   // S is exposed on window by main.js. Scores in memory are enough for
-  // buildResults(); the results snapshot is now also retained in localStorage
-  // (it used to be cleared on entering results, which broke refresh).
+  // buildResults(); the results snapshot is also kept in localStorage so a
+  // refresh keeps the report.
   const S = window.S;
   const hasScores = S && S.cpi && S.cpi.scores !== null &&
                     S.nmap && S.nmap.scores !== null;
@@ -1044,8 +1042,7 @@ function _acRenderReportPanel() {
     html += `</div>`;
   }
 
-  // Narrative sections — the actual written report, previously never sent by
-  // the server at all, so this panel could only ever show numbers.
+  // Narrative sections: the written report, alongside the numbers.
   const narratives = [
     ['📋 Holistic Summary', rs.holistic_summary],
     ['🧠 Personality Profile', rs.personality_profile],

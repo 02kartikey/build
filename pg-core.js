@@ -1,36 +1,27 @@
 /* ════════════════════════════════════════════════════════════════════
    pg-core.js — NuMind MAPS  |  PostgreSQL foundation layer
    --------------------------------------------------------------------
-   Replaces the better-sqlite3 core. Provides:
-     • a single shared connection Pool (safe across PM2 cluster workers)
-     • the full schema in PostgreSQL dialect
+   Provides:
+     • a single shared connection Pool (one per PM2 cluster worker)
+     • the full schema, created idempotently on start
      • async query helpers: q / one / many / exec / tx
 
-   Design notes vs the old SQLite layer:
-     • pg is ASYNC. Every helper returns a Promise. All callers await.
-     • No prepared-statement cache: pg parameterises server-side per query.
-       Placeholders are $1,$2,… (not ?).
-     • No pragmas (WAL, synchronous, mmap): Postgres handles durability and
-       concurrency natively. The old single-writer write queue is obsolete —
-       the Pool gives real concurrent writers.
-     • TEXT ISO-8601 timestamps → TIMESTAMPTZ. INTEGER 0/1 flags → BOOLEAN.
-       JSON-as-TEXT columns → JSONB. AUTOINCREMENT → GENERATED … AS IDENTITY.
-     • SQLite "COLLATE NOCASE" uniqueness → CITEXT (case-insensitive text)
-       so email/school/tag uniqueness stays case-insensitive without extra
-       functional indexes.
+   Design notes:
+     • Every helper returns a Promise; placeholders are $1, $2 …
+     • Timestamps are TIMESTAMPTZ, flags BOOLEAN, structured data JSONB, ids
+       GENERATED … AS IDENTITY.
+     • Email, school and tag uniqueness is case-insensitive through CITEXT,
+       without extra functional indexes.
    ════════════════════════════════════════════════════════════════════ */
 
 'use strict';
 
 const { Pool, types } = require('pg');
 
-/* Type parity with the old better-sqlite3 layer:
-   • int8/BIGINT (OID 20) — pg returns these as STRINGS by default; SQLite
-     returned numbers. Every IDENTITY id (users, notes, schools…) is int8, and
-     the dashboards do strict `x.id === userId` compares, so parse as Number.
-     (Safe: ids here never approach Number.MAX_SAFE_INTEGER.)
-   • NUMERIC (OID 1700) — returned as string by default; parse as float so
-     ROUND(...) aggregates behave like SQLite's numeric results. */
+/* Numeric types arrive as numbers, not strings:
+   • int8/BIGINT (OID 20): every IDENTITY id is int8, and the code compares
+     ids strictly (`x.id === userId`). Ids never approach MAX_SAFE_INTEGER.
+   • NUMERIC (OID 1700): so ROUND(...) aggregates are numbers. */
 types.setTypeParser(20,   (v) => (v === null ? null : Number(v)));
 types.setTypeParser(1700, (v) => (v === null ? null : parseFloat(v)));
 
@@ -114,7 +105,7 @@ async function q(text, params = []) {
   return _queryWithRetry(text, params);
 }
 
-/** First row, or null. Mirrors better-sqlite3 stmt.get(). */
+/** First row, or null. */
 async function one(text, params = []) {
   const r = await _queryWithRetry(text, params);
   return r.rows[0] || null;
@@ -133,7 +124,7 @@ async function exec(text, params = []) {
 }
 
 /**
- * Transaction helper. Replaces better-sqlite3's synchronous db.transaction().
+ * Transaction helper: runs fn on one client inside BEGIN/COMMIT, rolling back on error.
  * Usage:
  *   await tx(async (c) => {
  *     await c.query('INSERT ...', [...]);
@@ -597,6 +588,58 @@ CREATE TABLE IF NOT EXISTS ai_insights_cache (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+/* ══ Merged school names ══
+   Students type their school many ways ("ABPS Baga", "ABPS,Baga", "Abps Baga
+   Branch"). An admin merges the spellings of one school into one name (School
+   registry → Merge schools): every student record is rewritten to that name,
+   and each merged-away spelling is kept here so a student who types it again
+   is filed under the merged school. name_key is the spelling normalised by
+   match-utils normSchool(); the trigger below applies it on every write. */
+CREATE TABLE IF NOT EXISTS school_merges (
+  name_key   TEXT PRIMARY KEY,
+  school     TEXT NOT NULL,
+  merged_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  merged_by  BIGINT REFERENCES dashboard_users(id) ON DELETE SET NULL
+);
+CREATE OR REPLACE FUNCTION students_apply_school_merge() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+DECLARE merged TEXT;
+BEGIN
+  IF NEW.school IS NOT NULL THEN
+    SELECT m.school INTO merged FROM school_merges m
+     WHERE m.name_key = regexp_replace(lower(NEW.school), '[^a-z0-9]+', '', 'g');
+    IF merged IS NOT NULL THEN NEW.school := merged; END IF;
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+DO $do$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_students_school_merge') THEN
+    CREATE TRIGGER trg_students_school_merge BEFORE INSERT OR UPDATE OF school ON students
+      FOR EACH ROW EXECUTE FUNCTION students_apply_school_merge();
+  END IF;
+END $do$;
+
+/* ══ School groups ══
+   A school that is one branch of a larger school ("ABPS Baga" is part of
+   "ABPS"). The Dashboard shows the group, then its branches. A school with no
+   row is its own school. school_key is match-utils normSchool() of its name. */
+CREATE TABLE IF NOT EXISTS school_groups (
+  school_key  TEXT PRIMARY KEY,
+  group_name  TEXT NOT NULL,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_by  BIGINT REFERENCES dashboard_users(id) ON DELETE SET NULL
+);
+-- The earlier spelling-to-school-and-branch links carry over as groups.
+DO $do$ BEGIN
+  IF to_regclass('school_branch_map') IS NOT NULL THEN
+    INSERT INTO school_groups (school_key, group_name, updated_at, updated_by)
+      SELECT name_key, org, updated_at, updated_by FROM school_branch_map
+      ON CONFLICT (school_key) DO NOTHING;
+    DROP TABLE school_branch_map;
+  END IF;
+END $do$;
+
 /* ══ Staff follow-up tasks (a counsellor's own to-do list) ══ */
 CREATE TABLE IF NOT EXISTS followup_tasks (
   id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -649,8 +692,11 @@ CREATE INDEX IF NOT EXISTS idx_dchat_user_conv ON dashboard_chat(user_id, conver
  * Create/verify the full schema. Idempotent — safe to run on every boot.
  * Runs inside a single transaction so a partial failure rolls back cleanly.
  */
+// Serialises schema creation when several workers start at once.
+const SCHEMA_LOCK_KEY = 7310041;
 async function initSchema() {
   await tx(async (c) => {
+    await c.query('SELECT pg_advisory_xact_lock($1)', [SCHEMA_LOCK_KEY]);
     // Run the whole DDL block. citext extension must exist before any
     // CITEXT column is created, which is why it's the first statement.
     await c.query(SCHEMA);

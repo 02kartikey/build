@@ -34,10 +34,9 @@ function goPage(id) {
   // Don't persist counsellor page to session — it's not an assessment page
   // and would incorrectly trigger the resume overlay on next load.
   if (id !== 'counsellor') _saveSession(id);
-  // NOTE: the results snapshot is deliberately KEPT. It used to be cleared here,
-  // which meant refreshing on the report page wiped the session and dropped the
-  // student back on the landing page with no way back to their report. main.js
-  // restores 'results' directly (no resume overlay), so keeping it is safe.
+  // The results snapshot is deliberately kept, so refreshing the report page
+  // brings the student back to their report. main.js restores 'results'
+  // directly (no resume overlay).
 }
 
 // NOTE: DOMContentLoaded boot sequence is handled exclusively in main.js.
@@ -203,10 +202,9 @@ window.acSetIdMode = acSetIdMode;
 
    The school field fires both onchange and onblur, and each keystroke can
    start another lookup, so several requests are in flight at once. Without a
-   guard each one clears the dropdown and appends its own results: two
-   overlapping class lookups produced the duplicated "9, X, XI, XII, 9, X, XI,
-   XII" list, and a slow names lookup for the previously-selected class could
-   land after a newer one and repaint the list with the wrong class's students.
+   guard each one would clear the dropdown and append its own results
+   (duplicated class lists), and a slow names lookup for an earlier class
+   could repaint the list with the wrong class's students.
 
    Each loader owns a counter. A response only paints if it is still the most
    recent request for that loader; anything older is discarded. */
@@ -507,8 +505,8 @@ async function doRegister() {
       return;
     }
 
-    // Legacy path: a report exists but predates journey tracking (no attempt
-    // history). Preserve the original retake-overwrites behaviour for these.
+    // A report from before journey tracking (no attempt history): a retake
+    // overwrites it, as it did when it was taken.
     // Test-already-taken gate: testTaken means a report exists in the backend.
     // The results page renders from LOCAL state only, so a returning user must
     // go to the AI counsellor (DB-backed) to view it — or explicitly retake.

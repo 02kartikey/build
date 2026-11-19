@@ -44,31 +44,39 @@ const _schoolKey = (v) => require('./match-utils.js').normSchool(v);
 const _match = require('./match-utils.js');
 const _assistant = require('./dashboard-assistant.js');
 let _sendEmail = null;
-let _dbWrite   = fn => Promise.resolve(fn()); // default: sync fallback
+
+/* Hourly request limits (per user for staff features, per network for the
+   public access-code endpoints). Each can be raised in the environment. */
+const _envInt = (k, d) => { const n = parseInt(process.env[k], 10); return Number.isFinite(n) && n > 0 ? n : d; };
+const LIMITS = Object.freeze({
+  insights:       _envInt('INSIGHTS_MAX_PER_HOUR', 60),
+  insightsRegen:  _envInt('INSIGHTS_REGEN_MAX', 30),
+  assistant:      _envInt('ASSISTANT_MAX_PER_HOUR', 120),
+  accessSchools:  _envInt('ACCESS_SCHOOLS_MAX', 600),
+  accessNames:    _envInt('ACCESS_NAMES_MAX', 1200),
+  redeemStudent:  _envInt('ACCESS_REDEEM_MAX', 8),
+  redeemNetwork:  _envInt('ACCESS_REDEEM_IP_MAX', 600),
+});
+const SESSION_PURGE_MS = 60 * 60 * 1000;
 
 // Rate limiter injected by server.js (shares the DB-backed limiter used by the
 // public counsellor endpoints). Left null in tests -> limiter simply not applied.
 let _rl = null;
 
-function init(db, sendEmailFn, dbWriteFn, rateLimitFn, opts = {}) {
-  _ddb.init(db);
-  // AI (Programme Intelligence + dashboard assistant). opts.ai is the server's
-  // OpenAI chat-completions helper; without it both features answer 503.
-  _assistant.init({ ai: opts.ai, models: opts.models, log: opts.log });
-  _cdb.init(db);
-  _sendEmail = typeof sendEmailFn === 'function' ? sendEmailFn : null;
-  if (typeof dbWriteFn === 'function') _dbWrite = dbWriteFn;
-  if (typeof rateLimitFn === 'function') _rl = rateLimitFn;
+/* Called once by server.js after the schema is ready.
+   sendEmail  the SMTP sender, or null when email is not configured
+   rateLimit  (scope, key, limit) => Promise<boolean>, the shared DB limiter
+   ai, models, log  passed to the AI analysis and assistant; without `ai`
+              both answer 503 and everything else still works. */
+function init({ sendEmail = null, rateLimit = null, ai = null, models = {}, log } = {}) {
+  _assistant.init({ ai, models, log });
+  _sendEmail = typeof sendEmail === 'function' ? sendEmail : null;
+  _rl = typeof rateLimit === 'function' ? rateLimit : null;
   _startScheduleRunner();
-  // Purge stale sessions + reset tokens every hour — routed through write queue
+  // Expired sessions and reset tokens are purged hourly; a failure is logged, never fatal.
   setInterval(() => {
-    _dbWrite(() => _ddb.purgeExpiredSessions()).catch(e => {
-      // Non-fatal — log but never crash
-      if (e && !e.message.includes('database is locked')) {
-        process.stderr.write('[WARN]  [Dashboard] purgeExpiredSessions: ' + e.message + '\n');
-      }
-    });
-  }, 60 * 60 * 1000).unref();
+    _ddb.purgeExpiredSessions().catch(e => process.stderr.write('[WARN]  [Dashboard] purgeExpiredSessions: ' + (e && e.message) + '\n'));
+  }, SESSION_PURGE_MS).unref();
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -156,6 +164,9 @@ async function _studentInScope(user, sessionId) {
   return (!pred || pred(stu)) ? stu : null;
 }
 
+// The numeric id at the end of the URL, or null when it is not a positive integer.
+function _idParam(req) { const n = Number(_seg(req.url, -1)); return Number.isInteger(n) && n > 0 ? n : null; }
+
 function _qs(req) { return new URLSearchParams(req.url.split('?')[1] || ''); }
 
 /* Resolve the `school` query/body value to the user's scoped school list.
@@ -165,6 +176,29 @@ async function _scopedSchools(user, res, school) {
   const list = await _userSchools(user, school || '');
   if (school && !list.length) { _json(res, 403, { error: 'That school is not assigned to you.' }); return null; }
   return list;
+}
+
+/* `year` from the query string: null when absent, undefined when malformed. */
+function _yearParam(qs) {
+  const v = (qs.get('year') || '').trim();
+  if (!v) return null;
+  return /^\d{4}$/.test(v) ? Number(v) : undefined;
+}
+
+/* Full analytics scope from the query string: `school` (one raw school
+   name), or `org` (a school or group) with optional `branch`, plus
+   `year` (academic year by start year, e.g. 2026 = 2026–27). Returns
+   {schools, predicate}, or null when it has already answered 403. */
+async function _scopeQ(user, res, qs) {
+  let schools = await _scopedSchools(user, res, qs.get('school'));
+  if (!schools) return null;
+  const org = (qs.get('org') || '').trim();
+  if (org) schools = await _ddb.schoolsOfBranch(schools, org, (qs.get('branch') || '').trim() || null);
+  const base = _predicateFor(user);
+  const year = _yearParam(qs);
+  if (year === undefined) { _json(res, 400, { error: 'year must be a four-digit academic start year, e.g. 2026.' }); return null; }
+  const predicate = year == null ? base : (f) => f.academic_year === year && (!base || base(f));
+  return { schools, predicate, year };
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -196,6 +230,10 @@ async function handle(req, res) {
     if (method === 'GET'  && url === '/api/dashboard/drill')           return await _drill(req, res);
     if (method === 'GET'  && url === '/api/dashboard/alerts')          return await _alerts(req, res);
     if (method === 'GET'  && url === '/api/dashboard/school-summary')  return await _schoolSummary(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/pulse')           return await _pulse(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/flow')            return await _flow(req, res);
+    if (method === 'GET'  && url === '/api/dashboard/school-names')    return await _schoolNamesGet(req, res);
+    if (method === 'POST' && url === '/api/dashboard/schools/merge')   return await _schoolsMerge(req, res);
     if (method === 'GET'  && url === '/api/dashboard/aria-themes')     return await _ariaThemes(req, res);
     if (method === 'GET'  && url === '/api/dashboard/settings')        return await _getSettings(req, res);
     if (method === 'PUT'  && url === '/api/dashboard/settings')        return await _putSettings(req, res);
@@ -343,9 +381,9 @@ async function _forgotPassword(req, res) {
     // When SMTP is configured, token travels via email only — never in the response.
     return _json(res, 200, { ok: true });
   }
-  // SMTP not configured. The token used to be returned in this response, which
-  // let anyone reset any staff password (admin included) knowing only the
-  // email. It is now written to the server log for an operator to relay.
+  // SMTP not configured: the token goes to the server log for an operator to
+  // relay. It is never returned in the response, which would let anyone reset
+  // any staff password knowing only the email.
   process.stderr.write('[WARN]  [Dashboard] SMTP not configured — password reset token for user ' + u.id + ': ' + token + '\n');
   return _json(res, 200, { ok: true });
 }
@@ -536,7 +574,7 @@ async function _exportStudentsCsv(req, res) {
     .filter(s => !pred || pred(s));
   // Quote every cell; text starting with = + - @ is prefixed so Excel does not run it as a formula.
   const esc = v => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return `"${t.replace(/"/g,'""')}"`; };
-  // pg returns TIMESTAMPTZ as Date objects (SQLite returned ISO strings) — normalise.
+  // TIMESTAMPTZ arrives as a Date; exports show the calendar date only.
   const day = v => v ? new Date(v).toISOString().slice(0,10) : '';
   // Access Code included so staff can print/hand out codes straight from the export.
   // "Unique School ID" re-imports as-is (the importer accepts that header).
@@ -578,15 +616,19 @@ async function _followupsCreate(req, res) {
 async function _followupsUpdate(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
+  const id = _idParam(req);
+  if (!id) return _json(res, 400, { error: 'Invalid task id.' });
   const b = (await _readBody(req, 2 * 1024)) || {};
-  const n = await _ddb.setFollowupDone(user.id, parseInt(_seg(req.url, -1), 10), !!b.done);
+  const n = await _ddb.setFollowupDone(user.id, id, !!b.done);
   if (!n) return _json(res, 404, { error: 'Task not found.' });
   _json(res, 200, { ok: true });
 }
 async function _followupsDelete(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
-  const n = await _ddb.deleteFollowup(user.id, parseInt(_seg(req.url, -1), 10));
+  const id = _idParam(req);
+  if (!id) return _json(res, 400, { error: 'Invalid task id.' });
+  const n = await _ddb.deleteFollowup(user.id, id);
   if (!n) return _json(res, 404, { error: 'Task not found.' });
   _json(res, 200, { ok: true });
 }
@@ -638,7 +680,7 @@ async function _schedulesList(req, res) {
   if (!user) return;
   const list = await _ddb.listSchedules({ createdBy: user.role === 'admin' ? null : user.id });
   _json(res, 200, { schedules: list, email_enabled: !!_sendEmail, can_create: _canSchedule(user),
-    groups: Object.entries(_ddb.SCHEDULE_GROUPS).map(([id, g]) => ({ id, label: g.label })), timezone: process.env.APP_TIMEZONE || 'Asia/Kolkata' });
+    groups: Object.entries(_ddb.SCHEDULE_GROUPS).map(([id, g]) => ({ id, label: g.label })), timezone: _ddb.APP_TIMEZONE });
 }
 async function _schedulesCreate(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management');
@@ -656,7 +698,8 @@ async function _schedulesCreate(req, res) {
 async function _schedulesUpdate(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
-  const id = parseInt(_seg(req.url, -1), 10);
+  const id = _idParam(req);
+  if (!id) return _json(res, 400, { error: 'Invalid schedule id.' });
   const b = (await _readBody(req, 4 * 1024)) || {};
   const n = await _ddb.setScheduleActive(id, !!b.active, { createdBy: user.role === 'admin' ? null : user.id });
   if (!n) return _json(res, 404, { error: 'Schedule not found.' });
@@ -665,7 +708,8 @@ async function _schedulesUpdate(req, res) {
 async function _schedulesDelete(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
-  const id = parseInt(_seg(req.url, -1), 10);
+  const id = _idParam(req);
+  if (!id) return _json(res, 400, { error: 'Invalid schedule id.' });
   const n = await _ddb.deleteSchedule(id, { createdBy: user.role === 'admin' ? null : user.id });
   if (!n) return _json(res, 404, { error: 'Schedule not found.' });
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_schedule', target: String(id) });
@@ -673,6 +717,9 @@ async function _schedulesDelete(req, res) {
 }
 
 const REMINDER_BATCH_MAX = 500;
+// Largest roster upload (the JSON body of an import, and its rows), shared with the page.
+const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+const IMPORT_MAX_ROWS = 2000;
 async function _sendReminder(req, res) {
   const user = await _requireRole(req, res, 'counsellor', 'management', 'admin');
   if (!user) return;
@@ -944,9 +991,10 @@ async function _resetAssessment(req, res) {
 async function _importStudents(req, res) {
   const user = await _requireRole(req, res, 'admin', 'management');
   if (!user) return;
-  const body = await _readBody(req, 2 * 1024 * 1024);
+  const body = await _readBody(req, IMPORT_MAX_BYTES);
   let rows = (body && Array.isArray(body.rows)) ? body.rows : [];
   if (!rows.length) return _json(res, 400, { error: 'rows array required' });
+  if (rows.length > IMPORT_MAX_ROWS) return _json(res, 400, { error: `A roster can have at most ${IMPORT_MAX_ROWS} students. Split the file and upload each part.` });
 
   // Scope guard: management may only import rows for their assigned school(s).
   // Filtered here (not per-row inside the transaction) so the rejection count
@@ -958,11 +1006,9 @@ async function _importStudents(req, res) {
     const kept = [];
     for (const r of rows) {
       // Match tolerantly, then rewrite the row's school to the assigned
-      // spelling. A staff member typing "ABPS" in a roster for the school they
-      // are assigned to as "ABPS,BAGA" previously had the whole row rejected
-      // with no explanation; and had it been let through as typed, the students
-      // would have landed under a school name nobody is scoped to and vanished
-      // from that counsellor's roster. Canonicalising here fixes both.
+      // spelling: "ABPS" in a roster for a user assigned "ABPS,BAGA" is
+      // accepted and stored as "ABPS,BAGA", so the students land under the
+      // name the user (and their counsellors) are scoped to.
       const hit = assigned.find(a => _schoolKey(a) === _schoolKey(r.school))
                || assigned.find(a => require('./match-utils.js').schoolMatches(r.school, a));
       if (hit) kept.push(Object.assign({}, r, { school: hit }));
@@ -974,18 +1020,14 @@ async function _importStudents(req, res) {
     }
   }
 
-  // One _dbWrite slot + one SQLite transaction: atomic, and never blocks
-  // the event loop with thousands of individual auto-transactions.
   let imported = 0, updated = 0, skipped = 0, errors = [], warnings = [];
   try {
-    await _dbWrite(async () => {
-      const doImport = await _ddb.runImportTransaction(rows.slice(0, 2000));
-      imported = doImport.imported;
-      updated  = doImport.updated || 0;
-      skipped  = doImport.skipped;
-      errors   = doImport.errors   || [];
-      warnings = doImport.warnings || [];
-    });
+    const doImport = await _ddb.runImportTransaction(rows.slice(0, IMPORT_MAX_ROWS));
+    imported = doImport.imported;
+    updated  = doImport.updated || 0;
+    skipped  = doImport.skipped;
+    errors   = doImport.errors   || [];
+    warnings = doImport.warnings || [];
   } catch (e) {
     process.stderr.write('[ERROR] [import_students] ' + e.message + '\n');
     return _json(res, 500, { error: 'Import failed: ' + e.message });
@@ -1084,7 +1126,7 @@ async function _regenAccessCode(req, res) {
   const sessionId = _seg(req.url, -2);
   if (!(await _studentInScope(user, sessionId))) return _json(res, 403, { error: 'That student is not in your schools.' });
   try {
-    const code = await _dbWrite(() => _ddb.setStudentAccessCode(sessionId));
+    const code = await _ddb.setStudentAccessCode(sessionId);
     await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'regen_access_code', target: sessionId });
     _json(res, 200, { ok: true, access_code: code });
   } catch (e) {
@@ -1097,15 +1139,12 @@ async function _resetStudentPin(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   const sessionId = _seg(req.url, -2);
-  const stu = await _ddb.getStudentBySessionId(sessionId);
-  if (!stu) return _json(res, 404, { error: 'Student not found' });
-  if (user.role !== 'admin') {
-    const schools = (await _userSchools(user)).map(_schoolKey);
-    if (!schools.includes(_schoolKey(stu.school))) return _json(res, 403, { error: 'Forbidden' });
-  }
+  // Same scope rule as every other student action (schools, then class/section limits).
+  const stu = await _studentInScope(user, sessionId);
+  if (!stu) return _json(res, 404, { error: 'Student not found in your schools.' });
   if (!stu.email) return _json(res, 400, { error: 'Student has no email on record.' });
   try {
-    const cleared = await _dbWrite(() => _cdb.clearStudentPin(stu.email));
+    const cleared = await _cdb.clearStudentPin(stu.email);
     await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'reset_student_pin', target: sessionId });
     _json(res, 200, { ok: true, cleared,
       message: cleared ? 'PIN cleared. The student will set a new PIN on next login.'
@@ -1234,7 +1273,7 @@ async function _upsertSchoolReg(req, res) {
 async function _delSchoolReg(req, res) {
   const user = await _requireRole(req, res, 'admin');
   if (!user) return;
-  const id = parseInt(_seg(req.url, -1), 10);
+  const id = _idParam(req);
   if (!id) return _json(res, 400, { error: 'Invalid id' });
   await _ddb.deleteRegisteredSchool(id);
   await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'delete_school', target: String(id) });
@@ -1272,6 +1311,11 @@ async function _catalogue(req, res) {
       // Shared bands so every page colours levels and fit scores the same way.
       bands: { fit_tiers: _core.FIT_TIERS, stanine: _core.STANINE_BANDS },
       wellbeing_areas: _ddb.WELLBEING_AREAS,
+      parameters: _ddb.PARAMETERS,
+      seaa_concerns: _ddb.SEAA_CONCERNS,
+      seaa_levels: _ddb.SEAA_LEVELS,
+      // Limits the page applies itself, from the same constants the server enforces.
+      limits: { small_school_students: _ddb.SMALL_SCHOOL_MAX_STUDENTS, insight_metrics: _assistant.MAX_INSIGHT_METRICS, import_bytes: IMPORT_MAX_BYTES, import_rows: IMPORT_MAX_ROWS },
     });
   } catch (e) { _err(res, e, 'catalogue'); }
 }
@@ -1291,10 +1335,21 @@ async function _breakdown(req, res) {
   if (!user) return;
   try {
     const qs = _qs(req);
-    const schools = await _scopedSchools(user, res, qs.get('school'));
-    if (!schools) return;
-    _json(res, 200, await _ddb.getBreakdown(schools, qs.get('dimension') || 'completion', { predicate: _predicateFor(user) }));
+    const sc = await _scopeQ(user, res, qs);
+    if (!sc) return;
+    _json(res, 200, await _ddb.getBreakdown(sc.schools, qs.get('dimension') || 'completion', { predicate: sc.predicate }));
   } catch (e) { _err(res, e, 'breakdown'); }
+}
+
+/* Pace and momentum for Insights (dashboard-db getPulse). */
+async function _pulse(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const sc = await _scopeQ(user, res, _qs(req));
+    if (!sc) return;
+    _json(res, 200, await _ddb.getPulse(sc.schools, { predicate: sc.predicate }));
+  } catch (e) { _err(res, e, 'pulse'); }
 }
 
 async function _drill(req, res) {
@@ -1302,10 +1357,10 @@ async function _drill(req, res) {
   if (!user) return;
   try {
     const qs = _qs(req);
-    const schools = await _scopedSchools(user, res, qs.get('school'));
-    if (!schools) return;
+    const sc = await _scopeQ(user, res, qs);
+    if (!sc) return;
     const status = qs.get('status');
-    const out = await _ddb.getDrillStudents(schools, {
+    const out = await _ddb.getDrillStudents(sc.schools, {
       dimension: qs.get('dimension') || null,
       groups: (qs.get('groups') || qs.get('group') || '').split(',').map(x => x.trim()).filter(Boolean),
       classKey: qs.get('class') || null,
@@ -1313,7 +1368,7 @@ async function _drill(req, res) {
       search: qs.get('search') || '',
       limit: qs.get('limit'), offset: qs.get('offset'),
       idsOnly: qs.get('ids_only') === '1',
-      predicate: _predicateFor(user),
+      predicate: sc.predicate,
     });
     _json(res, 200, out);
   } catch (e) { _err(res, e, 'drill'); }
@@ -1323,9 +1378,9 @@ async function _alerts(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
-    if (!schools) return;
-    _json(res, 200, await _ddb.getAlerts(schools, { predicate: _predicateFor(user) }));
+    const sc = await _scopeQ(user, res, _qs(req));
+    if (!sc) return;
+    _json(res, 200, await _ddb.getAlerts(sc.schools, { predicate: sc.predicate }));
   } catch (e) { _err(res, e, 'alerts'); }
 }
 
@@ -1333,10 +1388,50 @@ async function _schoolSummary(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    const schools = await _scopedSchools(user, res, _qs(req).get('school'));
-    if (!schools) return;
-    _json(res, 200, { schools: await _ddb.getSchoolSummary(schools, { predicate: _predicateFor(user) }), groups: await _ddb.getFollowUpGroups() });
+    const sc = await _scopeQ(user, res, _qs(req));
+    if (!sc) return;
+    _json(res, 200, { schools: await _ddb.getSchoolSummary(sc.schools, { predicate: sc.predicate }), groups: await _ddb.getFollowUpGroups() });
   } catch (e) { _err(res, e, 'school-summary'); }
+}
+
+/* Schools → branches with progress, and the academic years on record, for
+   the drill-down dashboard. Scoped like every other analytics route. */
+async function _flow(req, res) {
+  const user = await _requireRole(req, res);
+  if (!user) return;
+  try {
+    const qs = _qs(req);
+    const schools = await _scopedSchools(user, res, qs.get('school'));
+    if (!schools) return;
+    const year = _yearParam(qs);
+    if (year === undefined) return _json(res, 400, { error: 'year must be a four-digit academic start year, e.g. 2026.' });
+    _json(res, 200, await _ddb.getFlowStructure(schools, { predicate: _predicateFor(user), year }));
+  } catch (e) { _err(res, e, 'flow'); }
+}
+
+const MERGE_MAX_NAMES = 500;
+/* Every school name on record, with students and group (admin only). */
+async function _schoolNamesGet(req, res) {
+  const user = await _requireRole(req, res, 'admin');
+  if (!user) return;
+  try { _json(res, 200, await _ddb.listSchoolNames()); }
+  catch (e) { _err(res, e, 'school-names'); }
+}
+/* Merge school names into one school (permanent; see dashboard-db mergeSchools). */
+async function _schoolsMerge(req, res) {
+  const user = await _requireRole(req, res, 'admin');
+  if (!user) return;
+  const b = await _readBody(req, 64 * 1024);           // size/JSON errors answered by the dispatcher
+  if (!b || !Array.isArray(b.names) || !b.names.length || b.names.length > MERGE_MAX_NAMES) {
+    return _json(res, 400, { error: `Tick between 1 and ${MERGE_MAX_NAMES} school names.` });
+  }
+  try {
+    const r = await _ddb.mergeSchools({ names: b.names.map(String), school: b.school, group: b.group, userId: user.id });
+    await _ddb.auditLog({ userId: user.id, userEmail: user.email, action: 'merge_schools', target: r.school,
+      detail: `Merged ${b.names.slice(0, 50).map(String).map(x => x.slice(0, 120)).join(', ')} into ${r.school}`
+        + `${r.group ? ` (part of ${r.group})` : ''}; ${r.students_moved} student record(s) changed` });
+    _json(res, 200, Object.assign({ ok: true }, r));
+  } catch (e) { _err(res, e, 'merge-schools'); }
 }
 
 async function _ariaThemes(req, res) {
@@ -1397,10 +1492,10 @@ async function _insights(req, res) {
     const force = !!(body && body.force);
     const mode = body && body.mode === 'cached' ? 'cached' : null;
     // Only requests that may call the model count against the limits.
-    if (!mode && _rl && !(await _rl('insights', String(user.id), parseInt(process.env.INSIGHTS_MAX_PER_HOUR || '60', 10)))) {
+    if (!mode && _rl && !(await _rl('insights', String(user.id), LIMITS.insights))) {
       return _json(res, 429, { error: 'You have run the AI analysis many times this hour. Please try again later.' });
     }
-    if (force && _rl && !(await _rl('insights-regen', String(user.id), parseInt(process.env.INSIGHTS_REGEN_MAX || '30', 10)))) {
+    if (force && _rl && !(await _rl('insights-regen', String(user.id), LIMITS.insightsRegen))) {
       return _json(res, 429, { error: 'You have regenerated insights many times this hour. Press "Analyse" instead — it gives a fresh analysis whenever the numbers have changed.' });
     }
     const out = await _assistant.generateInsights({
@@ -1417,7 +1512,7 @@ async function _assistantChat(req, res) {
   const user = await _requireRole(req, res);
   if (!user) return;
   try {
-    if (_rl && !(await _rl('assistant', String(user.id), parseInt(process.env.ASSISTANT_MAX_PER_HOUR || '120', 10)))) {
+    if (_rl && !(await _rl('assistant', String(user.id), LIMITS.assistant))) {
       return _json(res, 429, { error: 'You have reached the hourly limit for the assistant. Please try again later.' });
     }
     const body = await _readBody(req, 16 * 1024);
@@ -1541,7 +1636,7 @@ function _publicIP(req) {
 async function handleAccessSchools(req, res) {
   const qs = new URLSearchParams((req.url.split('?')[1]) || '');
   const q  = qs.get('q') || '';
-  if (_rl && !(await _rl('access-schools', _publicIP(req), parseInt(process.env.ACCESS_SCHOOLS_MAX || '600', 10)))) {
+  if (_rl && !(await _rl('access-schools', _publicIP(req), LIMITS.accessSchools))) {
     return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
   }
   try {
@@ -1561,7 +1656,7 @@ async function handleAccessNames(req, res) {
   /* A lookup, not a login attempt: every student triggers a few of these while
      filling the form, so the ceiling has to scale with a whole class on one IP
      (60/hour exhausted after roughly fifteen students). */
-  if (_rl && !(await _rl('access-names', _publicIP(req), parseInt(process.env.ACCESS_NAMES_MAX || '1200', 10)))) {
+  if (_rl && !(await _rl('access-names', _publicIP(req), LIMITS.accessNames))) {
     return _json(res, 429, { error: 'Too many requests. Please wait a moment.' });
   }
   try {
@@ -1617,12 +1712,10 @@ async function handleAccessRedeem(req, res) {
      schools without a code change. */
   const _mu = require('./match-utils.js');
   const _who = uid ? 'uid:' + _mu.normUid(uid) : (_mu.normName(name).replace(/\s+/g, '') || 'anon');
-  const _perStudent = parseInt(process.env.ACCESS_REDEEM_MAX    || '8',   10);
-  const _perIp      = parseInt(process.env.ACCESS_REDEEM_IP_MAX || '600', 10);
-  if (_rl && !(await _rl('access-redeem', _publicIP(req) + '|' + _who, _perStudent))) {
+  if (_rl && !(await _rl('access-redeem', _publicIP(req) + '|' + _who, LIMITS.redeemStudent))) {
     return _json(res, 429, { error: 'Too many attempts for this student. Please check the code with your teacher and try again shortly.' });
   }
-  if (_rl && !(await _rl('access-redeem-ip', _publicIP(req), _perIp))) {
+  if (_rl && !(await _rl('access-redeem-ip', _publicIP(req), LIMITS.redeemNetwork))) {
     return _json(res, 429, { error: 'Too many requests from this network. Please wait a moment.' });
   }
   try {

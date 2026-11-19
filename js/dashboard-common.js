@@ -34,6 +34,20 @@
   const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
   const toast = (m, t) => (typeof window.toast === 'function' ? window.toast(m, t) : alert(m));
   const STATUS = { completed: ['Completed', 'ok'], in_progress: ['In progress', 'warn'], not_started: ['Not started', 'mute'] };
+  // How much each panel shows before "Show more". Presentation only; limits
+  // the server enforces come from NM.cat.limits.
+  const UI = Object.freeze({ ALERT_ROWS: 5, TABLE_ROWS: 8, CLASS_CHIPS: 8, DIST_ROWS: 10, INSIGHT_POLL_MS: 2500, INSIGHT_WAIT_MS: 180000 });
+  // Limits the server enforces, from the catalogue (loaded before any panel mounts).
+  const limit = (k) => (NM.cat && NM.cat.limits && NM.cat.limits[k]) || Infinity;
+  // A colour token from the page (e.g. --ok) as rgba with the given alpha, for
+  // charts, which draw on canvas and cannot use CSS variables directly.
+  const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const tokenAlpha = (name, a) => {
+    const m = /^#([0-9a-f]{6})$/i.exec(cssVar(name));
+    if (!m) return cssVar(name) || 'gray';
+    const n = parseInt(m[1], 16);
+    return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
+  };
   const roleKey = () => (NM.me && NM.me.role) || 'staff';
   const store = {
     get(k, d) { try { const v = localStorage.getItem('nm:' + roleKey() + ':' + k); return v ? JSON.parse(v) : d; } catch (_) { return d; } },
@@ -65,33 +79,22 @@
 .nm-tbl tr:hover td{background:var(--surface2,#f7f9fa)}
 .nm-link{color:var(--ink,#123);font-weight:600;cursor:pointer;background:none;border:none;padding:0;font:inherit;text-align:left}.nm-link:hover{color:var(--brand2);text-decoration:underline}
 .nm-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid transparent;white-space:nowrap}
-.nm-chip.ok{background:rgba(5,150,105,.1);color:var(--ok,#059669);border-color:rgba(5,150,105,.25)}
-.nm-chip.warn{background:rgba(217,119,6,.1);color:var(--warn,#b45309);border-color:rgba(217,119,6,.25)}
-.nm-chip.bad{background:rgba(220,38,38,.08);color:var(--danger,#dc2626);border-color:rgba(220,38,38,.22)}
+.nm-chip.ok{background:color-mix(in srgb,var(--ok) 10%,transparent);color:var(--ok);border-color:color-mix(in srgb,var(--ok) 25%,transparent)}
+.nm-chip.warn{background:color-mix(in srgb,var(--warn) 10%,transparent);color:var(--warn);border-color:color-mix(in srgb,var(--warn) 25%,transparent)}
+.nm-chip.bad{background:color-mix(in srgb,var(--danger) 8%,transparent);color:var(--danger);border-color:color-mix(in srgb,var(--danger) 22%,transparent)}
 .nm-chip.mute{background:var(--bg2,#eee);color:var(--ink4)}
 .nm-chip.click{cursor:pointer}.nm-chip.click:hover{filter:brightness(.95);text-decoration:underline}
 .nm-note{font-size:12px;color:var(--ink4,#678);line-height:1.55;background:var(--surface2,#f6f8f9);border:1px solid var(--border,#eee);border-radius:9px;padding:9px 12px;margin-bottom:12px}
 .nm-empty{padding:28px 12px;text-align:center;color:var(--ink4);font-size:13px}
 .nm-spin{display:inline-block;width:14px;height:14px;border:2px solid rgba(0,0,0,.12);border-top-color:var(--brand2);border-radius:50%;animation:nmspin .7s linear infinite;vertical-align:middle}
 @keyframes nmspin{to{transform:rotate(360deg)}}
-.nm-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center}.nm-tabgrp{font-size:12px;font-weight:650;color:var(--ink4);margin:0 2px 0 10px}.nm-tabgrp:first-child{margin-left:0}
+.nm-tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center}
 .nm-tab{padding:6px 11px;border-radius:999px;border:1.5px solid var(--border,#ddd);background:var(--surface);font:600 12px var(--font,sans-serif);color:var(--ink3);cursor:pointer}
 .nm-tab.on{background:var(--brand4);border-color:var(--brand2);color:var(--brand)}
 .nm-heat{text-align:center;cursor:pointer;font-variant-numeric:tabular-nums;min-width:84px}
 .nm-heat:hover{outline:2px solid var(--brand2);outline-offset:-2px}
 .nm-heat .n{font-weight:800;color:var(--ink,#123)}.nm-heat .p{font-size:10.5px;color:var(--ink4)}
-.nm-grpdesc{font-size:11.5px;color:var(--ink4);line-height:1.45}
-.nm-alert{border:1px solid var(--border);border-left:4px solid var(--ink5,#999);border-radius:10px;padding:11px 14px;margin-bottom:9px;background:var(--surface,#fff)}
-.nm-alert.critical{border-left-color:var(--danger,#dc2626)}.nm-alert.warning{border-left-color:var(--warn,#d97706)}.nm-alert.info{border-left-color:var(--brand2)}.nm-alert.good{border-left-color:var(--ok)}
-.nm-alert h4{margin:0 0 4px;font:700 13.5px var(--font,sans-serif);color:var(--ink)}.nm-alert .d{font-size:12.5px;color:var(--ink3);line-height:1.5}
-.nm-alert .w{font-size:12px;color:var(--ink4);margin-top:5px;line-height:1.5}.nm-alert .row{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center}
 .nm-sec{font:700 13.5px var(--font,sans-serif);color:var(--ink);margin:2px 0 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.nm-ins{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px}
-.nm-card{border:1px solid var(--border);border-radius:12px;padding:14px 16px;background:var(--surface);border-left:3px solid var(--brand2)}
-.nm-card.critical{border-left-color:var(--danger)}.nm-card.warning{border-left-color:var(--warn)}.nm-card.positive{border-left-color:var(--ok)}
-.nm-card h4{margin:0 0 8px;font:700 13.5px/1.35 var(--font,sans-serif);color:var(--ink)}
-.nm-card .k{font:650 11.5px var(--font,sans-serif);color:var(--ink4);margin-top:9px}
-.nm-card .v{font-size:12.5px;color:var(--ink2);line-height:1.55}
 .nm-metrics{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px}.nm-metrics[hidden]{display:none}
 .nm-mchip{padding:5px 10px;border-radius:999px;border:1.5px solid var(--border2,#ccd);background:var(--surface);font:600 11.5px var(--font,sans-serif);color:var(--ink3);cursor:pointer}
 .nm-mchip.on{background:var(--brand4);border-color:var(--brand2);color:var(--brand)}
@@ -100,13 +103,11 @@
 .nm-dist-bar{height:9px;border-radius:999px;background:var(--bg2,#eee);overflow:hidden}.nm-dist-bar>i{display:block;height:100%;border-radius:999px;background:var(--brand2)}
 .nm-dist-l{font-size:12.5px;color:var(--ink2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .nm-dist-n{font-weight:800;font-size:12.5px;text-align:right;color:var(--ink)}.nm-dist-p{font-size:11px;color:var(--ink4);text-align:right}
-.nm-kpi-click{cursor:pointer}.nm-kpi-click:hover{outline:2px solid var(--brand2);outline-offset:-2px}
-.nm-kpi-hint{font-size:10.5px;color:var(--brand2);margin-top:6px;font-weight:600}
 .nm-jstrip{display:flex;align-items:stretch;gap:0;overflow-x:auto;padding:4px 2px 8px}
 .nm-jstep{min-width:150px;border:1.5px solid var(--border);border-radius:12px;padding:10px 12px;background:var(--surface)}
-.nm-jstep.last{border-color:var(--brand2);box-shadow:0 0 0 3px rgba(59,79,216,.1)}
+.nm-jstep.last{border-color:var(--brand2);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand2) 10%,transparent)}
 .nm-jarrow{display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:64px;font-size:11px;font-weight:800}
-.nm-jbox{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:0 0 14px;background:linear-gradient(135deg,rgba(59,79,216,.06),rgba(92,79,181,.04))}
+.nm-jbox{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:0 0 14px;background:color-mix(in srgb,var(--brand2) 5%,var(--surface,#fff))}
 .nm-prog{position:fixed;right:18px;bottom:86px;z-index:2600;width:340px;background:var(--surface);border:1px solid var(--border2);border-radius:14px;box-shadow:0 14px 40px rgba(0,0,0,.2);padding:14px 16px;font:13px var(--font,sans-serif)}
 .nm-prog .bar{height:8px;border-radius:999px;background:var(--bg2);overflow:hidden;margin:9px 0}.nm-prog .bar i{display:block;height:100%;background:var(--brand2);transition:width .2s}
 .nm-fab{position:fixed;right:20px;bottom:20px;z-index:2400;display:flex;align-items:center;gap:8px;padding:11px 16px 11px 12px;border-radius:999px;border:1px solid var(--border);cursor:pointer;color:var(--ink);font:650 13.5px var(--font,sans-serif);background:var(--surface);box-shadow:var(--shadow-lg)}.nm-fab i{width:22px;height:22px;border-radius:50%;background:var(--ai-grad,var(--brand2));display:inline-block}.nm-fab:hover{border-color:var(--brand2)}
@@ -133,7 +134,6 @@
 .nm-chat-win{display:flex;gap:6px}
 .nm-chat.wide{width:min(1040px,calc(100vw - 36px));height:calc(100vh - 36px)}.nm-chat.wide .nm-msg.a{max-width:86%}.nm-chat.wide .nm-chat-b{padding:20px 28px}
 @media(max-width:560px){.nm-form{grid-template-columns:1fr}}
-
 .nm-chat-f{display:flex;gap:8px;padding:10px;border-top:1px solid var(--border);background:var(--surface)}
 .nm-chat-f textarea{flex:1;resize:none;height:42px;max-height:120px;border:1.5px solid var(--border2);border-radius:10px;padding:10px;font:13px var(--font,sans-serif)}
 .nm-sugg{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
@@ -201,11 +201,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
 .ov-tab:hover{color:var(--ink)}.ov-tab.on{color:var(--brand);border-bottom-color:var(--brand)}
 .ov-panel>.ov-ch{padding-top:18px}.ov-panel>.ov-sum{padding:0 20px}.ov-panel>.ov-cb{padding-top:4px}
 .ov-panel .card{box-shadow:none;border-color:var(--border)}
-/* schools table */
-.ov-schools th,.ov-schools td{padding:9px 10px}.ov-schools .r{text-align:right}
-.ov-barcell{min-width:220px}.ov-barrow{display:grid;grid-template-columns:44px minmax(90px,1fr) auto;gap:10px;align-items:center}.ov-barrow small{font-size:11.5px;color:var(--ink4);white-space:nowrap}
-.ov-bar{position:relative;display:block;height:8px;border-radius:999px;background:var(--surface3)}.ov-bar i{display:block;height:100%;border-radius:999px}.ov-bar i.ok{background:var(--ok)}.ov-bar i.warn{background:var(--warn)}.ov-bar i.bad{background:var(--danger)}
-.ov-bar b{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--ink);opacity:.6}
 .ov-moretr td,.ov-smallhead td{background:var(--surface2);font-size:12.5px}.ov-smallhead small{color:var(--ink4);font-weight:500;margin-left:6px}.ov-smallhead .chev{margin-right:8px}
 .nm-field{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;color:var(--ink4)}
 .nm-sel{padding:7px 30px 7px 11px;border-radius:9px;border:1px solid var(--border2);background:var(--surface);font:600 13px var(--font,sans-serif);color:var(--ink);max-width:100%}
@@ -224,8 +219,8 @@ body.nm-modal-open .overlay.open{z-index:2600}
 .nm-sum-list li.critical::before{background:var(--danger)}.nm-sum-list li.warning::before{background:var(--warn)}.nm-sum-list li.positive::before{background:var(--ok)}
 .nm-sum-do{color:var(--ink4)}.nm-sum-note{font-size:13px;color:var(--ink4);margin:0}
 .nm-wbs{display:inline-flex;gap:4px;justify-content:flex-end}
-.nm-wb{display:inline-flex;align-items:center;gap:3px;border:1px solid rgba(220,38,38,.22);background:rgba(220,38,38,.06);color:var(--danger);border-radius:6px;padding:1px 6px;font:600 12px var(--font,sans-serif);cursor:pointer;font-variant-numeric:tabular-nums}
-.nm-wb i{font-style:normal;font-size:10.5px;color:var(--ink4);font-weight:700}.nm-wb:hover{background:rgba(220,38,38,.12)}
+.nm-wb{display:inline-flex;align-items:center;gap:3px;border:1px solid color-mix(in srgb,var(--danger) 22%,transparent);background:color-mix(in srgb,var(--danger) 6%,transparent);color:var(--danger);border-radius:6px;padding:1px 6px;font:600 12px var(--font,sans-serif);cursor:pointer;font-variant-numeric:tabular-nums}
+.nm-wb i{font-style:normal;font-size:10.5px;color:var(--ink4);font-weight:700}.nm-wb:hover{background:color-mix(in srgb,var(--danger) 12%,transparent)}
 .nm-wb.zero{border-color:var(--border);background:transparent;color:var(--ink5);cursor:default}
 .ov-tot td{background:var(--surface2)}
 .nm-wbline{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--border);margin-top:6px;padding-top:8px;font-size:11.5px;color:var(--ink4);font-weight:600}
@@ -237,7 +232,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
 .sb-list{position:sticky;top:76px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px;max-height:calc(100vh - 100px);overflow:auto}
 .sb-list .nm-in{width:100%;margin-bottom:8px}
 .sb-item{display:grid;gap:4px;width:100%;text-align:left;background:transparent;border:1px solid transparent;border-radius:10px;padding:10px 12px;cursor:pointer;font:inherit}
-.sb-item:hover{background:var(--surface2)}.sb-item.on{background:var(--brand4);border-color:rgba(59,79,216,.25)}
+.sb-item:hover{background:var(--surface2)}.sb-item.on{background:var(--brand4);border-color:color-mix(in srgb,var(--brand2) 25%,transparent)}
 .sb-name{font-weight:650;color:var(--ink);font-size:13.5px}.sb-sub{font-size:11.5px;color:var(--ink4)}
 .sb-meta{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--ink2)}
 .nm-bar-mini{position:relative;flex:1;height:6px;border-radius:999px;background:var(--surface3)}.nm-bar-mini i{display:block;height:100%;border-radius:999px}
@@ -266,7 +261,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
 `;
   const styleEl = document.createElement('style'); styleEl.textContent = CSS; document.head.appendChild(styleEl);
 
-  const NM = window.NM = { esc, api, me: null, cat: null, classes: null };
+  const NM = window.NM = { esc, attr, api, qs, fmtDate, store, STATUS, UI, cssVar, tokenAlpha, me: null, cat: null, classes: null };
 
   /* ── session context (who is signed in, catalogue, classes) ──────── */
   let _ctxPromise = null;
@@ -278,7 +273,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
     }
     return _ctxPromise;
   };
-  NM.reset = () => { _ctxPromise = null; };
   NM.classKeyFor = (label) => {
     if (!label) return '';
     const l = String(label).toLowerCase().replace(/^class\s*/, '').trim();
@@ -378,7 +372,8 @@ body.nm-modal-open .overlay.open{z-index:2600}
     // When a list mixes groups (or a student can be in several), show why
     // each student is on it.
     const showWhy = dim && (o.groups.length !== 1 || dim.multi);
-    const params = () => ({ dimension: o.dimension, groups: o.groups, class: $('class').value, school: o.school, status: $('status').value, search: $('search').value.trim() });
+    // org / branch / year come from the drill-down dashboard; empty values are dropped.
+    const params = () => ({ dimension: o.dimension, groups: o.groups, class: $('class').value, school: o.school, org: o.org, branch: o.branch, year: o.year, status: $('status').value, search: $('search').value.trim() });
     const label = o.title || (dim ? dim.label : 'students');
     const selInfo = () => { $('sel').textContent = state.allMatching ? `All ${state.total} matching students selected` : state.selected.size ? state.selected.size + ' selected' : 'Tick students, or use "Select all matching"'; };
     async function load() {
@@ -527,20 +522,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
   };
 
   /* ── short preview of any list with a "View all" button ───────────── */
-  NM.mountPreview = async function (el, { drill, limit, empty, meta, school } = {}) {
-    if (!el) return;
-    el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span></div>';
-    try {
-      const d = normDrill(Object.assign({ school }, drill));
-      const r = await api('GET', '/api/dashboard/drill?' + qs({ dimension: d.dimension, groups: d.groups, class: d.classKey, status: d.status, school: d.school, limit: limit || 5 }));
-      if (!r.total) { el.innerHTML = `<div class="nm-empty">${esc(empty || 'Nobody here right now.')}</div>`; return; }
-      el.innerHTML = r.students.map(s => `<div style="display:flex;gap:10px;align-items:center;padding:9px 16px;border-bottom:1px solid var(--border)">
-          <div style="flex:1;min-width:0"><button class="nm-link" data-nm="student" data-sid="${esc(s.session_id)}">${esc(s.full_name || s.first_name || '—')}</button>
-          <div style="font-size:11px;color:var(--ink5)">${esc(s.school || '')} · ${esc(s.class_label)}${s.section ? ' – ' + esc(s.section) : ''}</div></div>
-          <div style="font-size:11px;color:var(--ink4);text-align:right;white-space:nowrap">${meta ? meta(s) : ''}</div></div>`).join('')
-        + `<div style="padding:10px 16px;text-align:right"><button class="nm-btn sm pri" data-nm="drill" data-o="${attr(d)}">View all ${r.total}</button></div>`;
-    } catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; }
-  };
   // "3+ days" when every school in view uses the same follow-up setting.
   NM.followUpText = (settings) => {
     const list = (settings.schools || []).map(x => x.settings.follow_up_after_days);
@@ -570,16 +551,28 @@ body.nm-modal-open .overlay.open{z-index:2600}
         const r = await api('GET', '/api/dashboard/drill?' + qs(Object.assign({}, params, { limit: 500, offset: off })));
         all.push(...r.students); if (all.length >= r.total || !r.students.length) break;
       }
-      // Text starting with = + - @ would run as a formula in Excel; prefix it.
-      const cell = (v) => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
-      const rows = [['Name', 'Unique School ID', 'Email', 'School', 'Class', 'Section', 'Status', 'Parts done (of 4)', 'Career fit', 'Top interest', 'Wellbeing', 'Registered', 'Last activity']]
-        .concat(all.map(s => [s.full_name, s.student_uid, s.email, s.school, s.class_label, s.section, (STATUS[s.status] || [s.status])[0], s.modules_done, s.fit_tier, s.top_interest, s.seaa_status, fmtDate(s.registered_at), fmtDate(s.last_activity)]));
-      const blob = new Blob(['﻿' + rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
-      const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
-      a.download = String(label).replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') + '_' + new Date().toISOString().slice(0, 10) + '.csv';
-      a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      downloadCsv([['Name', 'Unique School ID', 'Email', 'School', 'Class', 'Section', 'Status', 'Parts done (of 4)', 'Career fit', 'Top interest', 'Wellbeing', 'Registered', 'Last activity']]
+        .concat(all.map(s => [s.full_name, s.student_uid, s.email, s.school, s.class_label, s.section, (STATUS[s.status] || [s.status])[0], s.modules_done, s.fit_tier, s.top_interest, s.seaa_status, fmtDate(s.registered_at), fmtDate(s.last_activity)])), label);
     } catch (e) { toast('Export failed: ' + e.message, 'error'); }
   }
+  // Rows (first one the header) to a CSV download that Excel opens cleanly.
+  function downloadCsv(rows, label) {
+    // Text starting with = + - @ would run as a formula in Excel; prefix it.
+    const cell = (v) => { let t = String(v == null ? '' : v); if (/^[=+\-@\t\r]/.test(t)) t = "'" + t; return '"' + t.replace(/"/g, '""') + '"'; };
+    const blob = new Blob(['﻿' + rows.map(r => r.map(cell).join(',')).join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = String(label).replace(/[^a-z0-9]+/gi, '_').replace(/^_|_$/g, '') + '_' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+  // Every school in view with its progress against its own target.
+  NM.exportSchools = async function () {
+    try {
+      const { schools } = await api('GET', '/api/dashboard/school-summary');
+      const list = NM.scope.school ? schools.filter(x => x.school === NM.scope.school) : schools;
+      downloadCsv([['School', 'Registered', 'Completed', 'In progress', 'Not started', 'Completion %', 'Target %', 'Need follow-up']]
+        .concat(list.map(x => [x.school, x.total, x.completed, x.in_progress, x.not_started, x.completion_pct, x.target_pct, x.follow_up])), 'schools');
+    } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+  };
 
   // Download any list as CSV without opening it (every matching student).
   NM.exportList = function (drill, label) {
@@ -616,6 +609,13 @@ body.nm-modal-open .overlay.open{z-index:2600}
     });
   };
 
+  /* Placeholder until js/dashboard-report-pdf.js (an ES module) loads and
+     replaces it. If that module or one it imports fails to load, the PDF
+     button explains why instead of throwing a script error. */
+  if (typeof window.downloadStudentReportPDF !== 'function') {
+    window.downloadStudentReportPDF = () => toast('The report PDF could not load. Reload the page; if this keeps happening, the js/pdf and js/engine folders are missing from the server.', 'error');
+  }
+
   /* ── bulk report download ───────────────────────────────────────── */
   NM.downloadReports = function (ids, label) {
     if (typeof window.nmDownloadReportsZip !== 'function') return toast('The report renderer has not loaded yet. Please try again in a moment.', 'error');
@@ -650,11 +650,11 @@ body.nm-modal-open .overlay.open{z-index:2600}
 
   /* ── class-wise explorer ────────────────────────────────────────── */
   const EXPLORER_GROUPS = [
-    ['Progress', ['completion', 'attention']],
+    ['Progress', ['completion', 'attention', 'parameters']],
     ['Career', ['career_area', 'stream', 'fit_tier']],
     ['Personality', ['personality_level', 'personality_top']],
     ['Aptitude', ['aptitude_level', 'aptitude_top']],
-    ['Wellbeing', ['wellbeing_level', 'wellbeing_need']],
+    ['Wellbeing', ['wellbeing_level', 'wellbeing_need', 'seaa_concern']],
     ['Year-on-year', ['journey_direction', 'journey_interest']],
   ];
   NM.mountExplorer = async function (el, { dimension, school } = {}) {
@@ -678,7 +678,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
         const groups = b.groups;
         const cell = (n, of, g, cls) => {
           const p = pct(n, of);
-          const shade = `background:rgba(59,79,216,${(0.05 + p / 100 * 0.35).toFixed(3)})`;
+          const shade = `background:color-mix(in srgb, var(--brand2) ${Math.round(5 + p * 0.35)}%, transparent)`;
           return `<td class="nm-heat" style="${n ? shade : ''}" data-nm="drill" data-o="${attr({ dimension: state.dim, groups: g ? [g.key] : [], classKey: cls ? cls.key : '', school, title: (g ? g.label : NM.dim(state.dim).label) + (cls ? ' · ' + cls.label : '') })}"><div class="n">${n.toLocaleString('en-IN')}</div><div class="p">${p}%</div></td>`;
         };
         grid.innerHTML = `<div style="overflow-x:auto"><table class="nm-tbl"><thead><tr><th>Class</th><th style="text-align:center">Students</th>`
@@ -709,7 +709,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
     if (!el) return;
     await NM.ready();
     el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span> Checking for issues…</div>';
-    const ROWS_SHOWN = 5;
+    const ROWS_SHOWN = UI.ALERT_ROWS;
     const sev = { critical: 'bad', warning: 'warn', info: 'info', good: 'ok' };
     try {
       const r = await api('GET', '/api/dashboard/alerts?' + qs({ school }));
@@ -723,7 +723,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
         const worst = below.some(a => a.severity === 'critical') ? 'critical' : 'warning';
         const big = below.filter(a => a.total >= NM.SMALL_SCHOOL).sort((a, b) => b.needed - a.needed || a.pct - b.pct);
         const small = below.filter(a => a.total < NM.SMALL_SCHOOL);
-        const SHOW = 8;
+        const SHOW = UI.TABLE_ROWS;
         const line = (a) => `<tr><td><button class="nm-link" data-nm="school" data-school="${esc(a.school)}">${esc(a.school)}</button></td>
                 <td class="r"><b class="${a.severity === 'critical' ? 'bad' : 'warn'}">${a.pct}%</b> <small>${a.done}/${a.total}</small></td><td class="r">${a.target}%</td><td class="r">${a.needed.toLocaleString('en-IN')}</td>
                 <td class="r"><button class="nm-btn sm" data-nm="drill" data-o="${attr(Object.assign({ title: a.school + ': not finished' }, a.drill))}">See ${a.count.toLocaleString('en-IN')}</button></td></tr>`;
@@ -732,7 +732,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
           body: `<div class="ov-tblwrap"><table class="nm-tbl ov-mini"><thead><tr><th>School</th><th class="r">Completed</th><th class="r">Target</th><th class="r">Still needed</th><th></th></tr></thead><tbody>`
             + big.slice(0, SHOW).map(line).join('')
             + (big.length > SHOW ? `<tr class="ov-moretr ov-hide"><td colspan="5"><button class="nm-link" data-f="more-schools">Show all ${big.length} schools</button></td></tr>` + big.slice(SHOW).map(a => line(a).replace('<tr>', '<tr class="ov-hidden" hidden>')).join('') : '')
-            + (small.length ? `<tr class="ov-smallhead"><td colspan="3"><button class="nm-link" data-f="small-schools" aria-expanded="false"><i class="chev"></i>${small.length} school${small.length === 1 ? '' : 's'} with fewer than ${NM.SMALL_SCHOOL} students</button></td><td class="r">${smallNeeded}</td><td class="r"><small>${smallCount} student${smallCount === 1 ? '' : 's'}</small></td></tr>` + small.map(a => line(a).replace('<tr>', '<tr class="ov-hidden" hidden>')).join('') : '')
+            + (small.length ? `<tr class="ov-smallhead"><td colspan="3"><button class="nm-link" data-f="small-schools" aria-expanded="false"><i class="chev"></i>${small.length} school${small.length === 1 ? '' : 's'} with fewer than ${NM.SMALL_SCHOOL} students</button>${NM.me.role === 'admin' ? ` <button class="nm-link" data-f="to-merge" title="Often one school typed differently">Merge duplicate names</button>` : ''}</td><td class="r">${smallNeeded}</td><td class="r"><small>${smallCount} student${smallCount === 1 ? '' : 's'}</small></td></tr>` + small.map(a => line(a).replace('<tr>', '<tr class="ov-hidden" hidden>')).join('') : '')
             + `</tbody></table></div><div class="ov-why"><b>Why it matters:</b> ${esc(below[0].why)} <b>What to do:</b> ${esc(below[0].action)}</div>` });
       } else if (below.length === 1) rows.push(Object.assign({}, below[0], { body: null }));
       for (const a of rest) rows.push(Object.assign({}, a, { body: null }));
@@ -740,7 +740,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
           + NM.wbTable(a.area_by_class, null, { school }) + `<div class="nm-foot">A student who needs support in two areas is counted in both.</div>` : `<div class="ov-why">${esc(a.detail)}</div>`)
         + (a.why ? `<div class="ov-why"><b>Why it matters:</b> ${esc(a.why)}</div>` : '') + (a.action ? `<div class="ov-why"><b>What to do:</b> ${esc(a.action)}</div>` : '')
         + (a.drill ? `<div class="ov-row"><button class="nm-btn sm pri" data-nm="drill" data-o="${attr(Object.assign({ title: a.title }, a.drill, { school: a.drill.school || school }))}">See ${a.count.toLocaleString('en-IN')} student${a.count === 1 ? '' : 's'}</button>`
-          + (a.area_by_class ? [] : (a.by_class || [])).slice(0, 8).map(c => `<span class="nm-chip mute click" data-nm="drill" data-o="${attr(Object.assign({ title: a.title + ' · ' + c.label }, a.drill, { classKey: c.class_key, school: a.drill.school || school }))}">${esc(c.label)}: ${c.count}</span>`).join('') + '</div>' : '');
+          + (a.area_by_class ? [] : (a.by_class || [])).slice(0, UI.CLASS_CHIPS).map(c => `<span class="nm-chip mute click" data-nm="drill" data-o="${attr(Object.assign({ title: a.title + ' · ' + c.label }, a.drill, { classKey: c.class_key, school: a.drill.school || school }))}">${esc(c.label)}: ${c.count}</span>`).join('') + '</div>' : '');
       const row = (a, i) => `<div class="ov-alert ${esc(a.severity)}${i >= ROWS_SHOWN ? ' more' : ''}"><button type="button" class="ov-alert-h" aria-expanded="false">
           <i class="dot ${sev[a.severity] || 'info'}"></i><span class="t">${esc(a.title)}</span><span class="nm-chip mute">${a.count.toLocaleString('en-IN')}</span><i class="chev"></i></button>
           <div class="ov-alert-b" hidden>${detail(a)}</div></div>`;
@@ -752,6 +752,8 @@ body.nm-modal-open .overlay.open{z-index:2600}
       if (more) more.onclick = () => { el.querySelectorAll('.ov-alert.more').forEach(x => x.classList.remove('more')); more.remove(); };
       const ms = el.querySelector('[data-f="more-schools"]');
       if (ms) ms.onclick = () => { let r = ms.closest('tr').nextElementSibling; while (r && r.classList.contains('ov-hidden') && !r.classList.contains('ov-smallhead')) { r.hidden = false; r = r.nextElementSibling; } ms.closest('tr').remove(); };
+      const tm = el.querySelector('[data-f="to-merge"]');
+      if (tm && typeof window.show === 'function') tm.onclick = () => window.show('schools-reg');
       const ss = el.querySelector('[data-f="small-schools"]');
       if (ss) ss.onclick = () => { const open = ss.getAttribute('aria-expanded') !== 'true'; ss.setAttribute('aria-expanded', String(open)); ss.querySelector('.chev').classList.toggle('open', open); let r = ss.closest('tr').nextElementSibling; while (r) { r.hidden = !open; r = r.nextElementSibling; } };
       // The first row opens by itself: the most urgent thing is visible without a click.
@@ -779,7 +781,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
       if (e.target.closest('[data-f="force"]')) return run('force');
       const c = e.target.closest('[data-mid]'); if (!c) return;
       const id = c.dataset.mid;
-      chosen = chosen.includes(id) ? chosen.filter(x => x !== id) : chosen.concat(id).slice(-8);
+      chosen = chosen.includes(id) ? chosen.filter(x => x !== id) : chosen.concat(id).slice(-limit('insight_metrics'));
       store.set('insight-metrics', chosen); drawChips(); run('cached');
     });
     const when = (iso) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -809,13 +811,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
     el._nmRefresh = () => run('cached');
     run('cached');
   };
-  // Older pages mounted one combined panel; keep that working.
-  NM.mountIntelligence = async function (el, opts = {}) {
-    if (!el) return;
-    el.innerHTML = '<div data-f="a"></div><div data-f="b" style="margin-top:16px"></div>';
-    await NM.mountAlerts(el.querySelector('[data-f="a"]'), opts);
-    await NM.mountAnalysis(el.querySelector('[data-f="b"]'), opts);
-  };
 
   NM.openSettings = async function () {
     await NM.ready();
@@ -842,22 +837,30 @@ body.nm-modal-open .overlay.open{z-index:2600}
   };
 
   /* ── trend anchored to the programme start ──────────────────────── */
+  // Date ranges for the trend; the default keeps the chart readable on a long-running programme.
+  const TREND_RANGES = [{ key: '12w', label: 'Last 12 weeks', days: 84 }, { key: '6m', label: 'Last 6 months', days: 182 }, { key: 'all', label: 'Whole programme', days: null }];
   NM.mountTrend = async function (el, { school } = {}) {
     if (!el) return;
-    const state = { g: store.get('trend-g', 'week'), from: '', to: '' };
-    el.innerHTML = `<div class="nm-bar"><div class="nm-tabs" style="margin:0"><button class="nm-tab" data-g="week">Weekly</button><button class="nm-tab" data-g="day">Daily</button></div>
-      <label style="font-size:12px;color:var(--ink4)">From <input type="date" class="nm-in" data-f="from"></label><label style="font-size:12px;color:var(--ink4)">To <input type="date" class="nm-in" data-f="to"></label>
-      <button class="nm-btn sm" data-f="all">Whole programme</button></div><div data-f="sum" style="font-size:12.5px;color:var(--ink3);margin-bottom:8px"></div><div class="nm-chart-wrap"><canvas></canvas></div>`;
+    const state = { g: store.get('trend-g', 'week'), range: store.get('trend-range', '12w'), from: '', to: '' };
+    const applyRange = () => {
+      const r = TREND_RANGES.find(x => x.key === state.range) || TREND_RANGES[0];
+      state.range = r.key;
+      state.from = r.days ? new Date(Date.now() - r.days * 86400000).toISOString().slice(0, 10) : '';
+    };
+    applyRange();
+    el.innerHTML = `<div class="nm-bar"><div class="nm-tabs" style="margin:0">${TREND_RANGES.map(r => `<button class="nm-tab" data-r="${r.key}">${esc(r.label)}</button>`).join('')}</div>
+      <div class="nm-tabs" style="margin:0 0 0 auto"><button class="nm-tab" data-g="week">Weekly</button><button class="nm-tab" data-g="day">Daily</button></div></div>
+      <div data-f="sum" style="font-size:12.5px;color:var(--ink3);margin-bottom:8px"></div><div class="nm-chart-wrap"><canvas></canvas></div>`;
     async function render() {
       el.querySelectorAll('[data-g]').forEach(b => b.classList.toggle('on', b.dataset.g === state.g));
+      el.querySelectorAll('[data-r]').forEach(b => b.classList.toggle('on', b.dataset.r === state.range));
       try {
         const { trend: t } = await api('GET', '/api/dashboard/trend?' + qs({ granularity: state.g, from: state.from, to: state.to, school }));
         const sum = el.querySelector('[data-f="sum"]');
         if (!t.buckets.length) { sum.textContent = t.programme_start ? 'No activity in the chosen dates.' : 'No activity yet. The trend starts from the first registration.'; if (el._chart) { el._chart.destroy(); el._chart = null; } return; }
         const last = t.buckets[t.buckets.length - 1];
-        sum.innerHTML = `Programme started <b>${fmtDate(t.programme_start)}</b> (${t.granularity === 'week' ? 'Week 1' : 'Day 1'}). Now at <b>${esc(last.label)}</b>: `
-          + `<b>${last.cumulative_completed}</b> of ${last.cumulative_registered} registered students have completed (<b>${last.completion_rate_pct}%</b>). `
-          + `Bars show what happened in each ${t.granularity}; the line shows the running completion rate. Empty ${t.granularity}s are shown as zero, not hidden.`;
+        sum.innerHTML = `<b>${last.cumulative_completed.toLocaleString('en-IN')}</b> of ${last.cumulative_registered.toLocaleString('en-IN')} registered students have completed (<b>${last.completion_rate_pct}%</b>). `
+          + `Bars are registrations, starts and completions each ${t.granularity}; the line is the completion rate so far. ${t.granularity === 'week' ? 'Week' : 'Day'} 1 is ${fmtDate(t.programme_start)}, when the first student registered.`;
         const ctx = el.querySelector('canvas');
         if (typeof Chart === 'undefined') return;
         if (el._chart) el._chart.destroy();
@@ -865,10 +868,10 @@ body.nm-modal-open .overlay.open{z-index:2600}
           data: {
             labels: t.buckets.map(b => b.label),
             datasets: [
-              { type: 'bar', label: 'Registered', data: t.buckets.map(b => b.registered), backgroundColor: 'rgba(92,79,181,.28)', borderRadius: 3, yAxisID: 'y' },
-              { type: 'bar', label: 'Started', data: t.buckets.map(b => b.started), backgroundColor: 'rgba(217,119,6,.45)', borderRadius: 3, yAxisID: 'y' },
-              { type: 'bar', label: 'Completed', data: t.buckets.map(b => b.completed), backgroundColor: 'rgba(5,150,105,.7)', borderRadius: 3, yAxisID: 'y' },
-              { type: 'line', label: 'Completion rate (running %)', data: t.buckets.map(b => b.completion_rate_pct), borderColor: 'rgba(59,79,216,1)', backgroundColor: 'transparent', tension: .3, pointRadius: 2, yAxisID: 'y2' },
+              { type: 'bar', label: 'Registered', data: t.buckets.map(b => b.registered), backgroundColor: tokenAlpha('--brand2', .28), borderRadius: 3, yAxisID: 'y' },
+              { type: 'bar', label: 'Started', data: t.buckets.map(b => b.started), backgroundColor: tokenAlpha('--warn', .45), borderRadius: 3, yAxisID: 'y' },
+              { type: 'bar', label: 'Completed', data: t.buckets.map(b => b.completed), backgroundColor: tokenAlpha('--ok', .7), borderRadius: 3, yAxisID: 'y' },
+              { type: 'line', label: 'Completion rate (running %)', data: t.buckets.map(b => b.completion_rate_pct), borderColor: tokenAlpha('--brand2', 1), backgroundColor: 'transparent', tension: .3, pointRadius: 2, yAxisID: 'y2' },
             ],
           },
           options: {
@@ -884,9 +887,8 @@ body.nm-modal-open .overlay.open{z-index:2600}
     }
     el.addEventListener('click', (e) => {
       const g = e.target.closest('[data-g]'); if (g) { state.g = g.dataset.g; store.set('trend-g', state.g); render(); }
-      if (e.target.closest('[data-f="all"]')) { state.from = state.to = ''; el.querySelector('[data-f="from"]').value = ''; el.querySelector('[data-f="to"]').value = ''; render(); }
+      const r = e.target.closest('[data-r]'); if (r) { state.range = r.dataset.r; store.set('trend-range', state.range); applyRange(); render(); }
     });
-    el.addEventListener('change', (e) => { if (e.target.matches('[data-f="from"],[data-f="to"]')) { state[e.target.dataset.f] = e.target.value; render(); } });
     el._nmRender = render;
     render();
   };
@@ -905,10 +907,10 @@ body.nm-modal-open .overlay.open{z-index:2600}
         if (!r.total) { body.innerHTML = '<div class="nm-empty">No completed students yet.</div>'; return; }
         const max = Math.max(...r.distribution.map(d => d.count), 1);
         body.innerHTML = `<div style="font-size:12px;color:var(--ink4);margin-bottom:8px">${esc(r.question)} All <b>${r.total}</b> completed students are counted once. Click a bar to see the students, or open the class-wise view.</div>`
-          + r.distribution.map((d, i) => `<div class="nm-dist-row${i >= 10 ? ' nm-rest' : ''}"${i >= 10 ? ' hidden' : ''} title="${esc(d.description)}" data-nm="drill" data-o="${attr({ dimension: r.by, groups: [d.key], school, title: r.label + ': ' + d.career })}">
+          + r.distribution.map((d, i) => `<div class="nm-dist-row${i >= UI.DIST_ROWS ? ' nm-rest' : ''}"${i >= UI.DIST_ROWS ? ' hidden' : ''} title="${esc(d.description)}" data-nm="drill" data-o="${attr({ dimension: r.by, groups: [d.key], school, title: r.label + ': ' + d.career })}">
               <div class="nm-dist-l">${esc(d.career)}</div><div class="nm-dist-bar"><i style="width:${(d.count / max * 100).toFixed(1)}%"></i></div><div class="nm-dist-n">${d.count}</div><div class="nm-dist-p">${d.pct}%</div></div>`).join('')
           + `<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;font-size:11.5px;color:var(--ink4)"><span>Total: ${r.distribution.reduce((a, d) => a + d.count, 0)} of ${r.total} completed students</span><button class="nm-btn sm" data-nm="explorer" data-dim="${esc(r.by)}">By class</button></div>`;
-        if (r.distribution.length > 10) {
+        if (r.distribution.length > UI.DIST_ROWS) {
           const rest = body.querySelectorAll('.nm-rest');
           const b = document.createElement('button'); b.type = 'button'; b.className = 'nm-link'; b.style.cssText = 'display:block;margin:6px 0 2px;font-size:12.5px;color:var(--brand2)';
           b.textContent = `Show ${rest.length} more`;
@@ -958,34 +960,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
   };
 
   /* ── students needing wellbeing support (preview + view all) ──────── */
-  NM.mountWellbeingList = async function (el, { school, limit, countEl } = {}) {
-    if (!el) return;
-    await NM.ready();
-    const show = limit || 8;
-    el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span></div>';
-    try {
-      const b = await api('GET', '/api/dashboard/breakdown?' + qs({ dimension: 'wellbeing_need', school }));
-      const areas = b.groups.filter(g => g.key !== 'none' && g.total);
-      const labelOf = new Map(areas.map(g => [g.key, g.label]));
-      const cEl = typeof countEl === 'string' ? document.getElementById(countEl) : countEl;
-      if (!areas.length) {
-        if (cEl) cEl.textContent = '';
-        el.innerHTML = `<div class="nm-empty">${b.totals.population ? 'No completed student needs wellbeing support right now.' : 'No completed students yet.'}</div>`;
-        return;
-      }
-      const drill = { dimension: 'wellbeing_need', groups: areas.map(g => g.key), school, title: 'Students who need wellbeing support' };
-      const r = await api('GET', '/api/dashboard/drill?' + qs({ dimension: drill.dimension, groups: drill.groups, school, limit: show }));
-      if (cEl) cEl.textContent = r.total + ' student' + (r.total === 1 ? '' : 's');
-      el.innerHTML = `<div style="padding:12px 16px 0" data-f="wbt"></div><div style="font-size:12px;color:var(--ink4);padding:4px 16px 4px">At least one of their social, emotional or academic adjustment results is in the "needs support" band. ${NM.help('SEAA / NSEAA (Wellbeing)')}</div>`
-        + `<div style="font-size:12px;font-weight:650;color:var(--ink3);padding:8px 16px 4px">Students</div>`
-        + r.students.map(s => `<div style="display:flex;gap:10px;align-items:center;padding:9px 16px;border-top:1px solid var(--border)">
-            <div style="flex:1;min-width:0"><button class="nm-link" data-nm="student" data-sid="${esc(s.session_id)}">${esc(s.full_name || s.first_name || '—')}</button>
-            <div style="font-size:11px;color:var(--ink5)">${esc(s.school || '')} · ${esc(s.class_label)}${s.section ? ' – ' + esc(s.section) : ''}</div></div>
-            <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end">${(s.matched || []).map(k => `<span class="nm-chip bad">${esc(labelOf.get(k) || k)}</span>`).join('')}</div></div>`).join('')
-        + `<div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;gap:8px;justify-content:flex-end"><button class="nm-btn sm" data-nm="explorer" data-dim="wellbeing_need">By class</button><button class="nm-btn sm pri" data-nm="drill" data-o="${attr(drill)}">View all ${r.total}</button></div>`;
-      el.querySelector('[data-f="wbt"]').innerHTML = NM.wbTable(b.classes.filter(c => NM.wbAreas().some(a => c.counts[a.key])).map(c => ({ label: c.label, class_key: c.key, counts: c.counts })), Object.fromEntries(b.groups.map(g => [g.key, g.total])), { school });
-    } catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; }
-  };
 
   /* ── time spent per part ─────────────────────────────────────────── */
   NM.mountTiming = async function (el, { school } = {}) {
@@ -1068,7 +1042,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
     const pending = stu && stu.status !== 'completed' && n === PARTS.length;
     return `<div style="padding:4px 0 12px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px">
         <div style="font:700 14px var(--font);color:var(--ink)">Assessment progress</div><div style="font:900 20px var(--font);color:var(--ink)">${n} of ${PARTS.length} parts</div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${PARTS.map(([k, label, what]) => `<div style="border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:${pd[k] ? 'rgba(5,150,105,.07)' : 'var(--surface2,#f6f8f9)'}">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${PARTS.map(([k, label, what]) => `<div style="border:1px solid var(--border);border-radius:9px;padding:9px 11px;background:${pd[k] ? 'color-mix(in srgb,var(--ok) 7%,transparent)' : 'var(--surface2,#f6f8f9)'}">
         <div style="font-weight:700;font-size:12.5px;color:${pd[k] ? 'var(--ok)' : 'var(--ink3)'}">${pd[k] ? '✓ ' : '○ '}${esc(label)}</div><div style="font-size:11px;color:var(--ink5);margin-top:2px">${esc(what)}</div></div>`).join('')}</div>
       <div class="nm-note" style="margin-top:12px">${pending
         ? 'All four parts are answered but the report was not generated — usually a dropped connection at the very end. Ask the student to reopen the assessment on the same device; the report is created from their saved answers.'
@@ -1076,20 +1050,13 @@ body.nm-modal-open .overlay.open{z-index:2600}
   };
 
   /* ── KPI cards → students ───────────────────────────────────────── */
-  NM.bindKpi = function (el, drill, hint) {
-    if (!el) return;
-    el.classList.add('nm-kpi-click');
-    el.setAttribute('data-nm', 'drill'); el.setAttribute('data-o', JSON.stringify(drill));
-    el.setAttribute('title', 'Click to see these students');
-    if (hint !== false && !el.querySelector('.nm-kpi-hint')) el.insertAdjacentHTML('beforeend', `<div class="nm-kpi-hint">${esc(hint || 'See students')}</div>`);
-  };
 
   /* ── refresh everything mounted ─────────────────────────────────── */
   NM.refreshAll = function (force) {
     _groupCache.clear();
     // Classes can change (imports, class moves): reload them for the filters.
     api('GET', '/api/dashboard/classes').then(r => { NM.classes = r.classes || []; }).catch(() => {});
-    document.querySelectorAll('[data-nm-mounted]').forEach(el => { if (el._nmRefresh) el._nmRefresh(force); else if (el._nmRender) el._nmRender(); });
+    document.querySelectorAll('[data-nm-mounted]').forEach(el => { if (el._nmWaiting) return; if (el._nmRefresh) el._nmRefresh(force); else if (el._nmRender) el._nmRender(); });
   };
   /* Mounted panels remember how they were built, so a change of school in
      the top bar rebuilds them for that school. */
@@ -1105,6 +1072,23 @@ body.nm-modal-open .overlay.open{z-index:2600}
   };
 
   /* ── School scope (top bar) ─────────────────────────────────────── */
+  function remount(el) {
+    const fresh = el.cloneNode(false);              // drops the old listeners
+    fresh._nmMount = el._nmMount;
+    el.replaceWith(fresh);
+    fresh._nmMount.fn(fresh, Object.assign({}, fresh._nmMount.opts, { school: NM.scope.school }));
+  }
+  function remountWhenShown(el) {
+    if (el._nmWaiting || typeof IntersectionObserver === 'undefined') return el._nmWaiting || remount(el);
+    el._nmWaiting = true;
+    el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span></div>';   // never show the old school's numbers
+    const io = new IntersectionObserver((entries) => {
+      if (!entries.some(e => e.isIntersecting || e.target.getClientRects().length)) return;
+      io.disconnect(); el._nmWaiting = false;
+      if (document.body.contains(el)) remount(el);
+    });
+    io.observe(el);
+  }
   NM.scope = { school: '' };
   NM.setScope = function (school) {
     NM.scope.school = school || '';
@@ -1112,24 +1096,26 @@ body.nm-modal-open .overlay.open{z-index:2600}
     _groupCache.clear();
     document.querySelectorAll('[data-nm-mounted]').forEach(el => {
       if (!el._nmMount || el._nmMount.opts.fixedScope) return;
-      const fresh = el.cloneNode(false);            // drops the old listeners
-      fresh._nmMount = el._nmMount;
-      el.replaceWith(fresh);
-      fresh._nmMount.fn(fresh, Object.assign({}, fresh._nmMount.opts, { school: NM.scope.school }));
+      // Panels on hidden pages or tabs reload when they are next shown, so a
+      // school change only fetches what is on screen.
+      if (!el.getClientRects().length) return remountWhenShown(el);
+      remount(el);
     });
     document.querySelectorAll('.nm-multi-only').forEach(x => { x.style.display = NM.scope.school ? 'none' : ''; });
     document.querySelectorAll('.nm-scope').forEach(x => { if (x.value !== NM.scope.school) x.value = NM.scope.school; });
-    if (typeof window.nmOnScope === 'function') { try { window.nmOnScope(NM.scope.school); } catch (_) {} }
+    if (typeof window.nmOnScope === 'function') { try { window.nmOnScope(NM.scope.school); } catch (e) { console.warn('[scope]', e); } }
     document.dispatchEvent(new CustomEvent('nm:scope', { detail: { school: NM.scope.school } }));
   };
   // A school picker for users with more than one school. Hidden otherwise.
+  let _scopeHost = null;
   NM.mountScopeSwitch = async function (host) {
     if (!host) return;
+    _scopeHost = host;
     await NM.ready();
     const schools = (NM.cat.schools || []).slice().sort((a, b) => a.localeCompare(b));
     const saved = store.get('scope', '');
     NM.scope.school = schools.includes(saved) ? saved : '';
-    if (schools.length < 2) { NM.scope.school = ''; return; }
+    if (schools.length < 2) { NM.scope.school = ''; host.innerHTML = ''; return; }
     host.innerHTML = `<label class="nm-scope-wrap"><span>Showing</span><select class="nm-scope" aria-label="Choose a school">
       <option value="">All ${schools.length} schools</option>${schools.map(x => `<option value="${esc(x)}">${esc(x)}</option>`).join('')}</select></label>`;
     const sel = host.querySelector('select');
@@ -1138,34 +1124,40 @@ body.nm-modal-open .overlay.open{z-index:2600}
     document.querySelectorAll('.nm-multi-only').forEach(x => { x.style.display = NM.scope.school ? 'none' : ''; });
   };
 
+  /* After school names change (Merge schools): reload the catalogue, rebuild
+     the school picker, and reload every panel for the school still chosen. */
+  NM.reloadContext = async function () {
+    _ctxPromise = null;
+    await NM.ready();
+    if (_scopeHost) await NM.mountScopeSwitch(_scopeHost);
+    NM.setScope(NM.scope.school);
+  };
+
+  /* ── Pace and momentum (GET /pulse) ─────────────────────────────── */
+  // Panels that load together (headline numbers, pace, parts, wellbeing)
+  // share one request; it is forgotten once answered, so a refresh refetches.
+  const _pulseInFlight = new Map();
+  NM.pulse = function (school) {
+    const url = '/api/dashboard/pulse?' + qs({ school });
+    if (!_pulseInFlight.has(url)) _pulseInFlight.set(url, api('GET', url).finally(() => _pulseInFlight.delete(url)));
+    return _pulseInFlight.get(url);
+  };
+
+  // "Stalled, overdue to start or wellbeing support": labels as one phrase.
+  const listText = (labels) => labels.map((l, i) => i ? l.charAt(0).toLowerCase() + l.slice(1) : l)
+    .reduce((out, l, i, all) => out + (i === 0 ? '' : i === all.length - 1 ? ' or ' : ', ') + l, '');
+
   /* ── Headline numbers ───────────────────────────────────────────── */
   NM.mountKpis = async function (el, { school } = {}) {
     if (!el) return;
     el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span></div>';
     try {
-      const [comp, attn, set] = await Promise.all([
-        api('GET', '/api/dashboard/breakdown?' + qs({ dimension: 'completion', school })),
-        api('GET', '/api/dashboard/breakdown?' + qs({ dimension: 'attention', school })),
-        api('GET', '/api/dashboard/settings?' + qs({ school })),
-      ]);
-      const n = (k) => (comp.groups.find(g => g.key === k) || {}).total || 0;
-      const total = comp.totals.population, done = n('completed'), prog = n('in_progress'), none = n('not_started');
-      const follow = attn.groups.filter(g => g.key !== 'on_track').reduce((a, g) => a + g.total, 0);
-      // One target when every school in view shares it. Otherwise each school
-      // is held to its own target: the gap is the sum of each school's gap and
-      // the marker sits at the size-weighted target.
-      const per = set.schools || [];
-      const targets = [...new Set(per.map(x => x.settings.completion_target_pct))];
-      let target = targets.length === 1 ? targets[0] : set.global.completion_target_pct;
-      let gap = Math.max(0, Math.ceil(total * target / 100) - done);
-      if (targets.length > 1) {
-        const sum = (await api('GET', '/api/dashboard/school-summary')).schools.filter(x => !school || x.school === school);
-        const pop = sum.reduce((a, x) => a + x.total, 0);
-        if (pop) {
-          target = Math.round(sum.reduce((a, x) => a + x.total * x.target_pct, 0) / pop);
-          gap = sum.reduce((a, x) => a + Math.max(0, Math.ceil(x.total * x.target_pct / 100) - x.completed), 0);
-        }
-      }
+      const [pulse, attn] = await Promise.all([NM.pulse(school), api('GET', '/api/dashboard/breakdown?' + qs({ dimension: 'attention', school }))]);
+      const t = pulse.target, at = (k) => (pulse.funnel.find(x => x.key === k) || {}).students || 0;
+      const total = t.registered, done = t.completed, started = at('started');
+      const prog = started - done, none = total - started, target = t.target_pct, gap = t.completions_needed;
+      const followGroups = attn.groups.filter(g => g.key !== 'on_track');
+      const follow = followGroups.reduce((a, g) => a + g.total, 0);
       const p = pct(done, total), pp = pct(prog, total);
       const tile = (label, value, sub, drill, tone) => `<button type="button" class="nm-kpi ${tone || ''}" data-nm="drill" data-o="${attr(Object.assign({ school }, drill))}">
           <span class="nm-kpi-l">${esc(label)}</span><span class="nm-kpi-v">${value.toLocaleString('en-IN')}</span><span class="nm-kpi-s">${sub}</span></button>`;
@@ -1173,15 +1165,16 @@ body.nm-modal-open .overlay.open{z-index:2600}
         <div class="nm-kpi wide" role="group" aria-label="Completion">
           <span class="nm-kpi-l">Completion rate ${NM.help('Completed')}</span>
           <span class="nm-kpi-v">${p}%<small> of ${total.toLocaleString('en-IN')} registered</small></span>
-          <div class="nm-stack" aria-hidden="true"><i class="c" style="width:${p}%"></i><i class="p" style="width:${pp}%"></i><b style="left:${Math.min(target, 100)}%" title="Target ${target}%"></b></div>
-          <span class="nm-kpi-s">${targets.length > 1
-            ? (gap ? `<b>${gap.toLocaleString('en-IN')}</b> more completions needed, each school measured against its own target (${target}% on average)` : `Every school has reached its target`)
-            : (gap ? `<b>${gap.toLocaleString('en-IN')}</b> more completions to reach the ${target}% target` : `Target of ${target}% reached`)}</span>
+          ${target != null ? `<div class="nm-stack" aria-hidden="true"><i class="c" style="width:${p}%"></i><i class="p" style="width:${pp}%"></i><b style="left:${Math.min(target, 100)}%" title="Target ${target}%"></b></div>` : ''}
+          <span class="nm-kpi-s">${target == null ? 'No students yet'
+            : t.per_school
+              ? (gap ? `<b>${gap.toLocaleString('en-IN')}</b> more completions needed, each school measured against its own target (${target}% on average)` : 'Every school has reached its target')
+              : (gap ? `<b>${gap.toLocaleString('en-IN')}</b> more completions to reach the ${target}% target` : `Target of ${target}% reached`)}</span>
         </div>
         ${tile('Completed', done, 'All 4 parts done, report ready', { dimension: 'completion', groups: ['completed'], title: 'Completed students' }, 'ok')}
         ${tile('In progress', prog, 'Started, not finished yet', { dimension: 'completion', groups: ['in_progress'], title: 'Students in progress' }, 'warn')}
         ${tile('Not started', none, 'Registered, nothing answered', { dimension: 'completion', groups: ['not_started'], title: 'Students who have not started' })}
-        ${tile('Need follow-up', follow, 'Stalled, overdue, report missing or wellbeing', { dimension: 'attention', groups: attn.groups.filter(g => g.key !== 'on_track').map(g => g.key), title: 'Students who need follow-up' }, 'bad')}
+        ${tile('Need follow-up', follow, esc(listText(followGroups.filter(g => g.total).map(g => g.label))) || 'Nobody right now', { dimension: 'attention', groups: followGroups.map(g => g.key), title: 'Students who need follow-up' }, 'bad')}
       </div>`;
     } catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; }
   };
@@ -1199,9 +1192,9 @@ body.nm-modal-open .overlay.open{z-index:2600}
     if (how === 'force') req.force = true;
     let r = (await api('POST', '/api/dashboard/insights', req, 30000)).insights;
     const started = Date.now(), poll = Object.assign({}, body, { mode: 'cached' });
-    while (r.pending && Date.now() - started < 180000) {
+    while (r.pending && Date.now() - started < UI.INSIGHT_WAIT_MS) {
       if (onWait) onWait(Math.round((Date.now() - started) / 1000), r.empty ? null : r);
-      await new Promise(res => setTimeout(res, 2500));
+      await new Promise(res => setTimeout(res, UI.INSIGHT_POLL_MS));
       r = (await api('POST', '/api/dashboard/insights', poll, 30000)).insights;
     }
     if (r.pending) throw new Error('The analysis is taking longer than usual. It will be ready in a minute; press Analyse again then.');
@@ -1244,114 +1237,10 @@ body.nm-modal-open .overlay.open{z-index:2600}
     });
   };
 
-  /* ── Overview layout ────────────────────────────────────────────── */
-  /* The summary (headline numbers, what needs attention, AI analysis) is
-     always visible. Everything else lives in one tabbed card, and a tab's
-     panels are built the first time it is opened. The page passes its own
-     cards (by id) for each tab; they are moved in unchanged. */
-  const OV_TABS = [
-    { id: 'progress', title: 'Progress', text: 'Week by week since the programme started, and who has stalled.', metrics: ['completion', 'trend', 'follow_up'] },
-    { id: 'schools', title: 'Schools', text: 'Every school against its own target. Pick one school in the top bar to see only its numbers.', metrics: ['completion', 'follow_up'], multi: true },
-    { id: 'classes', title: 'Classes', text: 'Any result split by class. Click a number for the students behind it.', metrics: ['completion', 'career_area', 'wellbeing_level', 'fit_tier'] },
-    { id: 'results', title: 'Results', text: 'What completed students’ personality, aptitude, interests and wellbeing results show.', metrics: ['personality_level', 'aptitude_level', 'career_area', 'stream', 'wellbeing_level'] },
-    { id: 'journeys', title: 'Year on year', text: 'Students assessed in more than one class, and how they changed.', metrics: ['journey'] },
-  ];
-  NM.mountOverview = async function (el, { slots = {}, mounts = [], intro } = {}) {
-    if (!el) return;
-    await NM.ready();
-    const multi = (NM.cat.schools || []).length > 1;
-    const tabs = OV_TABS.filter(t => (slots[t.id] || []).length).filter(t => !t.multi || multi);
-    el.innerHTML = `<div class="ov-summary" data-body="summary"></div>
-      <div class="ov-grid">
-        <section class="ov-card" id="ovs-attention" aria-labelledby="ovs-attention-h"><header class="ov-ch"><div><h2 id="ovs-attention-h">What needs attention</h2><p>Live. Worked out from today’s data on every load.</p></div><div class="ov-act"><button type="button" class="nm-link" data-nm="glossary">What the terms mean</button></div></header><div class="ov-cb" id="nm-alerts"></div></section>
-        <section class="ov-card ai" id="ovs-ai" aria-labelledby="ovs-ai-h"><header class="ov-ch"><div><h2 id="ovs-ai-h"><i class="ai-dot" aria-hidden="true"></i>AI analysis</h2><p>${esc(intro || 'Written on request from the metrics you choose, and kept until the numbers change.')}</p></div></header><div class="ov-cb" id="nm-analysis"></div></section>
-      </div>
-      ${tabs.length ? `<section class="ov-card" id="ovs-explore"><div class="ov-tabs" role="tablist" aria-label="Explore">${tabs.map(t => `<button type="button" role="tab" class="ov-tab${t.multi ? ' nm-multi-only' : ''}" data-tab="${t.id}" aria-selected="false">${esc(t.title)}</button>`).join('')}</div>
-        ${tabs.map(t => `<div class="ov-panel${t.multi ? ' nm-multi-only' : ''}" data-panel="${t.id}" role="tabpanel" hidden><header class="ov-ch"><div><h2>${esc(t.title)}</h2><p>${esc(t.text)}</p></div><div class="ov-act" data-act="${t.id}"></div></header><div class="ov-sum" data-sum="${t.id}"></div><div class="ov-cb" data-body="${t.id}"></div></div>`).join('')}</section>` : ''}`;
-    for (const id of slots.summary || []) { const node = document.getElementById(id); if (node) el.querySelector('[data-body="summary"]').appendChild(node); }
-    for (const t of tabs) {
-      const body = el.querySelector(`[data-body="${t.id}"]`);
-      for (const id of slots[t.id] || []) { const node = document.getElementById(id); if (node) body.appendChild(node); }
-      if (t.metrics) NM.sectionSummary(el.querySelector(`[data-act="${t.id}"]`), el.querySelector(`[data-sum="${t.id}"]`), { metrics: t.metrics, label: 'AI summary of ' + t.title.toLowerCase() });
-    }
-    // Which tab each mount belongs to: the panel its element sits in.
-    const byTab = new Map([['summary', [['nm-alerts', NM.mountAlerts], ['nm-analysis', NM.mountAnalysis]]]]);
-    for (const m of mounts) {
-      const node = typeof m[0] === 'string' ? document.getElementById(m[0]) : m[0];
-      const panel = node && node.closest('[data-body]');
-      const key = panel ? panel.dataset.body : 'summary';
-      if (!byTab.has(key)) byTab.set(key, []);
-      byTab.get(key).push(m);
-    }
-    await NM.mountAll(byTab.get('summary'));
-    const mounted = new Set();
-    const open = async (id) => {
-      const t = tabs.find(x => x.id === id) || tabs[0];
-      if (!t) return;
-      el.querySelectorAll('.ov-tab').forEach(b => { const on = b.dataset.tab === t.id; b.classList.toggle('on', on); b.setAttribute('aria-selected', String(on)); });
-      el.querySelectorAll('.ov-panel').forEach(p => { p.hidden = p.dataset.panel !== t.id; });
-      store.set('ov-tab', t.id);
-      if (!mounted.has(t.id)) { mounted.add(t.id); await NM.mountAll(byTab.get(t.id) || []); }
-    };
-    el.querySelectorAll('.ov-tab').forEach(b => b.addEventListener('click', () => open(b.dataset.tab)));
-    const visible = () => tabs.filter(t => !t.multi || !NM.scope.school);
-    const saved = store.get('ov-tab', '');
-    if (tabs.length) open(visible().some(t => t.id === saved) ? saved : visible()[0].id);
-    // One school chosen in the top bar: the Schools tab makes no sense, so move off it.
-    document.addEventListener('nm:scope', () => { const cur = store.get('ov-tab', ''); const v = visible(); if (v.length && !v.some(t => t.id === cur)) open(v[0].id); });
-    document.querySelectorAll('.nm-multi-only').forEach(x => { x.style.display = NM.scope.school ? 'none' : ''; });
-  };
-
-  /* ── Schools table (the Schools tab) ────────────────────────────── */
-  // Every school against its own target, furthest behind first. Schools
-  // with only a handful of students are folded into one row so a long tail
-  // of tiny or mistyped school names does not bury the real ones.
-  NM.SMALL_SCHOOL = 5;
-  NM.mountSchoolsTable = async function (el, { school } = {}) {
-    if (!el) return;
-    await NM.ready();
-    el.innerHTML = '<div class="nm-empty"><span class="nm-spin"></span></div>';
-    try {
-      const { schools: all, groups } = await api('GET', '/api/dashboard/school-summary');
-      const list = school ? all.filter(x => x.school === school) : all;
-      if (!list.length) { el.innerHTML = '<div class="nm-empty">No schools yet.</div>'; return; }
-      const SORTS = {
-        behind: { label: 'Furthest behind', fn: (a, b) => (a.completion_pct - a.target_pct) - (b.completion_pct - b.target_pct) || b.total - a.total },
-        ahead: { label: 'Highest completion', fn: (a, b) => b.completion_pct - a.completion_pct || b.total - a.total },
-        size: { label: 'Most students', fn: (a, b) => b.total - a.total },
-        name: { label: 'A to Z', fn: (a, b) => a.school.localeCompare(b.school) },
-      };
-      const state = { sort: store.get('schools-sort', 'behind'), all: false, small: false };
-      const SHOWN = 8;
-      const tone = (x) => x.completion_pct >= x.target_pct ? 'ok' : x.completion_pct >= x.target_pct * .75 ? 'warn' : 'bad';
-      const bar = (x) => `<span class="ov-bar"><i class="${tone(x)}" style="width:${x.completion_pct}%"></i><b style="left:${Math.min(x.target_pct, 100)}%" title="Target ${x.target_pct}%"></b></span>`;
-      const gap = (x) => Math.max(0, Math.ceil(x.total * x.target_pct / 100) - x.completed);
-      const tr = (x) => `<tr><td><button class="nm-link" data-nm="school" data-school="${esc(x.school)}">${esc(x.school)}</button></td>
-          <td class="r">${x.total.toLocaleString('en-IN')}</td>
-          <td class="ov-barcell"><div class="ov-barrow"><b class="${tone(x)}">${x.completion_pct}%</b>${bar(x)}<small>${x.completed.toLocaleString('en-IN')} done</small></div></td>
-          <td class="r">${x.target_pct}%</td>
-          <td class="r">${gap(x) ? `<button class="nm-link" data-nm="drill" data-o="${attr({ school: x.school, dimension: 'completion', groups: ['in_progress', 'not_started'], title: x.school + ': not finished' })}">${gap(x).toLocaleString('en-IN')}</button>` : '<span class="ok">Met</span>'}</td>
-          <td class="r">${x.follow_up ? `<button class="nm-link" data-nm="drill" data-o="${attr({ school: x.school, dimension: 'attention', groups: groups.follow_up, title: x.school + ': need follow-up' })}">${x.follow_up.toLocaleString('en-IN')}</button>` : '0'}</td>
-          <td class="r"><span class="nm-wbs">${NM.wbCells(x.support_areas, { school: x.school, title: x.school })}</span></td></tr>`;
-      const draw = () => {
-        const sorted = list.slice().sort(SORTS[state.sort].fn);
-        const main = sorted.filter(x => x.total >= NM.SMALL_SCHOOL), small = sorted.filter(x => x.total < NM.SMALL_SCHOOL);
-        const shown = state.all ? main : main.slice(0, SHOWN);
-        const smallStudents = small.reduce((n, x) => n + x.total, 0), smallDone = small.reduce((n, x) => n + x.completed, 0);
-        el.innerHTML = `<div class="nm-bar"><label class="nm-field"><span>Sort by</span><select class="nm-sel" data-f="sort">${Object.entries(SORTS).map(([k, v]) => `<option value="${k}"${k === state.sort ? ' selected' : ''}>${v.label}</option>`).join('')}</select></label>
-            <span class="nm-q">${list.length} school${list.length === 1 ? '' : 's'}. The marker on each bar is that school’s target. Wellbeing support is split into Social (S), Emotional (E) and Academic (A). Click a school for its classes.</span></div>
-          <div class="ov-tblwrap"><table class="nm-tbl ov-schools"><thead><tr><th>School</th><th class="r">Students</th><th>Completed</th><th class="r">Target</th><th class="r">Still needed</th><th class="r">Follow-up</th><th class="r" title="Completed students whose social (S), emotional (E) or academic (A) adjustment needs support">Wellbeing support</th></tr></thead><tbody>
-          ${shown.map(tr).join('')}
-          ${main.length > SHOWN ? `<tr class="ov-moretr"><td colspan="7"><button class="nm-link" data-f="all">${state.all ? 'Show fewer' : `Show all ${main.length} schools`}</button></td></tr>` : ''}
-          ${small.length ? `<tr class="ov-smallhead"><td colspan="7"><button class="nm-link" data-f="small" aria-expanded="${state.small}"><i class="chev${state.small ? ' open' : ''}"></i>${small.length} school${small.length === 1 ? '' : 's'} with fewer than ${NM.SMALL_SCHOOL} students <small>(${smallStudents} student${smallStudents === 1 ? '' : 's'}, ${smallDone} completed)</small></button></td></tr>` + (state.small ? small.map(tr).join('') : '') : ''}
-          </tbody></table></div>`;
-        el.querySelector('[data-f="sort"]').onchange = (e) => { state.sort = e.target.value; store.set('schools-sort', state.sort); draw(); };
-        const a = el.querySelector('[data-f="all"]'); if (a) a.onclick = () => { state.all = !state.all; draw(); };
-        const sm = el.querySelector('[data-f="small"]'); if (sm) sm.onclick = () => { state.small = !state.small; draw(); };
-      };
-      draw();
-    } catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; }
-  };
+  /* ── Schools ───────────────────────────────────────────────────── */
+  // Below this many students a school is folded into one line in the alerts
+  // (server setting), so a long tail of tiny school names does not bury the rest.
+  Object.defineProperty(NM, 'SMALL_SCHOOL', { get: () => limit('small_school_students') });
   // A school name anywhere → that school's page, when the dashboard has one.
   NM.openSchool = function (name) {
     if (typeof window.nmOpenSchool === 'function') return window.nmOpenSchool(name);
@@ -1367,6 +1256,8 @@ body.nm-modal-open .overlay.open{z-index:2600}
     let G;
     try { const r = await api('GET', '/api/dashboard/school-summary'); list = r.schools; G = r.groups; }
     catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; return; }
+    // The school chosen in the top bar narrows the page to that school.
+    if (NM.scope.school) list = list.filter(x => x.school === NM.scope.school);
     if (!list.length) { el.innerHTML = '<div class="nm-empty">No schools are assigned to your account yet.</div>'; return; }
     let cur = list.find(x => x.school === (opts.school || NM.scope.school)) || list[0];
     const tone = (x) => x.completion_pct >= x.target_pct ? 'ok' : x.completion_pct >= x.target_pct * .75 ? 'warn' : 'bad';
@@ -1380,7 +1271,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
       host.innerHTML = list.filter(x => !q || x.school.toLowerCase().includes(q)).map(x => `<button type="button" class="sb-item${x === cur ? ' on' : ''}" data-school="${esc(x.school)}">
           <span class="sb-name">${esc(x.school)}</span>
           <span class="sb-meta"><span class="nm-bar-mini"><i class="${tone(x)}" style="width:${x.completion_pct}%"></i><b style="left:${Math.min(x.target_pct, 100)}%"></b></span><span>${x.completion_pct}%</span></span>
-          <span class="sb-sub">${x.total.toLocaleString('en-IN')} students, target ${x.target_pct}%</span></button>`).join('') || '<div class="nm-empty">No match.</div>';
+          <span class="sb-sub">${x.total.toLocaleString('en-IN')} student${x.total === 1 ? '' : 's'}, target ${x.target_pct}%</span></button>`).join('') || '<div class="nm-empty">No match.</div>';
     };
     const cell = (n, of, drill, t) => n ? `<button type="button" class="sb-cell ${t || ''}" data-nm="drill" data-o="${attr(drill)}">${n.toLocaleString('en-IN')}${of != null ? ` <small>${pct(n, of)}%</small>` : ''}</button>` : '<span class="sb-zero">0</span>';
     const drawDetail = () => {
@@ -1388,11 +1279,11 @@ body.nm-modal-open .overlay.open{z-index:2600}
       const d = (extra, title) => Object.assign({ school: S, title: S + ' – ' + title }, extra);
       host.innerHTML = `<div class="sb-head"><div><h3>${esc(S)}</h3>
           <p>${x.total.toLocaleString('en-IN')} registered students. Completion target ${x.target_pct}%, follow-up after ${x.follow_up_after_days} day${x.follow_up_after_days === 1 ? '' : 's'}.</p></div>
-          <div class="sb-actions"><button class="nm-btn" data-nm="drill" data-o="${attr({ school: S, title: S })}">All students</button>
+          <div class="sb-actions" data-f="sact"><button class="nm-btn" data-nm="drill" data-o="${attr({ school: S, title: S })}">All students</button>
           <button class="nm-btn" data-nm="explorer" data-dim="completion" data-school="${esc(S)}">Class-wise results</button></div></div>
         <div class="sb-progress"><div class="nm-stack lg"><i class="c" style="width:${x.completion_pct}%"></i><i class="p" style="width:${pct(x.in_progress, x.total)}%"></i><b style="left:${Math.min(x.target_pct, 100)}%" title="Target ${x.target_pct}%"></b></div>
           <div class="sb-legend"><span><i class="c"></i>Completed ${x.completed.toLocaleString('en-IN')} (${x.completion_pct}%)</span><span><i class="p"></i>In progress ${x.in_progress.toLocaleString('en-IN')}</span><span><i class="n"></i>Not started ${x.not_started.toLocaleString('en-IN')}</span><span><i class="t"></i>Target ${x.target_pct}%</span></div></div>
-        <div class="ov-ch sm"><div><h4>AI summary for this school</h4></div><div class="ov-act" data-f="sact"></div></div><div data-f="ssum"></div>
+        <div data-f="ssum"></div>
         <h4 class="sb-h4">By class</h4>
         <div class="sb-tablewrap"><table class="nm-tbl sb-tbl"><thead><tr><th>Class</th><th class="r">Students</th><th class="r">Completed</th><th class="r">In progress</th><th class="r">Not started</th><th class="r">Follow-up</th>${NM.wbAreas().map(a => `<th class="r" title="Completed students whose ${esc(a.label.toLowerCase())} adjustment needs support">${esc(a.label)}</th>`).join('')}<th>Top career interest</th></tr></thead><tbody>
         ${x.classes.map(c => `<tr><th scope="row"><button class="nm-link" data-nm="drill" data-o="${attr(d({ classKey: c.key }, c.label))}">${esc(c.label)}</button></th>
@@ -1560,6 +1451,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
   /* CSV roster: quoted fields, commas and new lines inside quotes, a BOM. The
      header names are normalised ("First Name" → first_name) the same way the
      server's import reads them. */
+  NM.parseCsv = parseCsv;
   function parseCsv(text) {
     const rows = []; let row = [], cur = '', q = false;
     text = String(text || '').replace(/^﻿/, '');
@@ -1579,8 +1471,10 @@ body.nm-modal-open .overlay.open{z-index:2600}
     const out = inp.parentElement.querySelector('[data-f="filesum"]');
     const f = inp.files && inp.files[0];
     if (!f) { out.textContent = ''; return; }
-    if (f.size > 2 * 1024 * 1024) { out.innerHTML = '<span class="bad">The file is larger than 2 MB. Split it into smaller files.</span>'; return; }
+    const max = limit('import_bytes'), maxRows = limit('import_rows');
+    if (f.size > max) { out.innerHTML = `<span class="bad">The file is larger than ${Math.round(max / 1048576)} MB. Split it into smaller files.</span>`; return; }
     const rows = parseCsv(await f.text());
+    if (rows.length > maxRows) { out.innerHTML = `<span class="bad">The file has ${rows.length} rows; a roster can have at most ${maxRows}. Split it into smaller files.</span>`; return; }
     const named = rows.filter(r => r.first_name || r.full_name || r.name);
     const cols = rows.length ? Object.keys(rows[0]) : [];
     out.innerHTML = rows.length ? `<b>${rows.length}</b> row${rows.length === 1 ? '' : 's'} read${named.length < rows.length ? `, <span class="bad">${rows.length - named.length} without a name will be skipped</span>` : ''}. Columns: ${esc(cols.join(', '))}.` : '<span class="bad">No rows found. The first line must be the column names.</span>';
@@ -1734,7 +1628,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
         chat.el.addEventListener('click', async (e) => {
           const s = e.target.closest('[data-sugg]'); if (s) return send(s.dataset.sugg);
           const del = e.target.closest('[data-del]');
-          if (del) { e.stopPropagation(); await api('DELETE', '/api/dashboard/assistant/conversations/' + del.dataset.del).catch(() => {}); if (chat.conv === del.dataset.del) chat.conv = null; return showHistoryList(); }
+          if (del) { e.stopPropagation(); await api('DELETE', '/api/dashboard/assistant/conversations/' + del.dataset.del).catch(err => toast(err.message, 'error')); if (chat.conv === del.dataset.del) chat.conv = null; return showHistoryList(); }
           const c = e.target.closest('[data-conv]'); if (c) return openConversation(c.dataset.conv);
           const go2 = e.target.closest('[data-f="go"]'); if (go2) return runAction(go2.closest('[data-act]')).catch(err => toast(err.message, 'error'));
           const f = e.target.closest('.nm-chat-h [data-f]'); if (!f) return;

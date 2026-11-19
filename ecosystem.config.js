@@ -10,8 +10,8 @@
 
    Scale rationale:
      • cluster mode forks one process per CPU core
-     • each worker has its own SQLite connection
-     • WAL mode allows N concurrent readers + 1 writer without lock contention
+     • each worker has its own PostgreSQL pool (PG_POOL_MAX connections), so
+       workers × PG_POOL_MAX must stay under the database's max_connections
      • max_memory_restart kills any worker leaking past 512 MB
 
    Monitoring:

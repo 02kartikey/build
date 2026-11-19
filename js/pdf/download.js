@@ -171,8 +171,7 @@ async function downloadPDF(override, opts = {}) {
     // Guide page grid: content margin 44px (15.5mm), content width 507px (179mm).
     const M = 15.5;              // left/right content margin (guide: 15.5mm)
     const CW = W - 2 * M;        // content width = 179mm (guide: 507px)
-    // Single source of truth for the content bottom limit (footer sits below
-    // this). Previously a mix of H-14 and H-16 across pages.
+    // Single source of truth for the content bottom limit (footer sits below this).
     const BOTTOM = H - 16;
 
     // ── Helpers (mirrors template) ────────────────────────────────
@@ -441,9 +440,8 @@ async function downloadPDF(override, opts = {}) {
     // from the generated report entirely.
     // One consistent "instruction / how-to-read / note" style for every
     // guidance block in the report: soft lilac fill, purple left rule, a
-    // small bold label and body text. Guidance blocks previously used a mix
-    // of grey boxes, lilac boxes and bordered cards, so they didn't read as
-    // instructions. Returns the y after the box.
+    // small bold label and body text, so every guidance block reads as an
+    // instruction. Returns the y after the box.
     const instructionBox = (cy, label, body, opts) => {
       opts = opts || {};
       const bodySize = opts.bodySize || 8, lineH = opts.lineH || 4.6;
@@ -629,8 +627,7 @@ async function downloadPDF(override, opts = {}) {
     const cpiByLabel = {};
     cpiAll.forEach(r => { cpiByLabel[r.label] = r; });
     // Build in template order, then sort strongest-first so the chart matches
-    // its "strongest interests first" heading (previously rendered fixed-order,
-    // which pushed the top interest to the bottom of the chart).
+    // its "strongest interests first" heading.
     // Counts derived from data, used wherever the report describes itself.
     const DAAB_DOMAIN_COUNT = DAAB_KEY_ORDER.length;
     const CPI_DOMAIN_COUNT  = CPI_DISPLAY_ORDER.length;
@@ -831,7 +828,7 @@ async function downloadPDF(override, opts = {}) {
     txt('Date:', 22, 156, { size: 9, color: '#1F2937', bold: true });
     txt(dateStr, 35, 156, { size: 9, color: '#1F2937' });
 
-    // Tagline panel — fills the previously empty mid-cover area.
+    // Tagline panel in the mid-cover area.
     rect(14, 168, CW - 8, 22, PURPLE_LIGHT, null, 3);
     txt('Your Personalised Career Development Report', W / 2, 178, { size: 11, color: WHITE, bold: true, align: 'center' });
     txt('Built from 4 evidence-based assessments and AI-powered insights', W / 2, 185, { size: 8, color: '#E9D5FF', align: 'center' });
@@ -871,7 +868,6 @@ async function downloadPDF(override, opts = {}) {
     // leaves a fixed budget for the intro. Measure the prose first: if it fits,
     // draw it here; if it does not, keep this page for the framework (with the
     // short welcome text) and give the full AI summary its own titled page.
-    // Previously the intro pushed "Stronger Together" onto a lone page.
     doc.setFont('helvetica', 'normal'); doc.setFontSize(8);
     const _wParas = String(welcomeProse).split(/\n\s*\n/).filter(Boolean);
     const _wLines = _wParas.reduce((n, p) => n + doc.splitTextToSize(p, CW - 8).length, 0);
@@ -1322,9 +1318,8 @@ async function downloadPDF(override, opts = {}) {
     const aiCareerTable = (ai && Array.isArray(ai.career_table)) ? ai.career_table : null;
     const clusters = ['Primary', 'Secondary', 'Exploratory'].map((tag, i) => {
       const item = top3[i] || { label: 'Still exploring — retake or discuss with your counsellor', score: 0 };
-      // Collect ALL AI-provided careers whose cluster matches this row — the AI
-      // schema is one career per row, so a single .find() previously produced only
-      // one pathway per cluster. We filter, then top up from CPI_AREAS (the single
+      // Collect ALL AI-provided careers whose cluster matches this row (the AI
+      // schema is one career per row, so several rows can share a cluster), then top up from CPI_AREAS (the single
       // source of truth) to guarantee 2-3 items whenever the fallback has them.
       const items = [];
       const clusterKey = (item.label || '').split(' ')[0].toLowerCase();
@@ -1846,9 +1841,8 @@ async function downloadPDF(override, opts = {}) {
       );
       // Resolve each recommendation to a CLUSTER label (not the career-pathway
       // text) so subjectMap actually matches. row[7] carries the cluster for AI
-      // rows; score-driven rows put the cluster in row[0]. Previously these
-      // keyed off row[0] (the pathway description), so subjectMap always missed
-      // and every slot printed the generic "Multidisciplinary stream" fallback.
+      // rows; score-driven rows put the cluster in row[0]. Keying off the
+      // pathway text would miss subjectMap and print the generic fallback.
       const rowCluster = (r) => r[7] || r[0];
       const clByTier   = (needle) => matrixRowsLive.filter(r => r[5].indexOf(needle) >= 0).map(rowCluster);
       // Distinct clusters in tier order (the AI often lists several careers per

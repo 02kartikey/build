@@ -38,7 +38,7 @@ function _getRequestHeaders() {
   const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
   const appMeta   = document.querySelector('meta[name="app-token"]');
   const h = { 'Content-Type': 'application/json' };
-  // Prefer meta tag (new server); fall back to window global (legacy server)
+  // The server injects the app token as a meta tag; a window global is the fallback.
   const appToken = appMeta
     ? (appMeta.getAttribute('content') || '')
     : ((typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '');
@@ -58,9 +58,9 @@ const DB = {
         body:    JSON.stringify({ student, sessionId }),
       });
       if (res.status === 503 && _attempt < MAX_RETRIES) {
-        // Server's write queue was momentarily saturated — this is a real,
-        // measured condition under load (see load-test results), not a
-        // permanent failure. Retry with the server's own suggested delay.
+        // The server's database pool was momentarily saturated (a real
+        // condition under heavy load, not a permanent failure). Retry after
+        // the server's suggested delay.
         let retryAfterSec = 3;
         try { const body = await res.clone().json(); if (body?.retry_after) retryAfterSec = body.retry_after; } catch (_) {}
         _log.warn(`[DB] saveRegistration busy (503), retrying in ${retryAfterSec}s (attempt ${_attempt + 1}/${MAX_RETRIES})`);
@@ -86,7 +86,7 @@ const DB = {
 
   // Called after each module completes — saves raw answers + scores so data
   // survives a failed report generation. Fire-and-forget: never blocks the
-  // assessment flow. Retries once on 503 (write queue busy) before giving up.
+  // assessment flow. Retries once on 503 (server busy) before giving up.
   saveSection(sessionId, moduleKey, answers, scores, duration, _attempt = 0) {
     const MAX_RETRIES = 2;
     const fail = (reason) => {

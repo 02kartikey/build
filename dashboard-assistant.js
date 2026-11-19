@@ -198,7 +198,7 @@ function _compactBreakdown(b) {
 const _dimMetric = (id, label, description, isDefault) => ({
   id, label, description, default: !!isDefault,
   drill: id,
-  collect: async (ctx) => _compactBreakdown(await ddb.getBreakdown(ctx.schools, id, { predicate: ctx.predicate })),
+  collect: async (ctx) => _compactBreakdown(await ddb.getBreakdown(ctx.schools, id, { facts: await ctx.facts(), predicate: ctx.predicate })),
 });
 
 const INSIGHT_METRICS = [
@@ -225,7 +225,7 @@ const INSIGHT_METRICS = [
     description: 'Stalled students, students who have not started, reports that failed to generate, and wellbeing support — each by class.',
     drill: 'attention',
     collect: async (ctx) => {
-      const a = await ddb.getAlerts(ctx.schools, { predicate: ctx.predicate });
+      const a = await ddb.getAlerts(ctx.schools, { facts: await ctx.facts(), predicate: ctx.predicate });
       return { settings: a.settings, alerts: a.alerts.map(x => ({ severity: x.severity, title: x.title, detail: x.detail })) };
     },
   },
@@ -242,8 +242,8 @@ const INSIGHT_METRICS = [
     id: 'journey', label: 'Year-on-year change', drill: 'journey_direction',
     description: 'For students assessed in more than one class: did their career-fit improve, and did their main interest change?',
     collect: async (ctx) => ({
-      direction: _compactBreakdown(await ddb.getBreakdown(ctx.schools, 'journey_direction', { predicate: ctx.predicate })),
-      interest:  _compactBreakdown(await ddb.getBreakdown(ctx.schools, 'journey_interest',  { predicate: ctx.predicate })),
+      direction: _compactBreakdown(await ddb.getBreakdown(ctx.schools, 'journey_direction', { facts: await ctx.facts(), predicate: ctx.predicate })),
+      interest:  _compactBreakdown(await ddb.getBreakdown(ctx.schools, 'journey_interest',  { facts: await ctx.facts(), predicate: ctx.predicate })),
     }),
   },
   {
@@ -295,6 +295,15 @@ async function _validDrill(drill) {
   return { dimension: drill.dimension, groups: ok, class_label: drill.class_label ? String(drill.class_label).slice(0, 40) : undefined };
 }
 
+// JSON with object keys sorted, so equal data always hashes the same.
+function _stableJson(v) {
+  if (Array.isArray(v)) return '[' + v.map(_stableJson).join(',') + ']';
+  if (v && typeof v === 'object' && !(v instanceof Date)) {
+    return '{' + Object.keys(v).sort().filter(k => v[k] !== undefined).map(k => JSON.stringify(k) + ':' + _stableJson(v[k])).join(',') + '}';
+  }
+  return JSON.stringify(v === undefined ? null : v);
+}
+
 /* mode 'cached': never calls the model. Returns the analysis for the current
    numbers if one exists, else the most recent analysis for the same view
    marked stale (so the panel shows something without a paid call on every
@@ -303,6 +312,8 @@ async function _validDrill(drill) {
 /* How long a running analysis is trusted before another may start. A worker
    that died mid-analysis leaves its marker behind; after this it is retried. */
 const INSIGHTS_JOB_TTL_MS = 3 * 60 * 1000;
+// Metrics one analysis can cover (keeps the prompt focused and the cost bounded).
+const MAX_INSIGHT_METRICS = 8;
 const _isFresh = (row) => row && (Date.now() - new Date(row.created_at).getTime()) < INSIGHTS_JOB_TTL_MS;
 
 /* Insights are written in the background and read back by polling, so a slow
@@ -314,15 +325,19 @@ const _isFresh = (row) => row && (Date.now() - new Date(row.created_at).getTime(
                      otherwise starts one and returns `pending: true`. */
 async function generateInsights({ user, schools, schoolLabel, predicate, metricIds, force, mode }) {
   if (!_ai && mode !== 'cached') throw Object.assign(new Error('AI is not configured on this server.'), { status: 503 });
-  const ids = (Array.isArray(metricIds) && metricIds.length ? metricIds : defaultMetricIds()).filter(id => _METRIC_BY_ID.has(id)).slice(0, 8);
+  const ids = (Array.isArray(metricIds) && metricIds.length ? metricIds : defaultMetricIds()).filter(id => _METRIC_BY_ID.has(id)).slice(0, MAX_INSIGHT_METRICS);
   if (!ids.length) throw Object.assign(new Error('Choose at least one metric.'), { status: 400 });
   const selected = ids.map(id => _METRIC_BY_ID.get(id));
-  const ctx = { schools, predicate };
+  // Every metric reads the same student facts: load them once, and collect
+  // the metrics together rather than one after another.
+  let factsP = null;
+  const ctx = { schools, predicate, facts: () => (factsP = factsP || ddb.getStudentFacts(schools, { predicate })) };
+  const values = await Promise.all(selected.map(m => m.collect(ctx)));
   const data = {};
-  for (const m of selected) data[m.id] = await m.collect(ctx);
+  selected.forEach((m, i) => { data[m.id] = values[i]; });
 
   const fingerprint = crypto.createHash('sha256')
-    .update(JSON.stringify({ v: 2, role: user.role, scope: [...schools].sort(), ids, data })).digest('hex');
+    .update(_stableJson({ v: 2, role: user.role, scope: [...schools].sort(), ids, data })).digest('hex');
   // The "view": same role, schools, class/section limits and metrics.
   const slot = crypto.createHash('sha256')
     .update(JSON.stringify({ role: user.role, scope: [...schools].sort(), limited: predicate ? user.id : null, ids })).digest('hex');
@@ -357,7 +372,9 @@ async function generateInsights({ user, schools, schoolLabel, predicate, metricI
      ON CONFLICT (cache_key) DO UPDATE SET payload = EXCLUDED.payload, created_at = now()
        WHERE ai_insights_cache.payload->>'pending' IS NULL OR ai_insights_cache.created_at < now() - ($3 || ' milliseconds')::interval
      RETURNING cache_key`, [fingerprint, marker, String(INSIGHTS_JOB_TTL_MS)]);
-  if (claimed) _writeInsights({ user, selected, ids, data, schoolLabel, fingerprint, slot }).catch(() => {});
+  // _writeInsights records its own failures in the row; this only guards against a crash in that recording.
+  if (claimed) _writeInsights({ user, selected, ids, data, schoolLabel, fingerprint, slot })
+    .catch(e => _log.warn('[insights] could not record the analysis:', e.message));
   return Object.assign(await last(), { pending: true });
 }
 
@@ -424,9 +441,9 @@ async function _writeInsights({ user, selected, ids, data, schoolLabel, fingerpr
    ASSISTANT (CHATBOT)
    ════════════════════════════════════════════════════════════════════ */
 const DASHBOARD_GUIDE = {
-  admin: 'Admin console pages: Dashboard (headline numbers; "What needs attention" with live alerts; an AI analysis card; and tabs for Progress, Schools, Classes, Results and Year on year), Schools & classes (one school at a time with every class side by side), All students (search, filter by school/class/status, tick students to send reminders or download reports as a ZIP), Needs follow-up, All schools, School registry, User management, Reminder log, Student queries, Audit log, Scheduled reminders (reminder emails the server sends on its own), Analytics. Clicking any number opens the students behind it; clicking a student opens their profile.',
-  management: 'Management dashboard pages: Dashboard (headline numbers; "What needs attention" with live alerts; an AI analysis card; and tabs for Progress, Schools, Classes, Results and Year on year), Schools & classes, School reports, School comparison, Counsellors, Needs follow-up, Reminder activity, Action plan. A school picker in the top bar narrows every number to one school. Clicking any number opens the students behind it; clicking a student opens their profile.',
-  counsellor: 'Counsellor workspace pages: Overview (headline numbers; "What needs attention"; an AI analysis card; tabs for Progress, Classes, Results and Year on year), Schools & classes, My students (search and filter; tick students to send reminders or download reports as a ZIP), Needs follow-up, Not yet completed, Send reminders, Follow-ups & tasks, My stats. Clicking a student opens their profile with scores, career fit, notes, reminders and journey.',
+  admin: 'Admin console pages: Dashboard (step-by-step drill-down: all schools with school-wise status, then a school, or for a school with branches its branches, then Personality, Aptitude, Career interest or SEAA (at any level) with class-wise analysis, then a category and its students; SEAA students are grouped as Need intervention or Critical; an academic-year filter), Insights (headline numbers against the completion target; This week: completions, registrations and active students against the week before and when the target will be reached at the current pace; \"What needs attention\" with live alerts; an AI analysis card; how far students get through each part; wellbeing at a glance with Need intervention and Critical; and tabs for Progress, Schools, Classes, Results, Wellbeing, Year on year and Participation; a download of the schools summary as CSV), Schools & classes (one school at a time with every class side by side), All students (search, filter by school/class/status, tick students to send reminders or download reports as a ZIP), Needs follow-up, School registry (likely duplicate school names to review, merging names into one school, optionally as a branch of a larger school; and the registered schools with students per school), User management, Reminder log, Student queries, Audit log, Scheduled reminders (reminder emails the server sends on its own). The school picker in the top bar ("Showing") narrows every page to one school. Clicking any number opens the students behind it; clicking a student opens their profile.',
+  management: 'Management dashboard pages: Dashboard (step-by-step drill-down: all schools with school-wise status, then a school, or for a school with branches its branches, then Personality, Aptitude, Career interest or SEAA (at any level) with class-wise analysis, then a category and its students; SEAA students are grouped as Need intervention or Critical; an academic-year filter), Insights (headline numbers against the completion target; This week: completions, registrations and active students against the week before and when the target will be reached at the current pace; \"What needs attention\" with live alerts; an AI analysis card; how far students get through each part; wellbeing at a glance with Need intervention and Critical; and tabs for Progress, Schools, Classes, Results, Wellbeing, Year on year and Participation; a download of the schools summary as CSV), Schools & classes, Counsellors, Needs follow-up, Reminder activity, Action plan. The school picker in the top bar ("Showing") narrows every page to one school. Clicking any number opens the students behind it; clicking a student opens their profile.',
+  counsellor: 'Counsellor workspace pages: Dashboard (step-by-step drill-down: all schools with school-wise status, then a school, or for a school with branches its branches, then Personality, Aptitude, Career interest or SEAA (at any level) with class-wise analysis, then a category and its students; SEAA students are grouped as Need intervention or Critical; an academic-year filter), Insights (headline numbers against the completion target; This week: completions, registrations and active students against the week before and when the target will be reached at the current pace; \"What needs attention\" with live alerts; an AI analysis card; how far students get through each part; wellbeing at a glance with Need intervention and Critical; and tabs for Progress, Schools, Classes, Results, Wellbeing, Year on year and Participation; a download of the schools summary as CSV), Schools & classes, My students (search and filter; tick students to send reminders or download reports as a ZIP), Needs follow-up, Not yet completed, Send reminders, Follow-ups & tasks. Clicking a student opens their profile with scores, career fit, notes, reminders and journey.',
 };
 
 // What the assistant can prepare. Nothing here deletes, resets or removes.
@@ -439,9 +456,9 @@ const ACTION_ROLES = {
   set_target: ['admin', 'management'], create_schedule: ['admin', 'management'], add_school: ['admin'], add_user: ['admin'],
 };
 const PAGES = {
-  admin: { overview: 'Dashboard', schoolview: 'Schools & classes', students: 'All students', atrisk: 'Needs follow-up', schools: 'All schools', 'schools-reg': 'School registry', users: 'User management', reminders: 'Reminder log', queries: 'Student queries', audit: 'Audit log', scheduled: 'Scheduled reminders', analytics: 'Analytics' },
-  management: { overview: 'Dashboard', schoolview: 'Schools & classes', schools: 'School reports', comparison: 'School comparison', counsellors: 'Counsellors', atrisk: 'Needs follow-up', reminders: 'Reminder activity', interventions: 'Action plan' },
-  counsellor: { overview: 'Overview', schoolview: 'Schools & classes', students: 'My students', atrisk: 'Needs follow-up', pending: 'Not yet completed', reminders: 'Send reminders', followups: 'Follow-ups & tasks', myStats: 'My stats' },
+  admin: { dashboard: 'Dashboard', overview: 'Insights', schoolview: 'Schools & classes', students: 'All students', atrisk: 'Needs follow-up', 'schools-reg': 'School registry', users: 'User management', reminders: 'Reminder log', queries: 'Student queries', audit: 'Audit log', scheduled: 'Scheduled reminders' },
+  management: { dashboard: 'Dashboard', overview: 'Insights', schoolview: 'Schools & classes', counsellors: 'Counsellors', atrisk: 'Needs follow-up', reminders: 'Reminder activity', interventions: 'Action plan' },
+  counsellor: { dashboard: 'Dashboard', overview: 'Insights', schoolview: 'Schools & classes', students: 'My students', atrisk: 'Needs follow-up', pending: 'Not yet completed', reminders: 'Send reminders', followups: 'Follow-ups & tasks' },
 };
 const _f = (k, label, type, extra) => Object.assign({ k, label, type }, extra || {});
 // Wellbeing support is always reported per area, never as one total.
@@ -479,6 +496,8 @@ async function _toolDefs() {
     _tool('get_settings', 'Completion target and follow-up days for the user’s schools.', _schoolProp),
     _tool('explain_term', 'Plain-English meaning of a term used on the dashboard or in reports.', { term: { type: 'string' } }, ['term']),
     _tool('get_school_summary', 'Every school the user can see: students, completed, in progress, not started, follow-up, completion against that school’s own target, and the same per class. Use for "how are my schools doing", "which school/class is behind".', _schoolProp),
+    _tool('get_branches', 'Every school, and for a school with branches (set by the admin in School registry) each branch, with registered, completed, in progress, not started and completion against target per branch, plus SEAA concern counts per branch: Need intervention (concern in one or two of social, emotional, academic) and Critical (all three), and how many per combination. Use for branch questions such as "how is Baga doing" or "which branch has the most critical students".',
+      { year: { type: 'integer', description: 'Optional academic year by its start year, e.g. 2026 for 2026–27. Omit for all years.' } }),
     _tool('get_activity', 'What has been happening: reminders sent in the last 7 and 30 days, scheduled reminder campaigns and their next run, the user’s own follow-up tasks (open, due today, overdue), and for admins pending student queries, recent imports and staff accounts by role.', {}),
     _tool('get_followups', 'The user’s own follow-up tasks (type, due date, done or not, which student by code).', { include_done: { type: 'boolean' } }),
     _tool('propose_action', 'Prepare something for the user to do, shown as a card they review, can edit, and confirm with a button. Nothing happens until they confirm. Types: '
@@ -623,6 +642,31 @@ async function _runTool(name, args, env) {
         need_follow_up: x.follow_up, wellbeing_support_by_area: _areas(x.support_areas), completion_pct: x.completion_pct, target_pct: x.target_pct,
         top_career_interest: x.top_career && x.top_career.area,
         classes: x.classes.map(c => ({ class: c.label, students: c.total, completed: c.completed, completion_pct: c.completion_pct, not_started: c.not_started, need_follow_up: c.follow_up, wellbeing_support_by_area: _areas(c.support_areas) })) }));
+    }
+    case 'get_branches': {
+      const schools = await env.resolveSchools('');
+      const year = Number.isInteger(args.year) ? args.year : null;
+      const pred = year == null ? predicate : (f) => f.academic_year === year && (!predicate || predicate(f));
+      const flow = await ddb.getFlowStructure(schools, { predicate, year });
+      const facts = await ddb.getStudentFacts(schools, { predicate: pred });
+      const idx = ddb.groupIndex(schools, await ddb.getSchoolGroups());
+      const concern = new Map();
+      for (const f of facts) {
+        if (!f.seaa_concern) continue;
+        const b = idx.get(match.normSchool(f.school)); if (!b) continue;
+        const k = b.org + '\u0000' + b.branch;
+        if (!concern.has(k)) concern.set(k, {});
+        const c = concern.get(k); c[f.seaa_concern] = (c[f.seaa_concern] || 0) + 1;
+      }
+      const label = new Map(ddb.SEAA_CONCERNS.map(c => [c.key, c]));
+      const sum = (c, lv) => Object.entries(c).filter(([k]) => (label.get(k) || {}).level === lv).reduce((a, [, n]) => a + n, 0);
+      return { academic_year: year == null ? 'all years' : ddb.academicYearLabel(year), schools: flow.orgs.filter(o => o.registered).map(o => ({ school: o.org,
+        registered: o.registered, completed: o.completed, completion_pct: o.completion_pct, target_pct: o.target_pct,
+        branches: o.branches.filter(b => b.registered).map(b => { const c = concern.get(o.org + '\u0000' + b.branch) || {};
+          return { branch: b.branch, registered: b.registered, completed: b.completed, in_progress: b.in_progress, not_started: b.not_started,
+            completion_pct: b.completion_pct, target_pct: b.target_pct,
+            seaa: { need_intervention: sum(c, 'intervention'), critical: sum(c, 'critical'), no_significant_concern: c.none || 0,
+              by_combination: Object.fromEntries(Object.entries(c).map(([k, n]) => [(label.get(k) || { label: k }).label, n])) } }; }) })) };
     }
     case 'get_activity': {
       const schools = await env.resolveSchools('');
@@ -770,7 +814,7 @@ async function _runTool(name, args, env) {
             _f('target_group', 'Send to', 'select', { value: args.target_group || 'all_pending', options: Object.keys(ddb.SCHEDULE_GROUPS), labels: Object.fromEntries(Object.entries(ddb.SCHEDULE_GROUPS).map(([k, v]) => [k, v.label])) }),
             _f('school', 'School', 'select', { value: sc, options: [''].concat(mySchools), labels: { '': 'All my schools' } }),
             _f('frequency_days', 'How often', 'select', { value: String(args.frequency_days || 7), options: ['1', '2', '7'], labels: { 1: 'Every day', 2: 'Every 2 days', 7: 'Every week' } }),
-            _f('send_hour', 'At (hour, ' + (process.env.APP_TIMEZONE || 'Asia/Kolkata') + ')', 'number', { value: args.send_hour != null ? args.send_hour : 9, min: 0, max: 23 }),
+            _f('send_hour', 'At (hour, ' + ddb.APP_TIMEZONE + ')', 'number', { value: args.send_hour != null ? args.send_hour : 9, min: 0, max: 23 }),
             _f('subject', 'Subject', 'text', { value: _clip(args.subject || 'Reminder: complete your NuMind MAPS assessment', 160), required: true }),
             _f('message', 'Message', 'textarea', { value: _clip(args.message, 2000), required: true }),
           ];
@@ -930,6 +974,6 @@ async function deleteConversation(userId, conversationId) {
 
 module.exports = {
   init, aiEnabled, generateInsights, metricCatalogue, defaultMetricIds,
-  chat, listConversations, getConversation, deleteConversation, recordActionResult,
+  chat, listConversations, getConversation, deleteConversation, recordActionResult, MAX_INSIGHT_METRICS,
   _makeVault, // exported for tests
 };

@@ -5,7 +5,7 @@
    assessment APIs, OpenAI streaming proxy, AI counsellor auth + chat,
    and /api/dashboard/* (delegated to dashboard-api.js).
 
-   Env vars: PORT, SQLITE_PATH, APP_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL,
+   Env vars: PORT, APP_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL,
    OPENAI_MODEL, COUNSELLOR_MODEL, ALLOWED_ORIGIN, LOG_LEVEL,
    MAX_CONCURRENT_AI, MAX_CONCURRENT_CHAT, SMTP_HOST/PORT/USER/PASS,
    NOTIFICATION_EMAIL, LISTEN_BACKLOG,
@@ -78,7 +78,6 @@ process.on('uncaughtException', err => {
 process.on('unhandledRejection', reason => log.error('unhandledRejection:', reason));
 
 // DB schema init + module wiring happens in _bootstrap() below (async).
-let _db = null;
 
 const tls       = require('tls');
 const net       = require('net');
@@ -91,10 +90,8 @@ const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL || SMTP_USER;
 
 /* Returns a Promise that RESOLVES only once the SMTP server has accepted the
    message (the 250 reply to end-of-DATA) and REJECTS on any protocol error,
-   socket error, timeout, or premature disconnect. Previously this returned
-   undefined synchronously, so `await _sendEmail(...)` awaited nothing and every
-   send reported success even when transport failed. Callers can now await it
-   and trust the result. */
+   socket error, timeout, or premature disconnect, so a caller that awaits it
+   knows whether the email was really sent. */
 function _sendEmail({ to, subject, text }) {
   return new Promise((resolve, reject) => {
     if (!SMTP_USER || !SMTP_PASS) { reject(new Error('SMTP not configured')); return; }
@@ -177,22 +174,8 @@ function _sendEmail({ to, subject, text }) {
 const _emailFn = (SMTP_USER && SMTP_PASS) ? _sendEmail : null;
 if (!_emailFn) log.info('[Email] SMTP_USER/SMTP_PASS not set — email features disabled. Set them in .env to enable OTP and reminders.');
 
-// dashApi.init(...) moved into _bootstrap() (needs async DB ready first).
-
-/* Write queue removed in the PostgreSQL migration: the pg Pool provides real
-   concurrent writers, so serialising through a single-writer queue is no longer
-   needed. _dbWrite is kept as a thin async passthrough so the ~40 existing
-   `await _dbWrite(() => ...)` call sites need no change. QueueOverflowError is
-   retained (no longer thrown) so lingering `instanceof` checks stay harmless. */
-class QueueOverflowError extends Error {
-  constructor() { super('Write queue full'); this.name = 'QueueOverflowError'; }
-}
-
-function _dbWrite(fn) { return Promise.resolve().then(fn); }
-
-/* Postgres pool saturation (all connections busy, acquire timed out) should
-   surface as a retryable 503 — same contract the old write-queue overflow had —
-   not a raw 500. Fires only under extreme load or a mis-sized PG_POOL_MAX. */
+/* Postgres pool saturation (all connections busy, acquire timed out)
+   surfaces as a retryable 503, not a raw 500. Fires only under extreme load or a mis-sized PG_POOL_MAX. */
 function _isDbBusy(err) {
   return !!err && typeof err.message === 'string' &&
          err.message.includes('timeout exceeded when trying to connect');
@@ -265,7 +248,7 @@ setInterval(() => {
 const ANALYTICS_REFRESH_MS = 5 * 60 * 1000;
 setTimeout(() => {
   const _doRefresh = () => {
-    _dbWrite(() => require('./dashboard-db.js').refreshAnalyticsCache())
+    require('./dashboard-db.js').refreshAnalyticsCache()
       .catch((e) => log.warn('[Analytics] cache refresh failed:', e.message));
   };
   _doRefresh();
@@ -421,8 +404,8 @@ async function _ariaSafeReply(res, { email, conversationId, message, reply }) {
   res.end(reply);
   let sessionId = null;
   try { sessionId = (await cdb.getReportByEmail(email))?.session_id || null; } catch (_) {}
-  _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message })).catch(() => {});
-  _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: reply   })).catch(() => {});
+  cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message }).catch(() => {});
+  cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: reply   }).catch(() => {});
 }
 
 const MIME = {
@@ -447,9 +430,8 @@ const _CSP =
   "object-src 'none'; frame-ancestors 'none';" ;
 
 /* ── Public-file gate ─────────────────────────────────────────────────
-   The static handler used to serve ANY file under the app folder, so /.env,
-   /server.js, /numind.db and logs were downloadable. Only browser assets are
-   served now. A file is public when its extension is a browser asset type
+   Only browser assets are served, never /.env, server code, database files
+   or logs from the app folder. A file is public when its extension is a browser asset type
    and it is not server code: anything the server process itself has loaded,
    and any .js that uses CommonJS / Node APIs (require, module.exports,
    process.env). That covers both the repo layout and a flat deploy where
@@ -481,11 +463,9 @@ function _injectToken(html) {
     `<meta name="app-token" content=${JSON.stringify(APP_TOKEN)}>\n</head>`);
 }
 
-// Code assets (JS/CSS) previously used `public, max-age=3600`, which tells the
-// browser NOT to revalidate for an hour — so after a deploy students kept
-// running the old bundle (and the ETag was never consulted). Serve them
-// `no-cache` instead: the browser still caches, but revalidates on every load
-// and gets a cheap 304 when nothing changed, so a deploy takes effect at once.
+// Code assets (HTML/JS/CSS) are served `no-cache`: the browser still caches,
+// but revalidates on every load and gets a cheap 304 when nothing changed, so
+// a deploy takes effect at once instead of after a max-age expires.
 // Genuinely immutable assets (images, fonts) keep the long cache.
 const _REVALIDATE_EXT = new Set(['.html', '.js', '.mjs', '.css', '.json', '.map']);
 
@@ -655,7 +635,7 @@ async function _handleSaveRegistration(req, res) {
   }
 
   try {
-    const reg = await _dbWrite(() => dbModule.saveRegistration(student || {}, sessionId));
+    const reg = await dbModule.saveRegistration(student || {}, sessionId);
 
     return _json(res, 200, {
       ok: true,
@@ -668,7 +648,7 @@ async function _handleSaveRegistration(req, res) {
       lastAttemptClass:   reg.lastAttemptClass || null,
     });
   } catch (err) {
-    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
+    if (_isDbBusy(err)) {
       // Real 503, never a fake 200 — the write did not happen.
       res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({
@@ -698,12 +678,12 @@ async function _handleSaveSection(req, res) {
   }
 
   try {
-    await _dbWrite(() => dbModule.saveSection(sessionId, moduleKey, {
+    await dbModule.saveSection(sessionId, moduleKey, {
       raw_answers: answers, scores, duration: duration || 0,
-    }));
+    });
     _json(res, 200, { ok: true });
   } catch (err) {
-    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
+    if (_isDbBusy(err)) {
       res.writeHead(503, { 'Retry-After': '3', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Server is busy — this section was not saved. Please try again.', retry_after: 3 }));
     }
@@ -730,7 +710,7 @@ async function _handleSaveReport(req, res) {
     return _json(res, 429, { error: 'Report generation is busy. Please wait 30 seconds and try again.', retry_after: 30 });
   }
   try {
-    await _dbWrite(() => dbModule.saveReport(body));
+    await dbModule.saveReport(body);
     if (body?.student?.email) {
       try { cdb._invalidateReportCache(body.student.email); } catch (_) {}
     }
@@ -742,7 +722,7 @@ async function _handleSaveReport(req, res) {
     try { rag.invalidateRagCache(body.sessionId); } catch (_) {}
     _json(res, 200, { ok: true });
   } catch (err) {
-    if (err instanceof QueueOverflowError || _isDbBusy(err)) {
+    if (_isDbBusy(err)) {
       res.writeHead(503, { 'Retry-After': '5', 'Content-Type': 'application/json' });
       return res.end(JSON.stringify({ error: 'Server is busy — your report was not saved. Please try again shortly.', retry_after: 5 }));
     }
@@ -811,7 +791,7 @@ async function _handleAIReport(req, res) {
 async function _sendCounsellorOtp(email, purpose, subject, text) {
   if (!_emailFn) return false;
   try {
-    const code = await _dbWrite(() => cdb.createOtp(email, purpose));
+    const code = await cdb.createOtp(email, purpose);
     await _emailFn({ to: email, subject, text: text.replace('{CODE}', code) });
     return true;
   } catch (err) {
@@ -977,7 +957,7 @@ async function _handleCounsellorVerifyOtp(req, res) {
     if (!valid) {
       return _json(res, 200, { ok: false, error: 'Incorrect or expired code. Please try again.' });
     }
-    const otpToken = await _dbWrite(() => cdb.issueOtpStageToken(email));
+    const otpToken = await cdb.issueOtpStageToken(email);
 
     if (purpose === 'reset') {
       return _json(res, 200, { ok: true, step: 'set-pin', otpToken,
@@ -1074,7 +1054,7 @@ async function _handleCounsellorVerifyIdentity(req, res) {
       log.warn('[verify-identity] failed for', email);
       return _json(res, 200, { ok: false, error: 'Those details do not match our records.' });
     }
-    const otpToken = await _dbWrite(() => cdb.issueOtpStageToken(email));
+    const otpToken = await cdb.issueOtpStageToken(email);
     log.info('[verify-identity]', email, '| verified via registration details');
     return _json(res, 200, { ok: true, step: 'set-pin', otpToken,
       message: 'Identity confirmed. Set your PIN.' });
@@ -1118,7 +1098,7 @@ async function _handleCounsellorSetPin(req, res) {
         error: 'PIN already set. Please enter your existing PIN.' });
     }
 
-    await _dbWrite(() => cdb.setStudentPin(email, pin));
+    await cdb.setStudentPin(email, pin);
     log.info('[set-pin]', email);
     if (!body?.changeOnly) return _jsonUnlocked(res, email, reportObj);
     _json(res, 200, { ok: true, message: 'PIN updated.' });
@@ -1189,7 +1169,7 @@ async function _handleCounsellorResetPin(req, res) {
       return _json(res, 200, { ok: false,
         error: 'No report found for this email. Complete your assessment first.' });
     }
-    await _dbWrite(() => cdb.setStudentPin(email, pin));
+    await cdb.setStudentPin(email, pin);
     log.info('[reset-pin]', email);
     return _jsonUnlocked(res, email, reportObj);
   } catch (err) {
@@ -1305,8 +1285,8 @@ async function _handleCounsellorChat(req, res) {
       res.end();
       release();
       if (fullText.trim()) {
-        _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message  })).catch(e => log.error('[saveMessage user]', e.message));
-        _dbWrite(() => cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: fullText })).catch(e => log.error('[saveMessage asst]', e.message));
+        cdb.saveMessage({ email, sessionId, conversationId, role: 'user',      content: message  }).catch(e => log.error('[saveMessage user]', e.message));
+        cdb.saveMessage({ email, sessionId, conversationId, role: 'assistant', content: fullText }).catch(e => log.error('[saveMessage asst]', e.message));
       }
     });
 
@@ -1340,7 +1320,7 @@ async function _handleCounsellorSummarise(req, res) {
     await new Promise((resolve, rej) => { upstream.on('data', d => chunks.push(d)); upstream.on('end', resolve); upstream.on('error', rej); });
     let summary = '';
     try { summary = JSON.parse(Buffer.concat(chunks).toString())?.choices?.[0]?.message?.content?.trim() || ''; } catch { return _json(res, 502, { error: 'AI parse error' }); }
-    if (summary) await _dbWrite(() => cdb.saveConversationSummary({ email, conversationId, summary, messageCount: messages.length }));
+    if (summary) await cdb.saveConversationSummary({ email, conversationId, summary, messageCount: messages.length });
     _json(res, 200, { ok: true, summary });
   } catch (err) {
     log.error('[counsellor-summarise]', err.message);
@@ -1350,12 +1330,12 @@ async function _handleCounsellorSummarise(req, res) {
 
 async function _handleCounsellorClearHistory(req, res) {
   if (!_checkToken(req)) return _json(res, 401, { error: 'Unauthorized' });
-  let body;
-  try { body = await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
+  // The body is not used, but a malformed one is still refused.
+  try { await _readBody(req); } catch { return _json(res, 400, { error: 'Bad request' }); }
   const email = await _verifyCounsellorToken(req);
   if (!email) return _json(res, 401, { error: 'Session expired. Please re-enter your email.' });
   try {
-    await _dbWrite(() => cdb.clearHistory(email));
+    await cdb.clearHistory(email);
     _json(res, 200, { ok: true });
   } catch (err) {
     log.error('[counsellor-clear-history]', err.message);
@@ -1429,6 +1409,7 @@ async function _handleCounsellorGreeting(req, res) {
     if (upstream.statusCode !== 200) {
       const eb = await new Promise(r => { const c = []; upstream.on('data', d => c.push(d)); upstream.on('end', () => r(Buffer.concat(c).toString())); });
       release();
+      log.warn('[Greeting] OpenAI ' + upstream.statusCode + ': ' + eb.slice(0, 300));
       return _json(res, 502, { error: 'AI error' });
     }
 
@@ -1460,10 +1441,10 @@ async function _handleCounsellorGreeting(req, res) {
       release();
       if (fullText.trim() && body.conversationId) {
         const sessionId = reportObj?.session_id || null;
-        _dbWrite(() => cdb.saveMessage({
+        cdb.saveMessage({
           email, sessionId, conversationId: body.conversationId,
           role: 'assistant', content: fullText,
-        })).catch(e => log.error('[Greeting] saveMessage:', e.message));
+        }).catch(e => log.error('[Greeting] saveMessage:', e.message));
       }
     });
     upstream.on('error', err => {
@@ -1520,7 +1501,7 @@ async function _handleCounsellorQuery(req, res) {
     return res.end(JSON.stringify({ error: 'Too many submissions. Please try again later.' }));
   }
   try {
-    const id = await _dbWrite(() => cdb.saveQuery({ name, email, message, preferredDate, preferredTime }));
+    const id = await cdb.saveQuery({ name, email, message, preferredDate, preferredTime });
     log.info(`[counsellor-query] ${email} id=${id}`);
 
     if (_emailFn && NOTIFICATION_EMAIL) {
@@ -1594,7 +1575,7 @@ async function _handleRequest(req, res) {
   if (method === 'GET' && pathname === '/health') {
     let dbOk = true;
     try { dbOk = await require('./pg-core.js').ping(); } catch { dbOk = false; }
-    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight, wqLength: 0 };
+    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight };
     res.writeHead(dbOk ? 200 : 503, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(payload));
   }
@@ -1646,13 +1627,9 @@ async function _handleRequest(req, res) {
     if (method === 'POST' && pathname === '/api/save-report')              return await _handleSaveReport(req, res);
     if (method === 'POST' && pathname === '/api/ai-report')                return await _handleAIReport(req, res);
     if (method === 'POST' && pathname === '/api/dashboard/login') {
-      // Cluster-safe, proxy-aware brute-force guard. Previously this used an
-      // in-memory Map, so with PM2 `instances: 'max'` an attacker got 10×N
-      // attempts (one bucket per worker), and it keyed on
-      // req.socket.remoteAddress — which behind Render's proxy is the PROXY's
-      // address, putting every staff user into one shared bucket. _rlCheckDb is
-      // shared across workers and _getIP honours x-forwarded-for, matching every
-      // other authentication endpoint here.
+      // Brute-force guard shared by every worker (DB-backed) and keyed on the
+      // client address behind the proxy (_getIP honours x-forwarded-for), like
+      // every other authentication endpoint here.
       const rl = await _rlCheckDb('dashboard-login', _getIP(req), 10, 15 * 60 * 1000);
       if (!rl.allowed) {
         res.writeHead(429, { 'Retry-After': String(rl.retryAfter), 'Content-Type': 'application/json' });
@@ -1755,23 +1732,24 @@ server.headersTimeout   = 10000;
 server.requestTimeout   = 30000;
 server.keepAliveTimeout = 65000;
 
-// Raised accept-queue backlog (Node default 511) — avoids ECONNRESET bursts
-// when the event loop is briefly blocked by synchronous SQLite writes.
+// Raised accept-queue backlog (Node default 511) so a burst of connections
+// (a whole class opening the app at once) queues instead of being reset.
 const LISTEN_BACKLOG = parseInt(process.env.LISTEN_BACKLOG || '2048', 10);
 
 /* Async bootstrap: create the PostgreSQL schema and wire the DB modules
-   BEFORE accepting connections. _db is the shared pg-core module handle
-   (kept named "_db" so dashApi.init's signature is unchanged). */
+   BEFORE accepting connections. */
 async function _bootstrap() {
-  _db = await dbModule._initDb();      // runs pg-core.initSchema() once
-  await cdb.init(_db);                 // idempotent; ensures schema ready
-  await require('./dashboard-db.js').init(_db); // seeds first-boot accounts
-  // Share the DB-backed rate limiter with dashboard-api so its PUBLIC
+  await dbModule._initDb();                       // runs pg-core.initSchema() once
+  await cdb.init();                               // idempotent; ensures schema ready
+  await require('./dashboard-db.js').init();      // seeds first-boot accounts
+  // The dashboard API shares the DB-backed rate limiter, so its public
   // access-code endpoints are throttled by the same mechanism.
-  dashApi.init(_db, _emailFn, _dbWrite, async (scope, key, limit) => {
-    const r = await _rlCheckDb(scope, key, limit, RL_WINDOW);
-    return !!(r && r.allowed);
-  }, {
+  dashApi.init({
+    sendEmail: _emailFn,
+    rateLimit: async (scope, key, limit) => {
+      const r = await _rlCheckDb(scope, key, limit, RL_WINDOW);
+      return !!(r && r.allowed);
+    },
     ai: OPENAI_KEY ? _aiJson : null,
     models: {
       insights:  process.env.DASHBOARD_INSIGHTS_MODEL  || AI_MODEL,

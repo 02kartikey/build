@@ -31,7 +31,7 @@ services:
     branch: main
     buildCommand: npm install
     startCommand: node server.js
-    healthCheckPath: /health   # server.js:1355
+    healthCheckPath: /health   # 200 with {"ok":true} once the database answers
     autoDeploy: true
 
     envVars:

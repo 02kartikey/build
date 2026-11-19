@@ -1,21 +1,13 @@
 /* ════════════════════════════════════════════════════════════════════
    db.js — NuMind MAPS  |  Core student/assessment/report layer (PostgreSQL)
    --------------------------------------------------------------------
-   Async rewrite on top of pg-core.js. Public API is unchanged in name/shape
-   but every DB-touching function is now `async` and returns a Promise.
-   Callers in server.js already `await` the write path via _dbWrite, and the
-   read path (getFullReport etc.) must now be awaited too.
+   Registration, saved sections, reports and the year-on-year journey, on
+   pg-core.js. Every DB-touching function is async.
 
-   Conversions from the better-sqlite3 version:
-     • @named params → $1,$2,… positional; helpers one()/many()/exec()/tx().
-     • INSERT OR REPLACE → INSERT … ON CONFLICT … DO UPDATE (explicit keys).
-     • is_fallback stored as BOOLEAN (was 0/1). CASE guards compare = FALSE.
-     • db.transaction(fn)() → await tx(async (c) => { ... }).
-     • Case-insensitive email now handled by CITEXT, so LOWER() wrappers on
-       the email column are dropped (kept in JS .trim()/.toLowerCase() for
-       normalisation of the stored value only).
-
-   The pure derivation helpers (no DB access) are carried over verbatim.
+   Conventions: positional placeholders and one()/many()/exec()/tx();
+   upserts are INSERT … ON CONFLICT … DO UPDATE with explicit keys; email is
+   CITEXT (and trimmed/lower-cased in JS before storing). The derivation
+   helpers further down are pure (no DB access).
    ════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -237,10 +229,13 @@ async function saveRegistration(student, sessionId) {
       // rather than create a second record.
       if (uid) {
         const mu = require('./match-utils.js');
+        // Checked against the school the row will be stored under: a merged-away
+        // spelling is rewritten to its merged school on insert.
+        const merged = (await c.query(`SELECT school FROM school_merges WHERE name_key = ${mu.sqlNormSchool('$1')}`, [regSchool])).rows[0];
         const holder = (await c.query(
           `SELECT session_id FROM students WHERE ${mu.sqlHasUid('student_uid')}
              AND ${mu.sqlUidSchoolKey('school')} = $1 AND ${mu.sqlUid('student_uid')} = $2 LIMIT 1`,
-          [mu.uidSchoolKey(regSchool), mu.normUid(uid)])).rows[0];
+          [mu.uidSchoolKey(merged ? merged.school : regSchool), mu.normUid(uid)])).rows[0];
         if (holder && holder.session_id !== effectiveSessionId) {
           throw Object.assign(new Error('This Unique School ID is already registered at your school. Please sign in with the access code your school gave you, or check the ID with your teacher.'), { status: 409, code: 'UID_TAKEN' });
         }
@@ -379,26 +374,18 @@ async function saveReport({ sessionId, student, assessments, report }) {
   const now = new Date().toISOString();
 
   await pg.tx(async (c) => {
-    /* 1) Student */
+    /* 1) Student. The report carries the student as the browser holds it;
+          a field it leaves empty never blanks what registration stored. */
     if (student) {
       const norm = String(student.email || '').toLowerCase().trim();
+      const keep = (col) => `${col} = COALESCE(NULLIF(EXCLUDED.${col}, ''), students.${col})`;
       await c.query(
         `INSERT INTO students (
            session_id, first_name, last_name, full_name, class, section,
            school, school_state, school_city, age, gender, email, registered_at
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (session_id) DO UPDATE SET
-           first_name   = EXCLUDED.first_name,
-           last_name    = EXCLUDED.last_name,
-           full_name    = EXCLUDED.full_name,
-           class        = EXCLUDED.class,
-           section      = EXCLUDED.section,
-           school       = EXCLUDED.school,
-           school_state = EXCLUDED.school_state,
-           school_city  = EXCLUDED.school_city,
-           age          = EXCLUDED.age,
-           gender       = EXCLUDED.gender,
-           email        = EXCLUDED.email`,
+           ${['first_name', 'last_name', 'full_name', 'class', 'section', 'school', 'school_state', 'school_city', 'age', 'gender', 'email'].map(keep).join(',\n           ')}`,
         [
           sessionId,
           student.firstName || '',
@@ -673,7 +660,7 @@ async function saveReport({ sessionId, student, assessments, report }) {
 }
 
 /* Read-time derivation from a raw assessments row (columns *_scores_json).
-   Pure — no DB access. Unchanged from the SQLite version. */
+   Pure — no DB access. */
 function deriveDisplayRowsFromAssessmentRow(row) {
   if (!row) return { personality: [], aptitude: [], interests: [], seaa: [], careers: [] };
   const jp = (v) => { try { return JSON.parse(v); } catch { return null; } };
@@ -982,13 +969,12 @@ async function getJourney(email) {
 
 /* One-off migration: snapshot existing completed reports into report_history so
    students who finished BEFORE journey tracking existed still count as their
-   first attempt (and get the same-class retake lock instead of the legacy
-   overwrite dialog). Idempotent — ON CONFLICT (email, class) DO NOTHING, so it
+   first attempt (and get the same-class retake lock). Idempotent — ON CONFLICT (email, class) DO NOTHING, so it
    is safe to re-run. Dry-run by default; pass { commit:true } to write. */
 async function backfillJourneyHistory({ commit = false, email = null, quiet = false } = {}) {
   await _initDb();
-  // Pre-release builds linked email-less students by school + name ("nat:").
-  // Name-only links are no longer allowed: those attempts now stand alone.
+  // Students are never linked by name alone: any "nat:" (school + name)
+  // identity from pre-release builds becomes a stand-alone attempt.
   if (commit) await pg.exec(`UPDATE report_history SET email = 'sid:' || session_id, attempt_no = 1 WHERE email LIKE 'nat:%'`);
   const params = [];
   // Every completed student gets a snapshot; resolveJourneyIdentity() decides
@@ -1133,9 +1119,8 @@ function _deriveAptitude(assessments) {
   return DAAB_DISPLAY_ORDER.map((key, i) => {
     const sub = daab[key] || (assessments && assessments['daab_' + key]) || {};
     const sc  = sub.scores || {};
-    // An unattempted sub-test used to be stamped with stanine 5 / "Average",
-    // which meant the report, the dashboards and Aria all quoted a score the
-    // student never earned. Mark it as not attempted instead.
+    // An unattempted sub-test is marked as not attempted, never given a
+    // default stanine, so no report or dashboard quotes an unearned score.
     const attempted = (typeof sc.stanine === 'number' && sc.stanine > 0);
     return {
       position: i, key, name: DAAB_LABELS[key],

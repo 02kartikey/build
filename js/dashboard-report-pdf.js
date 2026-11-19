@@ -16,8 +16,7 @@
      window.nmDownloadReportsZip(ids, opts)    many reports → ZIP file(s)
 
    All requests go through the page's own `_api()` helper, so the signed-in
-   role's token is always the one used (previously this file guessed between
-   the three dashboards' stored tokens and could pick the wrong one).
+   role's token is always the one used.
    ════════════════════════════════════════════════════════════════════ */
 
 import { downloadPDF } from './pdf/download.js';

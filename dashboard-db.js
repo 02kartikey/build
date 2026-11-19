@@ -1,23 +1,17 @@
 /* ════════════════════════════════════════════════════════════════════
    dashboard-db.js — NuMind MAPS  |  Dashboard database layer (PostgreSQL)
    --------------------------------------------------------------------
-   Async rewrite on pg-core.js. Schema now owned by pg-core (initSchema).
-   Every DB function is async. In-memory caches (token cache, school cache)
-   are unchanged — they are per-worker and not DB-bound.
+   Staff accounts and sessions, settings, reminders and schedules, follow-ups,
+   branch mapping, and every analytic the dashboards show. The schema is
+   owned by pg-core (initSchema); every function here is async.
 
-   Conversions from better-sqlite3:
-     • ? → $1,$2,…; positional placeholders built dynamically for IN clauses.
-     • .get/.all/.run → pg.one/pg.many/pg.exec; transactions → pg.tx.
-     • lastInsertRowid → RETURNING id. .changes → rowCount.
-     • 0/1 flags → BOOLEAN (active, used). LOWER(email/school) dropped where
-       the column is CITEXT (email on dashboard_users/students-join, school on
-       dashboard_user_schools/schools_registry). students.school is plain TEXT,
-       so LOWER() is retained on its comparisons for case-insensitive matching.
-     • DATE(x) → (x)::date  and  DATE(x) >= ? → x::date >= $n::date.
-     • INSERT OR IGNORE → ON CONFLICT DO NOTHING.
-     • COLLATE NOCASE ordering → CITEXT columns already sort case-insensitively.
-     • permissions column is JSONB — pg returns it already parsed (object), so
-       JSON.parse guards are made tolerant of receiving an object.
+   Conventions:
+     • Placeholders are positional ($1, $2 …), built dynamically for IN lists.
+     • students.school is plain TEXT, so comparisons use LOWER(BTRIM(school));
+       email columns and the staff school tables are CITEXT.
+     • permissions is JSONB and arrives already parsed.
+     • Per-worker in-memory caches (session tokens, school list, branch map)
+       expire on their own and are cleared on writes.
    ════════════════════════════════════════════════════════════════════ */
 
 'use strict';
@@ -25,6 +19,8 @@
 const crypto = require('crypto');
 const pg     = require('./pg-core.js');
 const match  = require('./match-utils.js');
+// A whole number from an environment setting, or the default.
+const _int = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
 
 /* ── Unique School ID ────────────────────────────────────────────────
    SQL forms of match-utils uidSchoolKey()/normUid(); identical to the
@@ -37,7 +33,8 @@ const _isUidConflict  = (e) => e && e.code === '23505' && /uq_students_school_ui
 // The student holding `uid` at `school`, or null. `client` lets callers run it
 // inside their transaction (pass FOR UPDATE via `lock` to hold the row).
 async function findStudentByUid(school, uid, client) {
-  const u = match.normUid(uid), sc = match.uidSchoolKey(school);
+  // Looked up at the school the name now belongs to (see mergedSchoolOf).
+  const u = match.normUid(uid), sc = match.uidSchoolKey(await mergedSchoolOf(school, client));
   if (!u || !sc) return null;
   const sql = `SELECT session_id, full_name, school, class, student_uid FROM students
                 WHERE ${match.sqlHasUid('student_uid')}
@@ -49,10 +46,10 @@ async function findStudentByUid(school, uid, client) {
 let _ready = false;
 
 /* ══════════════════════════════════════════════════════════════════
-   INIT — idempotent. Legacy signature init(db); arg ignored (schema owned
-   by pg-core). Seeds default accounts on first boot.
+   INIT — idempotent. Ensures the schema, then seeds default accounts on
+   first boot.
 ══════════════════════════════════════════════════════════════════ */
-async function init(_db) {
+async function init() {
   if (_ready) return;
   await require('./db.js')._initDb();
   _ready = true;
@@ -319,11 +316,8 @@ function _schoolClause(schools, start = 1) {
     list,
     ph:     list.map((_, i) => `$${start + i}`).join(','),
     // Every query compares against LOWER(BTRIM(s.school)), so the parameter
-    // must be trimmed as well as lower-cased. It previously was not: school
-    // names carrying stray whitespace (getAllSchools returns MIN(school), the
-    // RAW name, and imports can introduce padding) matched zero rows, so the
-    // school appeared in the schools list but ALL of its students vanished
-    // from every count, funnel and chart.
+    // is trimmed as well as lower-cased: getAllSchools returns the raw name,
+    // which can carry stray whitespace from imports.
     params: list.map(x => String(x).trim().toLowerCase()),
   };
 }
@@ -337,7 +331,7 @@ const _STATUS_CLAUSE = {
 /* Returns { where, p } where placeholders are numbered from $1.
    Class is free text ("10", "Class 10", "X-B"), so a class filter matches every
    label on record that belongs to the same grade (match-utils), not just the
-   exact string — previously picking "10" silently dropped "Class 10". */
+   exact string: "10" also finds "Class 10" and "X". */
 async function _studentWhere(schools, { class: cls, section, search, status } = {}) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length) return null;
@@ -360,16 +354,9 @@ async function _studentWhere(schools, { class: cls, section, search, status } = 
 
 /* Progress across the FOUR assessment modules: NMAP, DAAB, CPI, SEAA.
 
-   This used to sum eleven columns — the three single-sitting modules plus each
-   of DAAB's eight subtests — while the dashboards render exactly four dots and
-   the student drawer prints the value as "n/4". The two never agreed: a student
-   who had finished NMAP, CPI, SEAA and a single DAAB subtest showed four filled
-   dots and looked finished at roughly a third of the way through, and anyone
-   further along produced labels like "8/4" and "11/4". The bar saturated early
-   and then stopped moving, which is why it read as broken.
-
-   DAAB counts as one module and only when all eight subtests are recorded, so
-   a partially-completed aptitude battery does not read as a finished module.
+   The dashboards show four dots and the profile prints "n/4", so this counts
+   modules, not columns. DAAB counts as one module and only when all eight
+   subtests are recorded, so a partly finished aptitude battery is not done.
    Keep this in step with MODULES in db.js if a module is ever added. */
 // All 8 aptitude sub-tests finished = the aptitude part is done.
 const _DAAB_ALL_DONE_EXPR = `(a.daab_va_completed_at  IS NOT NULL
@@ -414,10 +401,8 @@ async function getStudentsBySchool(schools, opts = {}) {
   );
 }
 
-/* Stalled students: started, not completed, and no progress saved for `days`.
-   (Previously this returned everyone registered more than `days` ago without a
-   report — including students who never started — while every dashboard
-   labelled it "in progress 3+ days".) */
+/* Stalled students: started, not completed, and no progress saved for
+   `days`. Students who never started are not included. */
 async function getAtRiskStudents(schools, { days = 3, limit = 1000 } = {}) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length) return [];
@@ -561,31 +546,20 @@ async function getSchoolSummaries(schools) {
   return [...schoolMap.values()];
 }
 
-/* getAllSchools cache — per-worker, 60s TTL. */
-let _getAllSchoolsCache   = null;
-let _getAllSchoolsCacheTs = 0;
-const _SCHOOL_CACHE_TTL  = 60 * 1000;
-
+/* Every school name students have registered under, with student counts.
+   Read fresh each time (one grouped scan, a few milliseconds): a per-worker
+   cache would keep showing a merged or renamed school on the other workers. */
 async function getAllSchools() {
-  const now = Date.now();
-  if (_getAllSchoolsCache && (now - _getAllSchoolsCacheTs) < _SCHOOL_CACHE_TTL) {
-    return _getAllSchoolsCache;
-  }
-  const result = await pg.many(
+  return pg.many(
     `SELECT MIN(school) AS school, COUNT(*)::int AS total_students
      FROM students
      WHERE school IS NOT NULL AND school != ''
      GROUP BY LOWER(BTRIM(school))
      ORDER BY school`
   );
-  _getAllSchoolsCache   = result;
-  _getAllSchoolsCacheTs = now;
-  return result;
 }
 
-function _invalidateSchoolCache() {
-  _getAllSchoolsCache   = null;
-  _getAllSchoolsCacheTs = 0;
+function _dropAnalyticsCache() {
   // Roster edits (class moves, imports, deletes) do not change the data
   // version fingerprint, so drop the shared aggregates outright.
   // Call AFTER the write commits, so a read in between cannot re-cache old rows.
@@ -593,8 +567,8 @@ function _invalidateSchoolCache() {
 }
 
 /* Contact details for a list of students, limited to the given schools
-   (admins pass null = all). Used to send reminders to any drill-down list
-   without the browser having to look up each student. */
+   (admins pass null = all), so a reminder can go to any drill-down list
+   without the browser looking up each student. */
 async function getStudentContacts(sessionIds, schools) {
   const ids = [...new Set((sessionIds || []).map(String))];
   if (!ids.length) return [];
@@ -684,12 +658,279 @@ async function _predicateFilter(schools, predicate, params, col = 's.session_id'
    Reports from an earlier version of the wellbeing test used other area
    names; they are kept apart as "Earlier version" rather than guessed into
    one of the three. */
+// Each area has 20 questions (js/engine/sea.js SEA_DOMAINS), one point each.
+const WELLBEING_AREA_MAX_SCORE = 20;
 const WELLBEING_AREAS = Object.freeze([
-  { key: 'S', label: 'Social', title: 'Social adjustment', description: 'Getting on with classmates, friends and teachers.' },
-  { key: 'E', label: 'Emotional', title: 'Emotional adjustment', description: 'Handling feelings, stress and setbacks.' },
-  { key: 'A', label: 'Academic', title: 'Academic adjustment', description: 'Coping with schoolwork, study habits and exams.' },
+  { key: 'S', label: 'Social', title: 'Social adjustment', description: 'Getting on with classmates, friends and teachers.', max_score: WELLBEING_AREA_MAX_SCORE },
+  { key: 'E', label: 'Emotional', title: 'Emotional adjustment', description: 'Handling feelings, stress and setbacks.', max_score: WELLBEING_AREA_MAX_SCORE },
+  { key: 'A', label: 'Academic', title: 'Academic adjustment', description: 'Coping with schoolwork, study habits and exams.', max_score: WELLBEING_AREA_MAX_SCORE },
 ]);
 const WELLBEING_OTHER = Object.freeze({ key: 'other', label: 'Earlier version', title: 'Earlier version of the wellbeing test', description: 'Reports from an earlier version of the wellbeing test, which used different areas.' });
+// The four assessment parts, as the dashboards name them. `views` are the
+// analytics dimensions the drill-down dashboard offers for each part.
+const PARAMETERS = Object.freeze([
+  { key: 'personality', label: 'Personality', module: 'NMAP', description: 'Personality assessment (9 traits).', views: ['personality_top', 'personality_level'] },
+  { key: 'aptitude', label: 'Aptitude', module: 'DAAB', description: 'Aptitude tests (all 8 abilities finished).', views: ['aptitude_top', 'aptitude_level'] },
+  { key: 'career', label: 'Career interest', module: 'CPI', description: 'Career interest inventory.', views: ['career_area', 'stream'] },
+  { key: 'seaa', label: 'SEAA', module: 'SEAA', description: 'Social, emotional and academic adjustment (wellbeing).', views: ['seaa_concern', 'wellbeing_need'] },
+]);
+/* SEAA concern groups. A student's areas in the needs-support band give one
+   combination; one or two areas is "Need intervention", all three is
+   "Critical". Group keys list the areas in S, E, A order. */
+const SEAA_CONCERNS = Object.freeze([
+  { key: 'S', label: 'Social only', level: 'intervention', description: 'Needs support in social adjustment only.' },
+  { key: 'E', label: 'Emotional only', level: 'intervention', description: 'Needs support in emotional adjustment only.' },
+  { key: 'A', label: 'Academic only', level: 'intervention', description: 'Needs support in academic adjustment only.' },
+  { key: 'SE', label: 'Social + Emotional', level: 'intervention', description: 'Needs support in social and emotional adjustment.' },
+  { key: 'EA', label: 'Emotional + Academic', level: 'intervention', description: 'Needs support in emotional and academic adjustment.' },
+  { key: 'SA', label: 'Academic + Social', level: 'intervention', description: 'Needs support in academic and social adjustment.' },
+  { key: 'SEA', label: 'All three', level: 'critical', description: 'Needs support in all three areas: social, emotional and academic.' },
+  { key: 'none', label: 'No significant concern', level: 'none', description: 'No area is in the needs-support band.' },
+  { key: 'other', label: 'Earlier test version', level: 'none', description: 'Took an earlier version of the wellbeing test with different areas; not classified.' },
+]);
+const SEAA_LEVELS = Object.freeze({
+  intervention: { label: 'Need intervention', description: 'Adjustment concern in one or two areas.' },
+  critical: { label: 'Critical', description: 'Adjustment concern in all three areas: social, emotional and academic.' },
+});
+function seaaConcernOf(f) {
+  // Only students whose report has SEAA areas are classified.
+  if (f.status !== 'completed' || !f.seaa_scores || !Object.keys(f.seaa_scores).length) return null;
+  const keys = new Set((f.seaa_support || []).map(a => a.key));
+  const core = ['S', 'E', 'A'].filter(k => keys.has(k)).join('');
+  // 'S','E','A','SE','EA','SA' or 'SEA' (letters always in S, E, A order).
+  if (core) return core;
+  return keys.has('other') ? 'other' : 'none';
+}
+
+/* Academic year a date falls in, by its start year (2026 = 2026–27). The
+   year starts on the first of ACADEMIC_YEAR_START_MONTH (default April) in
+   APP_TIMEZONE. */
+const ACADEMIC_YEAR_START_MONTH = Math.min(12, Math.max(1, _int(process.env.ACADEMIC_YEAR_START_MONTH, 4)));
+let _ymFormat = null;   // built on first use (APP_TIMEZONE is defined further down)
+function academicYearOf(d) {
+  if (!d) return null;
+  const t = new Date(d);
+  if (isNaN(t)) return null;
+  _ymFormat = _ymFormat || new Intl.DateTimeFormat('en-GB', { timeZone: APP_TIMEZONE, year: 'numeric', month: 'numeric' });
+  const parts = Object.fromEntries(_ymFormat.formatToParts(t).map(x => [x.type, x.value]));
+  const y = +parts.year, m = +parts.month;
+  return m >= ACADEMIC_YEAR_START_MONTH ? y : y - 1;
+}
+const academicYearLabel = (y) => `${y}–${String((y + 1) % 100).padStart(2, '0')}`;
+
+/* ── Merged schools and school groups ──────────────────────────────
+   Merge rewrites student records to one school name (permanent) and keeps
+   the merged-away spellings in school_merges, which a trigger applies to every
+   later write. A group shows several schools as branches of one school. Both
+   tables are read on every request: they are tiny and indexed, and reading
+   them fresh means every worker sees a change at once. */
+const SCHOOL_NAME_MAX = 120;
+const _cleanName = (v) => String(v || '').trim().replace(/\s+/g, ' ').slice(0, SCHOOL_NAME_MAX);
+const _badRequest = (msg) => Object.assign(new Error(msg), { status: 400 });
+
+async function getSchoolGroups() {
+  const rows = await pg.many('SELECT school_key, group_name FROM school_groups');
+  return new Map(rows.map(r => [r.school_key, r.group_name]));
+}
+// The group (shown as the school) and branch a school name belongs to.
+function groupOf(name, groups) {
+  const clean = _cleanName(name);
+  const g = groups.get(match.normSchool(name));
+  return { org: g || clean, branch: clean, grouped: !!g };
+}
+/* normalised school key → {org, branch, grouped} for a list of raw names.
+   Names that normalise alike share the first one's entry, so one school
+   typed with different case or spacing never splits in two. */
+function _groupIndex(schools, groups) {
+  const idx = new Map();
+  for (const sc of schools || []) {
+    const k = match.normSchool(sc);
+    if (!idx.has(k)) idx.set(k, groupOf(sc, groups));
+  }
+  return idx;
+}
+
+/* The School registry page (admin), in one read: every school name on
+   record (students' spellings and registered schools; names that normalise
+   alike are one row) with its students, registry entry and group; the group
+   names in use; and groups of names that look like one school, to review. */
+async function listSchoolNames() {
+  const [groups, rows, reg] = await Promise.all([
+    getSchoolGroups(),
+    pg.many(`SELECT BTRIM(school) AS name, COUNT(*)::int AS students FROM students
+              WHERE COALESCE(BTRIM(school), '') <> '' GROUP BY 1 ORDER BY 2 DESC, 1`),
+    pg.many('SELECT id, name::text AS name, city, state, active FROM schools_registry ORDER BY name'),
+  ]);
+  const byKey = new Map();
+  const entry = (name) => {
+    const key = match.normSchool(name);
+    if (!key) return null;
+    if (!byKey.has(key)) byKey.set(key, { key, name, names: [], students: 0, registry: null, group: groups.get(key) || null });
+    const e = byKey.get(key);
+    if (!e.names.includes(name)) e.names.push(name);
+    return e;
+  };
+  for (const r of rows) { const e = entry(r.name); if (e) e.students += r.students; }
+  for (const r of reg) {
+    const e = entry(r.name);
+    if (!e) continue;
+    e.name = r.name;                     // the registered spelling is the one shown
+    e.registry = { id: r.id, city: r.city, state: r.state, active: r.active };
+  }
+  const names = [...byKey.values()].sort((a, b) => b.students - a.students || a.name.localeCompare(b.name));
+  const keyOf = new Map(names.map(n => [n.name, n.key]));
+  const suggestions = match.likelyDuplicateGroups(names.map(n => n.name))
+    .map(g => g.map(n => keyOf.get(n)))
+    .sort((a, b) => b.length - a.length);
+  return { names, groups: [...new Set(groups.values())].sort((a, b) => a.localeCompare(b)), suggestions };
+}
+
+/* Merge school names into one school. Rewrites, in one transaction:
+     students.school, dashboard users' school access, the school registry,
+     scheduled reminders and per-school settings,
+   then records the merged-away spellings for later registrations and
+   sign-ins, and sets or clears the school's group. Refuses (409) when two
+   students would end up sharing a Unique School ID at the merged school. */
+async function mergeSchools({ names, school, group, userId }) {
+  const target = _cleanName(school), grp = _cleanName(group);
+  const tKey = match.normSchool(target);
+  if (!tKey) throw _badRequest('Enter the school name to merge into.');
+  if (grp && match.normSchool(grp) === tKey) throw _badRequest('A school cannot be part of itself. Leave "Part of" empty, or name the larger school.');
+  const keys = new Set((names || []).map(n => match.normSchool(n)).filter(Boolean));
+  if (!keys.size) throw _badRequest('Tick at least one school name.');
+  keys.add(tKey);
+  const otherKeys = [...keys].filter(k => k !== tKey);
+  const mine = (rows) => rows.map(r => r.v).filter(v => keys.has(match.normSchool(v)));
+
+  const result = await pg.tx(async (c) => {
+    const q = (sql, p) => c.query(sql, p);
+    // The kept name is a real school from now on: if it was merged away
+    // earlier, forget that first, or the trigger would redirect the rewrite.
+    await q('DELETE FROM school_merges WHERE name_key = $1', [tKey]);
+    // 1. Students. Unique School IDs must stay one per school.
+    const stu = mine((await q(`SELECT DISTINCT school AS v FROM students WHERE school IS NOT NULL`)).rows);
+    const clash = (await q(
+      `SELECT ${match.sqlUid('student_uid')} AS uid,
+              array_agg(COALESCE(NULLIF(full_name, ''), first_name) || ' (' || school || ')' ORDER BY school) AS who
+         FROM students WHERE school = ANY($1) AND ${match.sqlHasUid('student_uid')}
+        GROUP BY 1 HAVING COUNT(*) > 1 ORDER BY 1 LIMIT 5`, [stu])).rows;
+    if (clash.length) {
+      throw Object.assign(new Error('After this merge, these students would share a Unique School ID: '
+        + clash.map(r => `${r.uid}: ${r.who.join(' and ')}`).join('; ')
+        + '. Change one ID in each pair (open the student and edit the ID), then merge again.'), { status: 409 });
+    }
+    const moved = stu.length ? (await q('UPDATE students SET school = $1 WHERE school = ANY($2) AND school <> $1', [target, stu])).rowCount : 0;
+
+    // 2. Dashboard users' school access moves to the merged name.
+    const dus = mine((await q('SELECT DISTINCT school::text AS v FROM dashboard_user_schools')).rows);
+    if (dus.length) {
+      await q(`INSERT INTO dashboard_user_schools (user_id, school)
+               SELECT DISTINCT user_id, $1 FROM dashboard_user_schools WHERE school = ANY($2::citext[])
+               ON CONFLICT (user_id, school) DO NOTHING`, [target, dus]);
+      await q('DELETE FROM dashboard_user_schools WHERE school = ANY($1::citext[]) AND school <> $2::citext', [dus, target]);
+      await q('UPDATE dashboard_user_schools SET school = $1 WHERE school = $1::citext AND school::text <> $1', [target]);
+    }
+
+    // 3. School registry: one entry, under the merged name.
+    const reg = (await q('SELECT id, name::text AS name, city, state FROM schools_registry')).rows.filter(r => keys.has(match.normSchool(r.name)));
+    const same = reg.find(r => r.name.toLowerCase() === target.toLowerCase());
+    if (same) await q('UPDATE schools_registry SET name = $1, active = TRUE WHERE id = $2', [target, same.id]);
+    else {
+      const from = reg.find(r => r.city || r.state) || {};
+      await q('INSERT INTO schools_registry (name, city, state, added_at, active) VALUES ($1, $2, $3, $4, TRUE)',
+        [target, from.city || null, from.state || null, new Date().toISOString()]);
+    }
+    const dropReg = reg.filter(r => r !== same).map(r => r.id);
+    if (dropReg.length) await q('DELETE FROM schools_registry WHERE id = ANY($1)', [dropReg]);
+
+    // 4. Scheduled reminders for one school.
+    const sch = mine((await q('SELECT DISTINCT school AS v FROM reminder_schedules WHERE school IS NOT NULL')).rows);
+    if (sch.length) await q('UPDATE reminder_schedules SET school = $1 WHERE school = ANY($2)', [target, sch]);
+
+    // 5. Per-school settings: the merged school keeps its own, or else takes
+    //    over one merged spelling's settings.
+    const tScope = _scopeKeyFor(target), oScopes = otherKeys.map(k => 'school:' + k);
+    const hasOwn = (await q('SELECT 1 FROM dashboard_settings WHERE scope = $1', [tScope])).rowCount > 0;
+    if (!hasOwn && oScopes.length) {
+      await q(`UPDATE dashboard_settings SET scope = $1 WHERE scope = (
+                 SELECT scope FROM dashboard_settings WHERE scope = ANY($2) ORDER BY updated_at DESC LIMIT 1)`, [tScope, oScopes]);
+    }
+    if (oScopes.length) await q('DELETE FROM dashboard_settings WHERE scope = ANY($1)', [oScopes]);
+
+    // 6. Remember the merged-away spellings; earlier merges into any of
+    //    these names now point at the merged school.
+    if (otherKeys.length) {
+      await q(`INSERT INTO school_merges (name_key, school, merged_by) SELECT k, $2, $3 FROM unnest($1::text[]) AS k
+               ON CONFLICT (name_key) DO UPDATE SET school = EXCLUDED.school, merged_at = now(), merged_by = EXCLUDED.merged_by`,
+        [otherKeys, target, userId || null]);
+    }
+    const repoint = (await q('SELECT name_key, school FROM school_merges')).rows.filter(r => keys.has(match.normSchool(r.school))).map(r => r.name_key);
+    if (repoint.length) await q('UPDATE school_merges SET school = $1 WHERE name_key = ANY($2)', [target, repoint]);
+
+    // 7. Group: set it, or clear it when "Part of" is empty.
+    if (otherKeys.length) await q('DELETE FROM school_groups WHERE school_key = ANY($1)', [otherKeys]);
+    if (grp) {
+      await q(`INSERT INTO school_groups (school_key, group_name, updated_by) VALUES ($1, $2, $3)
+               ON CONFLICT (school_key) DO UPDATE SET group_name = EXCLUDED.group_name, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+        [tKey, grp, userId || null]);
+    } else {
+      await q('DELETE FROM school_groups WHERE school_key = $1', [tKey]);
+    }
+    return { school: target, group: grp || null, names_merged: otherKeys.length, students_moved: moved };
+  });
+  await _dropAnalyticsCache();
+  return result;
+}
+
+/* Schools (or groups) and their branches the user can see, with progress
+   for each, for the drill-down dashboard. */
+async function getFlowStructure(schools, { predicate = null, year = null } = {}) {
+  const groups = await getSchoolGroups();
+  const all = await getStudentFacts(schools, { predicate });
+  const years = [...new Set(all.map(f => f.academic_year).filter(y => y != null))].sort((a, b) => b - a);
+  const facts = year == null ? all : all.filter(f => f.academic_year === year);
+  const settings = await getSettingsMap(schools);
+  const orgs = new Map();
+  const blank = () => ({ registered: 0, completed: 0, in_progress: 0, not_started: 0, target_sum: 0 });
+  const add = (o, f) => { o.registered++; o[f.status]++; o.target_sum += settings.forSchool(f.school).completion_target_pct; };
+  // Every school the user has, even before any student registers.
+  const byKey = _groupIndex(schools, groups);
+  for (const sc of schools) {
+    const b = byKey.get(match.normSchool(sc));
+    if (!orgs.has(b.org)) orgs.set(b.org, Object.assign(blank(), { org: b.org, branches: new Map() }));
+    const o = orgs.get(b.org);
+    if (!o.branches.has(b.branch)) o.branches.set(b.branch, Object.assign(blank(), { branch: b.branch, schools: [], target: settings.forSchool(sc).completion_target_pct }));
+    o.branches.get(b.branch).schools.push(sc);
+  }
+  // Facts match schools case- and spacing-insensitively, so look them up by key
+  // (every fact's school is one of `schools`, which getStudentFacts filtered on).
+  for (const f of facts) {
+    const b = byKey.get(match.normSchool(f.school));
+    const o = orgs.get(b.org), br = o.branches.get(b.branch);
+    add(o, f); add(br, f);
+  }
+  const pct = (n, d) => (d ? Math.round(n / d * 1000) / 10 : 0);
+  // A group's target is its schools' targets weighted by registered students.
+  const fin = (x) => ({
+    registered: x.registered, completed: x.completed, in_progress: x.in_progress, not_started: x.not_started,
+    pending: x.registered - x.completed, completion_pct: pct(x.completed, x.registered),
+    target_pct: x.registered ? Math.round(x.target_sum / x.registered) : (x.target || settings.global.completion_target_pct),
+  });
+  return {
+    years: years.map(y => ({ year: y, label: academicYearLabel(y) })),
+    current_year: academicYearOf(new Date()),
+    orgs: [...orgs.values()].map(o => Object.assign({ org: o.org }, fin(o), {
+      branches: [...o.branches.values()].map(b => Object.assign({ branch: b.branch, schools: b.schools }, fin(b)))
+        .sort((a, b) => b.registered - a.registered || a.branch.localeCompare(b.branch)),
+    })).sort((a, b) => b.registered - a.registered || a.org.localeCompare(b.org)),
+  };
+}
+// The raw school names of one school or group (org), or one of its branches, within `schools`.
+async function schoolsOfBranch(schools, org, branch) {
+  const idx = _groupIndex(schools, await getSchoolGroups());
+  return schools.filter(sc => { const b = idx.get(match.normSchool(sc)); return b.org === org && (!branch || b.branch === branch); });
+}
+
 function wellbeingAreaOf(key, title) {
   const k = String(key || '').trim().toUpperCase(), t = String(title || '').trim().toLowerCase();
   const hit = WELLBEING_AREAS.find(a => a.key === k) || WELLBEING_AREAS.find(a => t.startsWith(a.label.toLowerCase() + ' adjust') || t === a.label.toLowerCase());
@@ -745,8 +986,7 @@ async function getCareerDistribution(schools, by = 'career_area', { predicate } 
 }
 
 /* Average time per assessment part. Aptitude is one part made of eight timed
-   subtests, so it is the sum of all eight for students who finished all eight
-   (previously only the Verbal subtest was measured and labelled "Aptitude"). */
+   subtests, so it is the sum of all eight for students who finished all eight. */
 async function getModuleTiming(schools, { predicate = null } = {}) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length) return [];
@@ -883,6 +1123,7 @@ async function refreshAnalyticsCache() {
 /* ── Follow-up tasks ──────────────────────────────────────────────
    Each staff member's own task list. A task may point at a student record
    (session_id) or just carry the name as typed. */
+const FOLLOWUP_OPEN_MAX = 1000;   // open tasks per user, a guard against runaway scripts
 const FOLLOWUP_TYPES = { call: 'Call parent', checkin: 'Student check-in', email: 'Send email', report: 'Share report', meeting: 'Meeting', other: 'Other' };
 async function listFollowups(userId) {
   return pg.many(
@@ -898,7 +1139,7 @@ async function createFollowup({ userId, sessionId, studentLabel, type, notes, du
   const label = String(studentLabel || '').trim().slice(0, 160) || null;
   if (!sessionId && !label) throw Object.assign(new Error('Say which student the task is about.'), { status: 400 });
   const mine = await pg.one('SELECT COUNT(*)::int AS n FROM followup_tasks WHERE user_id = $1 AND NOT done', [userId]);
-  if (mine && mine.n >= 1000) throw Object.assign(new Error('You have 1,000 open tasks. Complete some first.'), { status: 400 });
+  if (mine && mine.n >= FOLLOWUP_OPEN_MAX) throw Object.assign(new Error(`You have ${FOLLOWUP_OPEN_MAX.toLocaleString('en-IN')} open tasks. Complete some first.`), { status: 400 });
   const r = await pg.one(
     `INSERT INTO followup_tasks (user_id, session_id, student_label, task_type, notes, due_date) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
     [userId, sessionId || null, label, type, String(notes || '').trim().slice(0, 2000) || null, d]);
@@ -922,8 +1163,11 @@ const SCHEDULE_GROUPS = {
   stalled:     { label: 'Stalled', dimension: 'attention', groups: ['stalled'] },
 };
 const SCHEDULE_FREQUENCIES = [1, 2, 7];
+// Schools with fewer registered students than this are folded into one line
+// on overview tables (often a school name typed differently at registration).
+const SMALL_SCHOOL_MAX_STUDENTS = _int(process.env.SMALL_SCHOOL_MAX_STUDENTS, 5);
 const SCHEDULES_PER_USER_MAX = parseInt(process.env.SCHEDULES_PER_USER_MAX || '20', 10);
-const APP_TZ = () => process.env.APP_TIMEZONE || 'Asia/Kolkata';
+const APP_TZ = () => APP_TIMEZONE;
 // Today at `send_hour` in the app's time zone, or tomorrow if that has passed.
 const _NEXT_RUN_SQL = (hourParam, tzParam) =>
   `CASE WHEN ((date_trunc('day', now() AT TIME ZONE ${tzParam}) + make_interval(hours => ${hourParam})) AT TIME ZONE ${tzParam}) > now()
@@ -1133,12 +1377,12 @@ async function upsertStudent({ session_id, first_name, last_name, full_name, ema
     if (_isUidConflict(e)) throw Object.assign(new Error(`Unique School ID ${uid} is already used by another student at this school.`), { status: 409, code: 'UID_TAKEN' });
     if (norm && e.code === '23505') {
       const row = await pg.one('SELECT session_id, school FROM students WHERE email = $1', [norm]);
-      if (row && match.schoolMatches(schoolName, row.school)) { await _invalidateSchoolCache(); return row.session_id; }
+      if (row && match.schoolMatches(schoolName, row.school)) { await _dropAnalyticsCache(); return row.session_id; }
       throw Object.assign(new Error('This email is already used by another student.'), { status: 409 });
     }
     throw e;
   }
-  await _invalidateSchoolCache();
+  await _dropAnalyticsCache();
   return resultSid;
 }
 
@@ -1187,8 +1431,6 @@ function _codesEqual(a, b) {
 // Issue (or re-issue) a code for one student. Returns the new plaintext code.
 async function setStudentAccessCode(sessionId, code) {
   const c = code || generateAccessCode();
-  // pg-core exposes exec(), not run() — run() was the better-sqlite3 API and
-  // this was the last remaining call site (caused a 500 on every regen click).
   await pg.exec(
     `UPDATE students SET access_code = $1, access_code_set_at = $2 WHERE session_id = $3`,
     [c, new Date().toISOString(), sessionId]
@@ -1200,8 +1442,19 @@ async function setStudentAccessCode(sessionId, code) {
 // Returns the student row on success, null otherwise. The candidate set is
 // narrowed in SQL by school/class/name; the code itself is compared in JS
 // in constant time so we never leak which field was wrong.
+// The school a typed name belongs to now: a merged-away spelling gives the
+// school it was merged into, anything else is returned as typed.
+async function mergedSchoolOf(name, client) {
+  const sc = String(name || '').trim();
+  if (!sc) return sc;
+  const run = client ? (t, p) => client.query(t, p).then(r => r.rows[0] || null) : pg.one;
+  const row = await run(`SELECT school FROM school_merges WHERE name_key = ${match.sqlNormSchool('$1')}`, [sc]);
+  return row ? row.school : sc;
+}
+
 async function redeemAccessCode({ school, klass, name, uid, code }) {
-  const sc = String(school || '').trim();
+  // A student may still type a spelling that has since been merged.
+  const sc = await mergedSchoolOf(school);
   const kl = String(klass  || '').trim();
   const nm = String(name   || '').trim();
   const cd = String(code   || '').trim().toUpperCase();
@@ -1247,21 +1500,17 @@ async function redeemAccessCode({ school, klass, name, uid, code }) {
 }
 
 /* ── Access-code entry lookups ───────────────────────────────────────
-   All three of these used to compare school/class with
-   lower(btrim(x)) = lower(btrim($1)) — exact equality after trimming.
-   That made the entry form unusable in practice: a student whose row says
-   "ABPS,BAGA" got nothing for "ABPS", and a row that says "IX" never matched
-   the "9" they picked. The candidate set is now fetched with a cheap SQL
-   prefilter and narrowed in JS by match-utils, which understands punctuation,
-   partial school names, and roman-numeral / "Class 9" / "9th" grade labels.
-   Row counts per school are small (hundreds at most), so the JS pass is
-   negligible next to the round-trip it replaces. */
+   Exact matching would fail real students: a row saying "ABPS,BAGA" must be
+   found from "ABPS", and "IX" from the "9" they pick. So the candidate set is
+   fetched with a cheap SQL prefilter and narrowed in JS by match-utils, which
+   understands punctuation, partial school names, and roman-numeral /
+   "Class 9" / "9th" grade labels.
+   Row counts per school are small (hundreds at most), so the JS pass costs
+   little next to the database round-trip. */
 
 /* Every school that has at least one code-holding student. This is the source
-   for the entry form's school suggestions. It MUST come from the database:
-   the form previously suggested from a hardcoded list of well-known schools,
-   so any school a staff member had actually imported — the only schools whose
-   students can use this form at all — never appeared. */
+   for the entry form's school suggestions, so it always reflects the schools
+   staff have actually imported (the only ones whose students can use it). */
 async function listAccessSchools(query) {
   const rows = await pg.many(
     `SELECT DISTINCT btrim(school) AS school
@@ -1469,6 +1718,9 @@ async function runImportTransaction(rows) {
     // different students given the same ID are caught instead of the later
     // row silently overwriting the earlier one.
     const fileUids = new Map();   // school|unique id → { rowNo, name }
+    // A merged-away spelling in the file means the school it was merged into
+    // (the insert trigger stores it that way, so matching must agree).
+    const mergedTo = new Map((await c.query('SELECT name_key, school FROM school_merges')).rows.map(m => [m.name_key, m.school]));
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       const rowNo = i + 2;   // +2: 1-based, and row 1 is the header
@@ -1487,7 +1739,8 @@ async function runImportTransaction(rows) {
       await c.query('SAVEPOINT import_row');
       try {
         const norm   = String(r.email  || '').toLowerCase().trim();
-        const school = String(r.school || r.School || '').trim().replace(/\s+/g, ' ');
+        const typed  = String(r.school || r.School || '').trim().replace(/\s+/g, ' ');
+        const school = mergedTo.get(match.normSchool(typed)) || typed;
         const klass  = String(r.class  || r.Class  || '').trim().replace(/\s+/g, ' ');
         const now    = new Date().toISOString();
 
@@ -1608,7 +1861,7 @@ async function runImportTransaction(rows) {
       }
     }
   });
-  await _invalidateSchoolCache();
+  await _dropAnalyticsCache();
   return { imported, updated, skipped,
            errors:   errors.slice(0, 50),
            warnings: warnings.slice(0, 50) };
@@ -1616,7 +1869,7 @@ async function runImportTransaction(rows) {
 
 async function deleteStudent(sessionId) {
   await pg.exec('DELETE FROM students WHERE session_id = $1', [sessionId]);
-  await _invalidateSchoolCache();
+  await _dropAnalyticsCache();
 }
 
 async function resetStudentAssessment(sessionId) {
@@ -1654,7 +1907,7 @@ async function moveStudent(sessionId, fields) {
     if (_isUidConflict(e)) throw Object.assign(new Error('That Unique School ID is already used by another student at this school.'), { status: 409, code: 'UID_TAKEN' });
     throw e;
   }
-  await _invalidateSchoolCache();
+  await _dropAnalyticsCache();
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -1703,24 +1956,10 @@ async function getStudentTags(sessionId) {
 /* ══════════════════════════════════════════════════════════════════
    SCHOOLS REGISTRY
 ══════════════════════════════════════════════════════════════════ */
+/* The registered schools, as admins entered them. Reading the list never
+   adds to it: names students type are shown separately (listSchoolNames)
+   until an admin registers or merges them. */
 async function listRegisteredSchools() {
-  try {
-    const liveSchools = await getAllSchools();
-    const existingRows = await pg.many('SELECT LOWER(name) AS n FROM schools_registry');
-    const existing = new Set(existingRows.map(r => r.n));
-    const now = new Date().toISOString();
-    for (const s of liveSchools) {
-      const name = (s.school || '').trim();
-      if (name && !existing.has(name.toLowerCase())) {
-        await pg.exec(
-          `INSERT INTO schools_registry (name, city, state, added_at, active)
-           VALUES ($1, NULL, NULL, $2, TRUE) ON CONFLICT (name) DO NOTHING`,
-          [name, now]
-        );
-        existing.add(name.toLowerCase());
-      }
-    }
-  } catch (_) { /* best-effort backfill */ }
   return pg.many('SELECT * FROM schools_registry ORDER BY name');
 }
 
@@ -1800,7 +2039,6 @@ const _fs   = require('fs');
 const _path = require('path');
 const _core = require('./db.js');
 
-const _int = (v, d) => { const n = parseInt(v, 10); return Number.isFinite(n) ? n : d; };
 const APP_TIMEZONE = process.env.APP_TIMEZONE || 'Asia/Kolkata';
 
 /* ── Career areas, straight from the assessment definition ──────────
@@ -1939,6 +2177,8 @@ async function getStudentFacts(schools, { predicate } = {}) {
             WHEN a.session_id  IS NOT NULL THEN 'in_progress'
             ELSE 'not_started' END AS status,
        ${_MODULES_DONE_EXPR} AS modules_done,
+       (a.nmap_completed_at IS NOT NULL) AS personality_done, (${_DAAB_ALL_DONE_EXPR}) AS aptitude_done,
+       (a.cpi_completed_at IS NOT NULL) AS career_done, (a.sea_completed_at IS NOT NULL) AS seaa_done,
        a.saved_at AS last_activity,
        rs.generated_at, rs.fit_score, rs.fit_tier,
        rs.personality_status, rs.aptitude_status, rs.interest_status, rs.seaa_status,
@@ -1951,7 +2191,8 @@ async function getStudentFacts(schools, { predicate } = {}) {
          ORDER BY ap.stanine DESC, ap.position LIMIT 1) AS top_aptitude,
        (SELECT json_agg(json_build_object('key', se.key, 'title', se.title) ORDER BY se.key)
           FROM report_seaa se
-         WHERE se.session_id = s.session_id AND se.cat_label = $${params.length + 1}) AS seaa_support
+         WHERE se.session_id = s.session_id AND se.cat_label = $${params.length + 1}) AS seaa_support,
+       (SELECT json_object_agg(se.key, se.score) FROM report_seaa se WHERE se.session_id = s.session_id) AS seaa_scores
      FROM students s
      LEFT JOIN assessments      a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary   rs ON rs.session_id = s.session_id
@@ -1967,6 +2208,8 @@ async function getStudentFacts(schools, { predicate } = {}) {
     const seen = new Set();
     f.seaa_support = (Array.isArray(f.seaa_support) ? f.seaa_support : [])
       .map(x => wellbeingAreaOf(x.key, x.title)).filter(a => !seen.has(a.key) && seen.add(a.key));
+    f.seaa_concern = seaaConcernOf(f);
+    f.academic_year = academicYearOf(f.registered_at);
   }
   await _attachJourneyFacts(rows);
   // predicate: extra per-user restriction (e.g. a counsellor limited to
@@ -2064,6 +2307,20 @@ async function getDimensions() {
       ],
       valueOf: (f) => f.status,
     },
+    gender: {
+      label: 'Gender', population: 'all',
+      question: 'How many students of each gender registered, and how many of them completed?',
+      groups: () => [
+        { key: 'female', label: 'Female', description: 'Registered as female.' },
+        { key: 'male',   label: 'Male',   description: 'Registered as male.' },
+        { key: 'other',  label: 'Other',  description: 'Registered as another gender.' },
+        { key: 'not_given', label: 'Not given', description: 'No gender recorded at registration.' },
+      ],
+      valueOf: (f) => {
+        const g = String(f.gender || '').trim().toLowerCase();
+        return g === 'female' || g === 'male' ? g : g ? 'other' : 'not_given';
+      },
+    },
     attention: {
       label: 'Needs follow-up', population: 'all',
       question: 'Which students need someone to act, and why?',
@@ -2144,6 +2401,19 @@ async function getDimensions() {
       },
       valueOf: completedOnly(f => f.seaa_support.length ? f.seaa_support.map(x => x.key) : ['none']),
     },
+    parameters: {
+      label: 'Assessment parts completed', population: 'all', multi: true,
+      question: 'Which of the four assessment parts has each registered student finished? A student appears under every part they have finished.',
+      groups: () => PARAMETERS.map(p => ({ key: p.key, label: p.label, description: p.description })),
+      valueOf: (f) => PARAMETERS.filter(p => f[p.key + '_done']).map(p => p.key),
+    },
+    seaa_concern: {
+      label: 'SEAA concern', population: 'completed',
+      question: 'In how many of the three adjustment areas (social, emotional, academic) does each completed student need support?',
+      groups: (facts) => SEAA_CONCERNS.filter(c => c.key !== 'other' || facts.some(f => f.seaa_concern === 'other'))
+        .map(c => ({ key: c.key, label: c.label, description: c.description })),
+      valueOf: completedOnly(f => f.seaa_concern),
+    },
     fit_tier: {
       label: 'Overall career-fit', population: 'completed',
       question: 'How well do each completed student’s personality, aptitude and interests line up behind a career direction? (Integrated Fit Score.)',
@@ -2203,7 +2473,8 @@ async function getBreakdown(schools, dimensionId, { facts: preFacts, predicate }
   const ctx = await _analyticsContext(schools);
   const groups = dim.groups(facts, ctx);
   const classes = new Map();
-  const total = { population: 0, counts: {} };
+  // `completed`: how many in each group have finished the assessment.
+  const total = { population: 0, counts: {}, completed: {} };
   for (const g of groups) total.counts[g.key] = 0;
   for (const f of facts) {
     const keys = _asKeys(dim.valueOf(f, ctx));
@@ -2214,6 +2485,7 @@ async function getBreakdown(schools, dimensionId, { facts: preFacts, predicate }
     for (const k of keys) {
       c.counts[k] = (c.counts[k] || 0) + 1;
       total.counts[k] = (total.counts[k] || 0) + 1;
+      if (f.status === 'completed') total.completed[k] = (total.completed[k] || 0) + 1;
     }
   }
   // Groups with no definition yet (e.g. a career label renamed in cpi.js but
@@ -2221,6 +2493,13 @@ async function getBreakdown(schools, dimensionId, { facts: preFacts, predicate }
   for (const k of Object.keys(total.counts)) {
     if (!groups.some(g => g.key === k)) groups.push({ key: k, label: k, description: 'Value found in saved reports.' });
   }
+  // Counts in group order, so the same numbers always serialise the same way
+  // (the AI analysis fingerprints them) whatever order the rows arrived in.
+  const order = groups.map(g => g.key);
+  const ordered = (counts) => Object.fromEntries(order.filter(k => k in counts).map(k => [k, counts[k]]));
+  total.counts = ordered(total.counts);
+  total.completed = ordered(total.completed);
+  for (const c of classes.values()) c.counts = ordered(c.counts);
   return {
     dimension: { id: dimensionId, label: dim.label, question: dim.question, multi: !!dim.multi,
                  population: dim.population, population_label: POPULATION_LABEL[dim.population] },
@@ -2242,7 +2521,6 @@ async function getDrillStudents(schools, { dimension, groups, classKey, status, 
   const q = String(search || '').toLowerCase().trim();
   const qUid = match.normUid(search);
   let rows = facts.filter(f => {
-    if (classKey && f.class_key !== classKey) return false;
     if (status && f.status !== status) return false;
     if (q && !(String(f.full_name || '').toLowerCase().includes(q) || String(f.email || '').toLowerCase().includes(q)
                || (f.student_uid && match.normUid(f.student_uid) === qUid))) return false;
@@ -2253,14 +2531,24 @@ async function getDrillStudents(schools, { dimension, groups, classKey, status, 
     }
     return true;
   });
+  // How many of the matching students are in each class (before the class
+  // filter), so a grade-wise table always equals the list behind it.
+  const byClass = new Map();
+  for (const f of rows) {
+    if (!byClass.has(f.class_key)) byClass.set(f.class_key, { key: f.class_key, label: f.class_label, order: f.class_order, n: 0 });
+    byClass.get(f.class_key).n++;
+  }
+  const by_class = [...byClass.values()].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+  if (classKey) rows = rows.filter(f => f.class_key === classKey);
+  // Session id breaks ties, so pages of a long list never repeat or skip a student.
   rows.sort((a, b) => a.class_order - b.class_order || String(a.section || '').localeCompare(String(b.section || ''))
-    || String(a.full_name || '').localeCompare(String(b.full_name || '')));
+    || String(a.full_name || '').localeCompare(String(b.full_name || '')) || (a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0));
   const total = rows.length;
-  if (idsOnly) return { total, ids: rows.map(f => f.session_id) };
+  if (idsOnly) return { total, by_class, ids: rows.map(f => f.session_id) };
   const lim = Math.min(Math.max(_int(limit, 100), 1), 500);
   const off = Math.max(_int(offset, 0), 0);
   return {
-    total, limit: lim, offset: off,
+    total, limit: lim, offset: off, by_class,
     students: rows.slice(off, off + lim).map(f => ({
       session_id: f.session_id, full_name: f.full_name, first_name: f.first_name,
       class: f.class, class_label: f.class_label, section: f.section, school: f.school,
@@ -2268,6 +2556,8 @@ async function getDrillStudents(schools, { dimension, groups, classKey, status, 
       registered_at: f.registered_at, completed_at: f.completed_at, last_activity: f.last_activity,
       fit_score: f.fit_score, fit_tier: f.fit_tier, top_interest: f.top_interest,
       seaa_status: f.seaa_status, journey: f.journey || null,
+      seaa_concern: f.seaa_concern || null, seaa_scores: f.seaa_scores || null,
+      parameters_done: PARAMETERS.filter(p => f[p.key + '_done']).map(p => p.key),
       matched: dim ? _asKeys(dim.valueOf(f, ctx)) : [],
     })),
   };
@@ -2341,9 +2631,11 @@ async function getSchoolSummary(schools, { predicate } = {}) {
   const ctx = await _analyticsContext(schools);
   const dims = await getDimensions();
   const attn = dims.attention;
-  const blank = () => ({ total: 0, completed: 0, in_progress: 0, not_started: 0, follow_up: 0, support: 0, careers: {}, areas: { S: 0, E: 0, A: 0, other: 0 } });
+  const blank = () => ({ total: 0, completed: 0, in_progress: 0, not_started: 0, follow_up: 0, support: 0, completed_recent: 0, careers: {}, areas: { S: 0, E: 0, A: 0, other: 0 } });
+  const recentFrom = ctx.now - PULSE_WINDOW_DAYS * _DAY_MS;
   const add = (o, f) => {
     o.total++; o[f.status]++;
+    if (f.generated_at && new Date(f.generated_at).getTime() >= recentFrom) o.completed_recent++;   // dated by the report, as in the trend
     const a = attn.valueOf(f, ctx);
     if (a !== 'on_track') o.follow_up++;
     if (a === 'support') { o.support++; for (const ar of (f.seaa_support || [])) o.areas[ar.key] = (o.areas[ar.key] || 0) + 1; }
@@ -2374,10 +2666,103 @@ async function getSchoolSummary(schools, { predicate } = {}) {
                    follow_up: c.follow_up, support: c.support, support_areas: c.areas, completion_pct: pct(c.completed, c.total), top_career: top(c.careers) }));
     return { school: sc.school, total: sc.total, completed: sc.completed, in_progress: sc.in_progress, not_started: sc.not_started,
              follow_up: sc.follow_up, support: sc.support, support_areas: sc.areas, completion_pct: pct(sc.completed, sc.total),
+             completed_recent: sc.completed_recent, recent_days: PULSE_WINDOW_DAYS,
              target_pct: set.completion_target_pct, follow_up_after_days: set.follow_up_after_days,
              top_career: top(sc.careers), classes };
   }).sort((a, b) => a.school.localeCompare(b.school));
 }
+/* ── Pace and momentum (Insights) ───────────────────────────────────
+   Rolling windows ending now: "this week" is the last 7 days. */
+const PULSE_WINDOW_DAYS   = 7;    // one "week" for this-week vs last-week
+const PULSE_SPARK_WEEKS   = 12;   // weekly completions shown as a sparkline
+const PULSE_PACE_WEEKS    = 4;    // recent weeks averaged for the forecast
+const PULSE_REMINDER_DAYS = 30;   // reminders counted over this many days
+const _DAY_MS = 86400000;
+
+/* How the programme is moving, from the same facts as every other count:
+   this week against last (registrations, completions, activity), weekly
+   completions, the pace needed to reach each school's target and when it
+   will be reached at the recent pace, how far students get through the four
+   parts, the wellbeing picture (SEAA), and reminders sent to these students.
+   A completion is dated by its report (report_summary.generated_at), as in
+   the trend chart and the "completed" status itself. */
+async function getPulse(schools, { facts: preFacts, predicate } = {}) {
+  const facts = preFacts || await getStudentFacts(schools, { predicate });
+  const ctx = await _analyticsContext(schools);
+  const now = ctx.now, week = PULSE_WINDOW_DAYS * _DAY_MS;
+  const ts = (d) => (d ? new Date(d).getTime() : NaN);
+  const inWeek = (d, k) => { const t = ts(d); return t >= now - (k + 1) * week && t < now - k * week; };
+  const count = (pred) => facts.reduce((n, f) => n + (pred(f) ? 1 : 0), 0);
+
+  // Weekly completions, oldest first, ending with the current week.
+  const spark = Array.from({ length: PULSE_SPARK_WEEKS }, (_, i) => {
+    const k = PULSE_SPARK_WEEKS - 1 - i;
+    return { from: new Date(now - (k + 1) * week).toISOString(), completed: count(f => inWeek(f.generated_at, k)) };
+  });
+  const recent = spark.slice(-PULSE_PACE_WEEKS).reduce((n, w) => n + w.completed, 0);
+  const pacePerWeek = Math.round(recent / PULSE_PACE_WEEKS * 10) / 10;
+
+  // Each school is held to its own target; the gap is the sum of the gaps.
+  const bySchool = new Map();
+  for (const f of facts) {
+    const k = match.normSchool(f.school);
+    if (!bySchool.has(k)) bySchool.set(k, { school: f.school, total: 0, completed: 0 });
+    const x = bySchool.get(k); x.total++; if (f.status === 'completed') x.completed++;
+  }
+  let gap = 0, weighted = 0;
+  for (const x of bySchool.values()) {
+    const t = ctx.settings.forSchool(x.school).completion_target_pct;
+    gap += Math.max(0, Math.ceil(x.total * t / 100) - x.completed);
+    weighted += t * x.total;
+  }
+  const registered = facts.length;
+  const targets = [...new Set([...bySchool.values()].map(x => ctx.settings.forSchool(x.school).completion_target_pct))];
+  const weeksToTarget = gap === 0 ? 0 : pacePerWeek > 0 ? Math.ceil(gap / pacePerWeek) : null;
+
+  // How far students get: each part, then the full report.
+  const started = count(f => f.status !== 'not_started');
+  const funnel = [
+    { key: 'registered', label: 'Registered', students: registered },
+    { key: 'started', label: 'Started', students: started },
+    ...(PARAMETERS.map(p => ({ key: p.key, label: p.label + ' done', students: count(f => !!f[p.key + '_done']) }))),
+    { key: 'completed', label: 'All parts done, report ready', students: count(f => f.status === 'completed') },
+  ];
+
+  // Wellbeing (SEAA) results: concern in one or two areas ("intervention"),
+  // or in all three ("critical"), as the SEAA_LEVELS describe them.
+  const levelOf = new Map(SEAA_CONCERNS.map(c => [c.key, c.level]));
+  const seaa = { assessed: count(f => !!f.seaa_scores), levels: {}, by_area: {} };
+  for (const k of Object.keys(SEAA_LEVELS)) seaa.levels[k] = 0;
+  for (const f of facts) {
+    const lvl = levelOf.get(f.seaa_concern);
+    if (lvl && lvl in seaa.levels) seaa.levels[lvl]++;
+    for (const a of (f.seaa_support || [])) seaa.by_area[a.key] = (seaa.by_area[a.key] || 0) + 1;
+  }
+
+  const emails = [...new Set(facts.map(f => String(f.email || '').trim().toLowerCase()).filter(Boolean))];
+  const rem = emails.length ? await pg.one(
+    `SELECT COUNT(*)::int AS sent, COUNT(DISTINCT LOWER(student_email))::int AS students FROM reminder_log
+      WHERE sent_at >= now() - ($2 || ' days')::interval AND LOWER(student_email) = ANY($1)`,
+    [emails, String(PULSE_REMINDER_DAYS)]) : { sent: 0, students: 0 };
+
+  return {
+    window_days: PULSE_WINDOW_DAYS,
+    registrations: { this_week: count(f => inWeek(f.registered_at, 0)), last_week: count(f => inWeek(f.registered_at, 1)) },
+    completions:   { this_week: count(f => inWeek(f.generated_at, 0)),  last_week: count(f => inWeek(f.generated_at, 1)) },
+    active_this_week: count(f => inWeek(f.last_activity, 0)),
+    weekly_completions: spark,
+    target: {
+      registered, completed: count(f => f.status === 'completed'),
+      target_pct: registered ? Math.round(weighted / registered) : (targets[0] != null ? targets[0] : null),
+      per_school: targets.length > 1, completions_needed: gap,
+      pace_weeks: PULSE_PACE_WEEKS, pace_per_week: pacePerWeek, weeks_to_target: weeksToTarget,
+      expected_by: weeksToTarget ? new Date(now + weeksToTarget * week).toISOString() : null,
+    },
+    funnel, seaa,
+    reminders: { days: PULSE_REMINDER_DAYS, sent: rem.sent, students: rem.students },
+  };
+}
+
 // The attention groups behind the "Follow-up" and "Wellbeing" columns, so the
 // page opens exactly the students it counted.
 async function getFollowUpGroups() {
@@ -2386,8 +2771,8 @@ async function getFollowUpGroups() {
   return { follow_up: keys.filter(k => k !== 'on_track'), support: keys.filter(k => k === 'support') };
 }
 
-async function getAlerts(schools, { predicate } = {}) {
-  const facts = await getStudentFacts(schools, { predicate });
+async function getAlerts(schools, { facts: preFacts, predicate } = {}) {
+  const facts = preFacts || await getStudentFacts(schools, { predicate });
   const ctx = await _analyticsContext(schools);
   const dims = await getDimensions();
   const alerts = [];
@@ -2684,11 +3069,13 @@ module.exports = {
   getCareerDistribution,
   refreshAnalyticsCache,
   /* programme analytics (live; one source for charts, lists, alerts, AI) */
-  getCareerAreas, getDimensions, getStudentFacts, getBreakdown, getDrillStudents,
+  getCareerAreas, getDimensions, getStudentFacts, getBreakdown, getDrillStudents, getPulse,
   getProgrammeTrend, getAlerts, getAriaThemes, getGlossary, listClasses, getSchoolSummary, getFollowUpGroups,
   SCHEDULE_GROUPS, createSchedule, listSchedules, setScheduleActive, deleteSchedule, runDueSchedules, recentlyReminded,
   FOLLOWUP_TYPES, listFollowups, createFollowup, setFollowupDone, deleteFollowup,
-  WELLBEING_AREAS, WELLBEING_OTHER, wellbeingAreaOf,
+  WELLBEING_AREAS, WELLBEING_OTHER, wellbeingAreaOf, APP_TIMEZONE, SMALL_SCHOOL_MAX_STUDENTS,
+  PARAMETERS, SEAA_CONCERNS, SEAA_LEVELS, academicYearOf, academicYearLabel, ACADEMIC_YEAR_START_MONTH,
+  getSchoolGroups, groupIndex: _groupIndex, mergedSchoolOf, listSchoolNames, mergeSchools, getFlowStructure, schoolsOfBranch,
   getSettingsMap, saveSettings, SETTINGS_SCHEMA, classGroupOf,
   getReportPdfDataBatch,
 };
