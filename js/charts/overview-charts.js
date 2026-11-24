@@ -4,10 +4,7 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-import { CPI_AREAS } from '../engine/cpi.js';
-import { NMAP_DIMS } from '../engine/nmap.js';
 import { DAAB_SUBS, getStanine, stanineLabel } from '../engine/daab.js';
-import { SEA_DOMAINS } from '../engine/sea.js';
 import { CHARTS, destroyChart, stanineColor, CHART_ALPHA, SEL_CAT_LABEL } from './core.js';
 
 function buildOverviewCharts() {
@@ -31,7 +28,7 @@ function buildOverviewCharts() {
   }
   // Self-heal stale stanines (VA stored undefined under the old gapped norms →
   // missing bar). Re-derive from the stored raw and write back so every surface
-  // reading S.daab agrees. Matches daab-charts.js / report-charts.js.
+  // reading S.daab agrees. Matches daab-charts.js.
   const _gender = (S.student && S.student.gender) || 'M';
   available.forEach((k) => {
     const sc = S.daab[k].scores;

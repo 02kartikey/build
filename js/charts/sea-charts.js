@@ -4,7 +4,6 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-import { SEA_DOMAINS } from '../engine/sea.js';
 import { CHARTS, destroyChart, SEL_CAT_COLOR, SEL_DOM_INFO } from './core.js';
 
 function buildSELCharts() {

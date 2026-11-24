@@ -4,7 +4,6 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-import { CPI_AREAS } from '../engine/cpi.js';
 import { CHARTS, destroyChart, CHART_ALPHA } from './core.js';
 
 function buildCPICharts() {
@@ -107,7 +106,6 @@ function buildCPICharts() {
   // ── Summary stats ──
   const statsEl = document.getElementById('chart-cpi-stats');
   if (statsEl && cpi.top3.length) {
-    const total = cpi.ranked.reduce((s,a)=>s+a.score,0);
     // Tiles speak in the tracker's interest bands (Key / Secondary / Exploring),
     // never raw numbers: "Top Score 11" and "0 Strong Areas" read as failure to
     // a parent when they are simply a moderate profile.

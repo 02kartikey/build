@@ -48,12 +48,9 @@ function stanineColor(s, alpha) {
   return CHART_ALPHA(hex, alpha);
 }
 
-function stanineZoneLabel(s) {
-  return s <= 3 ? '🔴 Needs Attention' : s <= 6 ? '🟡 Developing' : '🟢 Strength';
-}
 
 /* ── Shared SEL/SEA colour maps (single source of truth) ──────────────────
-   Import these in sea-charts.js AND report-charts.js so both stay in sync.  */
+   Imported by sea-charts.js and overview-charts.js so both stay in sync.  */
 
 /** Cat A (best adjustment) → green … Cat E (most concern) → red */
 const SEL_CAT_COLOR = {
@@ -86,4 +83,4 @@ const SEL_DOM_INFO = {
    CPI CHARTS
 ═══════════════════════════════════════ */
 
-export { CHARTS, destroyChart, switchChartTab, CHART_ALPHA, stanineColor, stanineZoneLabel, SEL_CAT_COLOR, SEL_CAT_LABEL, SEL_DOM_INFO };
+export { CHARTS, destroyChart, switchChartTab, CHART_ALPHA, stanineColor, SEL_CAT_COLOR, SEL_CAT_LABEL, SEL_DOM_INFO };

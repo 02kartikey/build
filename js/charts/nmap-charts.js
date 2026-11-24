@@ -4,7 +4,6 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S } from '../state.js';
-import { NMAP_DIMS } from '../engine/nmap.js';
 import { CHARTS, destroyChart, stanineColor, CHART_ALPHA } from './core.js';
 
 function buildNMAPCharts() {
@@ -14,7 +13,6 @@ function buildNMAPCharts() {
   const dims = nmap.dims;
   const labels = dims.map(d => d.abbr);
   const stanines = dims.map(d => d.stanine);
-  const pcts = dims.map(d => d.pct);
   const colors = dims.map(d => stanineColor(d.stanine));
 
   // ── 2. Vertical bar ──
