@@ -47,25 +47,24 @@ services:
       - key: LOG_LEVEL
         value: warn
 
-      # NOTE: PORT is deliberately absent — Render injects it and server.js:42
+      # NOTE: PORT is deliberately absent — Render injects it and server.js
       # reads process.env.PORT. Setting it by hand only risks a mismatch.
       #
       # NOTE: PGSSL is deliberately absent — pg-core.js already defaults to
       # SSL-on for the DATABASE_URL path. Setting PGSSL=disable breaks Render.
       #
-      # NOTE: IP_RL_MAX is deliberately absent — it defaults to 200 in
-      # server.js:201. The value 1000000 is the LOAD-TEST override and must
-      # never reach production; it disables IP rate limiting entirely.
+      # NOTE: IP_RL_MAX is deliberately absent — it defaults to 200 requests
+      # per IP per minute in server.js. The value 1000000 is the LOAD-TEST
+      # override and must never reach production; it disables IP limiting.
 
       # ---- Secrets: Render prompts for these on Apply, never in git ----
       - key: APP_TOKEN
         generateValue: true    # Render generates a fresh secure random value.
-                               # Safe: server.js:308 injects it into the page
-                               # meta tag and the client reads it back, so no
-                               # hardcoded value needs to match. Also rotates
-                               # the token that leaked in your screenshot.
+                               # Safe: server.js injects it into each page's
+                               # <meta name="app-token"> and the client reads
+                               # it back, so no hardcoded value needs to match.
       - key: OPENAI_API_KEY
-        sync: false            # paste the NEW key (rotate the leaked one)
+        sync: false            # set in the Render dashboard; never commit it
       - key: SMTP_PASS
         sync: false            # Gmail app password
       - key: ALLOWED_ORIGIN

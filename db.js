@@ -30,31 +30,17 @@ async function _initDb() {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   CLASS MATCHING  (shared, free-text tolerant — single source of truth)
-   Class is stored as free text ("10", "10-B", "Grade 10"). A strict === made
-   correct students fail. classMatches compares a normalised key and, failing
-   that, the numeric grade — the part a student reliably knows — so "10-B" and
-   "10" match while a genuinely different class does not. No grade whitelist:
-   whatever number is on record is compared, so classes outside 9-12 keep
-   working. Used by verify-identity (server.js), the same-class retake lock
-   (below) and dashboard class/section scoping (dashboard-api.js) so all three
-   agree. classKey alone gives case-insensitive exact equality (used for
-   sections, which have no grade number).
+   CLASS MATCHING
+   Class is stored as free text ("10", "10-B", "Grade 10", "X"). Grade-aware
+   equality is match-utils.classMatches (digits or roman numerals; the section
+   suffix is ignored), the one rule shared by verify-identity (server.js), the
+   same-class retake lock (below) and dashboard class scoping. classKey is
+   plain case/punctuation-insensitive equality, used for sections.
 ══════════════════════════════════════════════════════════════════ */
 function classKey(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
-function classGrade(s) {
-  const m = classKey(s).match(/\d+/);
-  return m ? m[0] : '';
-}
-function classMatches(a, b) {
-  const ka = classKey(a), kb = classKey(b);
-  if (!ka || !kb) return false;
-  if (ka === kb) return true;
-  const ga = classGrade(a), gb = classGrade(b);
-  return !!ga && ga === gb;
-}
+const classMatches = require('./match-utils.js').classMatches;
 
 /* ══════════════════════════════════════════════════════════════════
    REPORT VOCABULARY  (single source of truth)
@@ -280,35 +266,8 @@ async function saveRegistration(student, sessionId) {
         ]
       );
 
-      // Auto-register unseen school names. Best-effort — never fail registration.
-      const schoolName = String(student.school || '').trim();
-      if (schoolName) {
-        try {
-          const already = await c.query(
-            `SELECT id FROM schools_registry WHERE name = $1`, [schoolName]
-          );
-          if (already.rowCount === 0) {
-            await c.query(
-              `INSERT INTO schools_registry (name, city, state, added_at, active)
-               VALUES ($1,$2,$3,$4,TRUE)
-               ON CONFLICT (name) DO NOTHING`,
-              [schoolName, student.schoolCity || null, student.schoolState || null, nowIso]
-            );
-            try {
-              await c.query(
-                `INSERT INTO audit_log (user_id, user_email, action, target, detail, ip, ts)
-                 VALUES (NULL, $1, 'school_auto_registered', $2, $3, NULL, $4)`,
-                [
-                  norm || 'unknown',
-                  schoolName,
-                  JSON.stringify({ city: student.schoolCity || null, state: student.schoolState || null, via: 'student_registration' }),
-                  nowIso,
-                ]
-              );
-            } catch (_) { /* audit_log unavailable — non-fatal */ }
-          }
-        } catch (_) { /* schools_registry unavailable — non-fatal */ }
-      }
+      // The school registry is the admins' list; a typed school name is not
+      // added to it (see School registry → Merge school names in the dashboard).
 
       return { session_id: effectiveSessionId, existing: false, testTaken: false, ..._lock };
     });
@@ -684,53 +643,6 @@ function deriveDisplayRowsFromAssessmentRow(row) {
   };
 }
 
-async function getFullReport(sessionId) {
-  await _initDb();
-  const [student, assessments, summary, personality, aptitude, interests, seaa, careers] = await Promise.all([
-    pg.one(`SELECT * FROM students          WHERE session_id = $1`, [sessionId]),
-    pg.one(`SELECT * FROM assessments       WHERE session_id = $1`, [sessionId]),
-    pg.one(`SELECT * FROM report_summary    WHERE session_id = $1`, [sessionId]),
-    pg.many(`SELECT * FROM report_personality WHERE session_id = $1 ORDER BY position`, [sessionId]),
-    pg.many(`SELECT * FROM report_aptitude    WHERE session_id = $1 ORDER BY position`, [sessionId]),
-    pg.many(`SELECT * FROM report_interests   WHERE session_id = $1 ORDER BY rank`,     [sessionId]),
-    pg.many(`SELECT * FROM report_seaa        WHERE session_id = $1`,                   [sessionId]),
-    pg.many(`SELECT * FROM report_careers     WHERE session_id = $1 ORDER BY position`, [sessionId]),
-  ]);
-  return { student, assessments, summary, personality, aptitude, interests, seaa, careers };
-}
-
-/* Completed-module snapshot for resume-after-relogin. save-section persists
-   each finished module's scores + raw answers, but nothing ever read them
-   back — so a student who logged out resumed from module 1 with an empty
-   client. Returns only modules that actually completed. */
-async function getSessionProgress(sessionId) {
-  await _initDb();
-  const row = await pg.one(`SELECT * FROM assessments WHERE session_id = $1`, [sessionId]);
-  if (!row) return { modules: {} };
-  const modules = {};
-  for (const m of MODULES) {
-    if (row[`${m}_completed_at`]) {
-      const sc = row[`${m}_scores_json`];
-      const ra = row[`${m}_raw_answers`];
-      modules[m] = {
-        scores:      typeof sc === 'string' ? JSON.parse(sc) : sc,
-        raw_answers: typeof ra === 'string' ? JSON.parse(ra) : ra,
-        completed_at: row[`${m}_completed_at`],
-      };
-    }
-  }
-  return { modules };
-}
-
-async function getSectionProgress(sessionId) {
-  await _initDb();
-  return pg.many(
-    `SELECT module_key, submitted_at, duration_seconds
-     FROM section_progress WHERE session_id = $1 ORDER BY id ASC`,
-    [sessionId]
-  );
-}
-
 /* Shared email → student+summary snapshot query (used in and out of tx). */
 const _EMAIL_LOOKUP_SQL = `
   SELECT s.*, rs.fit_tier, rs.fit_score, rs.recommended_primary, rs.seaa_status
@@ -749,15 +661,6 @@ async function getStudentByEmail(email) {
   if (!email) return null;
   await _initDb();
   return pg.one(_EMAIL_LOOKUP_SQL, [String(email).toLowerCase().trim()]);
-}
-
-async function resolveStudentByEmail(email) {
-  const norm = String(email || '').toLowerCase().trim();
-  if (!norm) return { session_id: null, exists: false, testTaken: false };
-  await _initDb();
-  const row = await pg.one(_EMAIL_LOOKUP_SQL, [norm]);
-  if (!row) return { session_id: null, exists: false, testTaken: false };
-  return { session_id: row.session_id, exists: true, testTaken: row.fit_tier != null };
 }
 
 async function getStudentBySessionId(sessionId) {
@@ -1263,11 +1166,6 @@ async function rescoreDaabStanines({ commit = false, email = null, gender = null
   return { studentsChanged, subtestsChanged, summaries, committed: commit };
 }
 
-// Backward-compatible wrapper: original female-only entry point.
-async function rescoreDaabFemale(opts = {}) {
-  return rescoreDaabStanines({ ...opts, gender: 'f' });
-}
-
 function _deriveInterests(assessments) {
   const cpi    = assessments && assessments.cpi && assessments.cpi.scores;
   const ranked = (cpi && Array.isArray(cpi.ranked)) ? cpi.ranked : [];
@@ -1394,11 +1292,7 @@ module.exports = {
   saveRegistration,
   saveSection,
   saveReport,
-  getFullReport,
-  getSectionProgress,
-  getSessionProgress,
   getStudentByEmail,
-  resolveStudentByEmail,
   getStudentBySessionId,
   getJourney,
   backfillJourneyHistory,
@@ -1409,9 +1303,7 @@ module.exports = {
   journeyIdentity,
   SUMMARY_STATUS, STATUS_THRESHOLDS, INTEREST_THRESHOLDS, FIT_TIERS, STANINE_BANDS, fitTierFor,
   rescoreDaabStanines,
-  rescoreDaabFemale,
   classKey,
-  classGrade,
   classMatches,
   close,
   MODULES,

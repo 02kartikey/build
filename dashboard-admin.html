@@ -321,6 +321,7 @@ input.ti:focus,select.ti:focus{border-color:var(--brand);box-shadow:0 0 0 3px rg
         <div class="sb-avatar" id="sb-avatar">A</div>
         <div><div class="sb-name" id="sb-name">Admin</div><div class="sb-role">Super Admin</div></div>
       </div>
+      <button class="btn-logout btn-acct" style="margin-bottom:6px" onclick="NM.changePassword()">Change password</button>
       <button class="btn-logout" onclick="doLogout()">Sign out</button>
     </div>
   </aside>
@@ -670,23 +671,6 @@ Please log in and complete all four modules at your earliest convenience. It tak
 </div>
 
 <!-- CHANGE PASSWORD MODAL -->
-<div class="overlay" id="chpwd-modal">
-  <div class="modal" style="max-width:420px">
-    <div class="modal-title">Change Password</div>
-    <div class="modal-sub">Update your admin account password.</div>
-    <div class="modal-warn">⚠️ You will be logged out after changing your password.</div>
-    <label class="fl">Current Password</label>
-    <input class="fi" type="password" id="cp-old" placeholder="••••••••">
-    <label class="fl">New Password</label>
-    <input class="fi" type="password" id="cp-new" placeholder="Min. 8 characters">
-    <label class="fl">Confirm New Password</label>
-    <input class="fi" type="password" id="cp-confirm" placeholder="Repeat new password">
-    <div class="modal-foot">
-      <button class="btn btn-outline" onclick="closeModal('chpwd-modal')">Cancel</button>
-      <button class="btn btn-primary" id="cp-save" onclick="changePassword()"><span id="cp-lbl">Update Password</span><span class="spinner isp" id="cp-sp"></span></button>
-    </div>
-  </div>
-</div>
 
 <!-- SCHEDULED REMINDER MODAL -->
 <!-- CONFIRM -->
@@ -716,7 +700,7 @@ const CHIP_COLORS=['#7c3aed','#10b981','#3b82f6','#f59e0b','#ef4444'];
 async function _api(method,url,body,auth=true,timeoutMs){
   const h={'Content-Type':'application/json'};
   if(auth&&_token)h['Authorization']='Bearer '+_token;
-  const _atMeta=document.querySelector('meta[name="app-token"]');const at=_atMeta?(_atMeta.getAttribute('content')||''):(typeof window._APP_TOKEN!=='undefined'?window._APP_TOKEN:'');
+  const _atMeta=document.querySelector('meta[name="app-token"]');const at=(_atMeta&&_atMeta.getAttribute('content'))||'';
   if(at)h['X-App-Token']=at;
   const opts={method,headers:h};
   if(body&&method!=='GET')opts.body=JSON.stringify(body);
@@ -770,7 +754,7 @@ async function fpRequest(){
   if(!email){err.textContent='Enter your account email.';err.style.display='block';return;}
   btn.disabled=true;btn.textContent='Sending…';
   try{
-    const res=await _api('POST','/api/dashboard/forgot-password',{email},false);
+    await _api('POST','/api/dashboard/forgot-password',{email},false);
     document.getElementById('fp-step1').style.display='none';
     document.getElementById('fp-step2').style.display='block';
     const note=document.getElementById('fp-note');
@@ -929,7 +913,7 @@ async function stuSelectAllMatching(){
 function stuDownloadZip(){if(_stuSel.size)NM.downloadReports([..._stuSel],'Selected students');}
 function _stuBar(){const n=_stuSel.size;document.getElementById('stu-sel-info').textContent=n?n+' selected':'';document.getElementById('stu-rem-btn').style.display=n?'':'none';document.getElementById('stu-zip-btn').style.display=n?'':'none';}
 function openReminderModal(){NM.composeReminder({ids:[..._stuSel],label:_stuSel.size+' selected student'+(_stuSel.size!==1?'s':''),onSent:()=>loadReminderLog()});}
-// FIX: data-* helper avoids quote-injection when student names contain quotes.
+// data-* attributes carry the values, so quotes in a student's name cannot break the markup.
 /* ── Access code cell + actions ──────────────────────────────────
    The code is the student's credential for starting the assessment, so it is
    shown in full to staff (they read it out / print it) with one-click copy and
@@ -1384,17 +1368,6 @@ async function saveSchedule(){
 async function toggleSchedule(id,active){try{await _api('PUT','/api/dashboard/schedules/'+id,{active});loadScheduled();}catch(e){toast(e.message,'error');}}
 function deleteSchedule(id){document.getElementById('cf-title').textContent='Delete this schedule?';document.getElementById('cf-body').textContent='No more reminders will be sent from it. Emails already sent stay in the Reminder log.';document.getElementById('cf-ok').onclick=async()=>{closeConfirm();try{await _api('DELETE','/api/dashboard/schedules/'+id);toast('Schedule deleted.','success');loadScheduled();}catch(e){toast(e.message,'error');}};document.getElementById('conf-ov').classList.add('open');}
 
-// ── CHANGE PASSWORD ──
-function openChangePasswordModal(){['cp-old','cp-new','cp-confirm'].forEach(id=>document.getElementById(id).value='');openModal('chpwd-modal');}
-async function changePassword(){
-  const oldP=document.getElementById('cp-old').value,newP=document.getElementById('cp-new').value,conf=document.getElementById('cp-confirm').value;
-  if(!oldP||!newP){toast('All fields required.','error');return;}
-  if(newP.length<8){toast('New password must be at least 8 characters.','error');return;}
-  if(newP!==conf){toast('Passwords do not match.','error');return;}
-  setLoad('cp-lbl','cp-sp','cp-save',true);
-  try{await _api('POST','/api/dashboard/change-password',{old_password:oldP,new_password:newP});toast('Password changed. Please log in again.','success');setTimeout(()=>doLogout(),1500);}
-  catch(e){toast('Error: '+e.message,'error');}finally{setLoad('cp-lbl','cp-sp','cp-save',false);}
-}
 
 // ── UTILS ──
 function _sbadge(s){const m={completed:['b-completed','✓ Completed'],in_progress:['b-in_progress','In Progress'],not_started:['b-not_started','○ Not Started']};const[cls,lbl]=m[s]||['b-not_started',s||'—'];return '<span class="badge '+cls+'">'+lbl+'</span>';}
@@ -1402,7 +1375,6 @@ function _mDots(n,label=false){let h='<div class="mprog">';for(let i=0;i<4;i++)h
 function _fmtDate(iso){if(!iso)return '—';return new Date(iso).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});}
 // Clickable element that opens the shared student list (see NM.openDrill).
 // JSON in a data attribute — never interpolated into inline JavaScript.
-function _drillAttr(o){return 'data-nm="drill" data-o="'+_esc(JSON.stringify(o))+'"';}
 // A value passed to an inline handler: a JSON string literal, HTML-escaped,
 // so names containing quotes cannot break out of the handler.
 function _jsArg(v){return _esc(JSON.stringify(String(v==null?'':v)));}

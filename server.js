@@ -1,14 +1,16 @@
 /* ════════════════════════════════════════════════════════════════════
-   server.js — NuMind MAPS  |  Node.js 18+ / CommonJS / PM2 cluster
+   server.js — NuMind MAPS  |  Node.js 22 / CommonJS / PM2 cluster
 
    HTTP server: static files (gzip + ETag + in-memory cache), student
    assessment APIs, OpenAI streaming proxy, AI counsellor auth + chat,
    and /api/dashboard/* (delegated to dashboard-api.js).
 
    Env vars: PORT, APP_TOKEN, OPENAI_API_KEY, OPENAI_BASE_URL,
-   OPENAI_MODEL, COUNSELLOR_MODEL, ALLOWED_ORIGIN, LOG_LEVEL,
-   MAX_CONCURRENT_AI, MAX_CONCURRENT_CHAT, SMTP_HOST/PORT/USER/PASS,
-   NOTIFICATION_EMAIL, LISTEN_BACKLOG,
+   OPENAI_MODEL, COUNSELLOR_MODEL, DASHBOARD_INSIGHTS_MODEL,
+   DASHBOARD_ASSISTANT_MODEL, ALLOWED_ORIGIN, LOG_LEVEL,
+   MAX_CONCURRENT_AI, MAX_CONCURRENT_CHAT, IP_RL_MAX, LISTEN_BACKLOG,
+   SMTP_HOST/PORT/USER/PASS, NOTIFICATION_EMAIL, CRISIS_HELPLINE,
+   ALLOW_SELF_SIGNUP (signup-gate.js),
    DATABASE_URL / PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE, PG_POOL_MAX, PGSSL
 ════════════════════════════════════════════════════════════════════ */
 'use strict';
@@ -245,15 +247,14 @@ setInterval(() => {
   ]).catch(() => {});
 }, RL_WINDOW).unref();
 
-const ANALYTICS_REFRESH_MS = 5 * 60 * 1000;
-setTimeout(() => {
-  const _doRefresh = () => {
-    require('./dashboard-db.js').refreshAnalyticsCache()
-      .catch((e) => log.warn('[Analytics] cache refresh failed:', e.message));
-  };
-  _doRefresh();
-  setInterval(_doRefresh, ANALYTICS_REFRESH_MS).unref();
-}, 30 * 1000).unref();
+// Hourly housekeeping of the shared cache tables. One worker is enough: PM2
+// cluster instance 0, or the sole process when not under PM2 (as on Render).
+if (!process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === '0') {
+  const _prune = () => require('./dashboard-db.js').pruneCaches()
+    .catch((e) => log.warn('[Housekeeping] cache prune failed:', e.message));
+  setTimeout(_prune, 30 * 1000).unref();
+  setInterval(_prune, 60 * 60 * 1000).unref();
+}
 
 function _openaiReqRaw(endpoint, body) {
   return new Promise((resolve, reject) => {
@@ -566,7 +567,7 @@ function _respondCached(res, req, entry, ext) {
 }
 
 function _prewarm() {
-  const hot = ['index.html', 'styles.css', 'main.js', 'ai-counsellor.js', 'state.js', 'router.js'].map(f => path.join(__dirname, f));
+  const hot = ['index.html', 'styles.css', 'js/main.js', 'js/ai-counsellor.js', 'js/state.js', 'js/router.js'].map(f => path.join(__dirname, f));
   for (const p of hot) {
     if (!fs.existsSync(p)) continue;
     _serveFromDisk({ writeHead: () => {}, end: () => {} }, p, path.extname(p).toLowerCase(), null);
@@ -587,8 +588,12 @@ function _readBody(req, maxBytes = 512 * 1024) {
     });
     req.on('end', () => {
       if (tooLarge) return;
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-      catch { reject(new Error('invalid_json')); }
+      // A JSON body that is not an object (null, a number, a string) is
+      // treated as empty so handlers can read fields without a type check.
+      let v;
+      try { v = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { return reject(new Error('invalid_json')); }
+      resolve(v && typeof v === 'object' ? v : {});
     });
     req.on('error', reject);
   });
@@ -607,7 +612,7 @@ function _checkToken(req) {
   }
   const received = req.headers['x-app-token'] || '';
   if (received.length !== APP_TOKEN.length) return false;
-  try { return require('crypto').timingSafeEqual(Buffer.from(received), Buffer.from(APP_TOKEN)); }
+  try { return crypto.timingSafeEqual(Buffer.from(received), Buffer.from(APP_TOKEN)); }
   catch { return false; }
 }
 
@@ -705,10 +710,8 @@ async function _handleSaveReport(req, res) {
     : null;
   if (!studentRow) return _json(res, 404, { error: 'Session not found.' });
 
-  if (_aiInFlight >= MAX_CONCURRENT_AI) {
-    log.warn('[save-report] AI cap hit —', _aiInFlight, '/', MAX_CONCURRENT_AI, 'in flight');
-    return _json(res, 429, { error: 'Report generation is busy. Please wait 30 seconds and try again.', retry_after: 30 });
-  }
+  // No AI-concurrency gate here: saving is a DB write, and refusing it while
+  // report streams are busy dropped finished reports at peak load.
   try {
     await dbModule.saveReport(body);
     if (body?.student?.email) {
@@ -1033,13 +1036,12 @@ async function _handleCounsellorVerifyIdentity(req, res) {
 
     // Names are matched leniently: casing, punctuation and extra spacing are
     // ignored, and a middle name on one side (but not the other) is tolerated
-    // by falling back to a first-token + last-token match. This fixes false
-    // rejections for students whose registered name has a middle name, a dot,
-    // or odd spacing from a bulk import.
-    const norm = s => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+    // by falling back to a first-token + last-token match, so a registered
+    // middle name, a dot, or odd spacing from a bulk import does not reject.
+    const { normName } = require('./match-utils.js');
     const nameMatch = (stored, typed) => {
-      const a = norm(stored).split(' ').filter(Boolean);
-      const b = norm(typed).split(' ').filter(Boolean);
+      const a = normName(stored).split(' ').filter(Boolean);
+      const b = normName(typed).split(' ').filter(Boolean);
       if (!a.length || !b.length) return false;
       if (a.join(' ') === b.join(' ')) return true;
       return a[0] === b[0] && a[a.length - 1] === b[b.length - 1];
@@ -1543,7 +1545,7 @@ async function _handleCounsellorQuery(req, res) {
           message,
           '',
           '\u2014 NuMind MAPS Team',
-        ].filter(l => l !== null).join('\n'),
+        ].join('\n'),
       }).catch(emailErr => log.warn('[counsellor-query] confirmation email failed:', emailErr.message));
     }
 
@@ -1575,7 +1577,8 @@ async function _handleRequest(req, res) {
   if (method === 'GET' && pathname === '/health') {
     let dbOk = true;
     try { dbOk = await require('./pg-core.js').ping(); } catch { dbOk = false; }
-    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight };
+    // restartNeeded: files on disk are newer than the code this process runs.
+    const payload = { ok: dbOk, uptime: Math.floor((Date.now() - _startTime) / 1000), aiInFlight: _aiInFlight, restartNeeded: dashApi.restartNeeded() };
     res.writeHead(dbOk ? 200 : 503, { 'Content-Type': 'application/json' });
     return res.end(JSON.stringify(payload));
   }
@@ -1765,7 +1768,7 @@ server.listen(PORT, LISTEN_BACKLOG, () => {
     `\n✅  NuMind MAPS  →  http://localhost:${PORT}\n` +
     `    Listen backlog: ${LISTEN_BACKLOG}\n` +
     `    PostgreSQL  : ${process.env.DATABASE_URL ? '*** (DATABASE_URL)' : (process.env.PGHOST || '127.0.0.1') + ':' + (process.env.PGPORT || '5432') + '/' + (process.env.PGDATABASE || 'numind')}\n` +
-    `    Token       : ${APP_TOKEN ? '*** (set)' : '(not set — open access)'}\n` +
+    `    Token       : ${APP_TOKEN ? '*** (set)' : '(not set — student APIs will reject every request)'}\n` +
     `    AI models   : ${AI_MODEL} / chat: ${CHAT_MODEL}\n` +
     `    OpenAI      : ${OPENAI_KEY ? '*** (set)' : '(not set — AI disabled)'}\n` +
     `    CORS        : ${ALLOWED_ORIGIN}\n` +

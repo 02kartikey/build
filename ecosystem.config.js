@@ -1,6 +1,6 @@
 /* ════════════════════════════════════════════════════════════════════
    ecosystem.config.js  —  PM2 cluster config for NuMind MAPS
-   Target: 20 000 users/day, Node.js 18+
+   Node.js 22
 
    Quick start:
      mkdir -p logs
@@ -9,7 +9,7 @@
      pm2 startup   ← run the printed command to auto-start on reboot
 
    Scale rationale:
-     • cluster mode forks one process per CPU core
+     • cluster mode runs `instances` workers (4 here; 'max' = one per core)
      • each worker has its own PostgreSQL pool (PG_POOL_MAX connections), so
        workers × PG_POOL_MAX must stay under the database's max_connections
      • max_memory_restart kills any worker leaking past 512 MB
@@ -28,7 +28,7 @@ module.exports = {
     script:  './server.js',
     cwd:     path.resolve(__dirname),   // always resolve relative to this file
 
-    instances:  4,       // one per CPU core
+    instances:  4,       // fixed worker count; 'max' would use one per CPU core
     exec_mode:  'cluster',
     watch:      false,
 

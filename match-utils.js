@@ -53,6 +53,8 @@ const SCHOOL_MIN_QUERY  = 3;
    Strip everything that varies between how a school types its own name
    and how a student remembers it: case, punctuation, and spacing.
    "ABPS,BAGA" / "A.B.P.S. Baga" / "abps  baga" → "abpsbaga". */
+// SQL twin of normSchool (used by the school_merges trigger in pg-core).
+const sqlNormSchool = (col) => `regexp_replace(lower(${col}), '[^a-z0-9]+', '', 'g')`;
 function normSchool(s) {
   return String(s || '')
     .toLowerCase()
@@ -90,6 +92,61 @@ function schoolMatches(typed, stored) {
     if (at.every((w, i) => bt[i] === w || bt[i].startsWith(w))) return true;
   }
   return false;
+}
+
+/* ─── Likely duplicate school names ──────────────────────────────────
+   For suggesting merges, never for matching on its own: an admin reviews
+   every suggestion. Two names are likely the same school when, ignoring
+   case and punctuation, they differ by a typo (one letter for names under
+   SCHOOL_TYPO_LONG letters, two for longer), or are the same once words that
+   do not tell schools apart are dropped ("ABPS Baga Branch" = "ABPS Baga").
+   Names shorter than SCHOOL_FUZZY_MIN letters only match exactly. */
+const SCHOOL_FUZZY_MIN = 6;
+const SCHOOL_TYPO_LONG = 12;
+const SCHOOL_FILLER_WORDS = Object.freeze(new Set(['the', 'school', 'schools', 'branch', 'campus', 'public', 'senior', 'secondary', 'sr', 'sec']));
+const schoolCoreKey = (s) => tokenSchool(s).split(' ').filter(w => w && !SCHOOL_FILLER_WORDS.has(w)).join('');
+
+// Levenshtein distance between a and b, or max + 1 as soon as it exceeds max.
+function editDistanceWithin(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+function likelySameSchool(a, b) {
+  const close = (x, y) => {
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const short = Math.min(x.length, y.length);
+    if (short < SCHOOL_FUZZY_MIN) return false;
+    const max = short >= SCHOOL_TYPO_LONG ? 2 : 1;
+    return editDistanceWithin(x, y, max) <= max;
+  };
+  return close(normSchool(a), normSchool(b)) || close(schoolCoreKey(a), schoolCoreKey(b));
+}
+/* Groups of names (two or more) that are likely one school, as lists of the
+   given names. Linked transitively: if A is like B and B like C, all three. */
+function likelyDuplicateGroups(names) {
+  const list = [...new Set(names || [])];
+  const parent = list.map((_, i) => i);
+  const find = (i) => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      if (find(i) !== find(j) && likelySameSchool(list[i], list[j])) parent[find(j)] = find(i);
+    }
+  }
+  const groups = new Map();
+  list.forEach((n, i) => { const r = find(i); if (!groups.has(r)) groups.set(r, []); groups.get(r).push(n); });
+  return [...groups.values()].filter(g => g.length > 1);
 }
 
 /* ─── Roman numerals ─────────────────────────────────────────────────
@@ -225,7 +282,7 @@ function nameMatches(a, b) {
 
 module.exports = {
   GRADE_MIN, GRADE_MAX, SCHOOL_MIN_QUERY,
-  normSchool, tokenSchool, schoolMatches,
+  normSchool, sqlNormSchool, tokenSchool, schoolMatches, likelySameSchool, likelyDuplicateGroups,
   romanToInt, classGradeNumber, classMatches,
   normName, nameMatches,
   cleanUid, normUid, uidSchoolKey, sqlUidSchoolKey, sqlUid, sqlHasUid,

@@ -311,6 +311,8 @@ CREATE TABLE IF NOT EXISTS report_careers (
 
 CREATE INDEX IF NOT EXISTS idx_students_school      ON students(school);
 CREATE INDEX IF NOT EXISTS idx_students_school_ci   ON students(LOWER(school));
+-- The school key every dashboard query filters on (match-utils sqlNormSchool).
+CREATE INDEX IF NOT EXISTS idx_students_school_key  ON students((regexp_replace(lower(school), '[^a-z0-9]+', '', 'g')));
 CREATE INDEX IF NOT EXISTS idx_students_class       ON students(class);
 CREATE INDEX IF NOT EXISTS idx_students_registered  ON students(registered_at);
 CREATE INDEX IF NOT EXISTS idx_students_email       ON students(email);
@@ -730,7 +732,7 @@ async function close() {
    by every filter, GROUP BY and DISTINCT that touches free-text columns. They
    are EXACT (case+whitespace-insensitive) equality on purpose: picking "10-B"
    must return 10-B, not all of grade 10. The grade-tolerant identity match
-   (db.js classMatches, used by verify-identity and the retake lock) is a
+   (match-utils classMatches, used by verify-identity and the retake lock) is a
    deliberately different, richer rule that lives at the JS layer.
 
    `col` and `ph` are trusted SQL fragments supplied by call sites in this

@@ -72,52 +72,43 @@ async function saveQuery({ name, email, message, preferredDate, preferredTime })
   return row ? row.id : null;
 }
 
+/* Staff scope for student queries: a query belongs to a school when a student
+   registered with that email is at the school. The email is cast to CITEXT so
+   the match is case-insensitive and uses the students.email index; school
+   names compare by match-utils normSchool, as everywhere else.
+   EXISTS (not JOIN) so a student with several attempts does not repeat rows. */
+function _queryScopeSql(schools, params) {
+  const start = params.length;
+  const mu = require('./match-utils.js');
+  params.push(...schools.map(s => mu.normSchool(s)));
+  const ph = schools.map((_, i) => `$${start + i + 1}`).join(',');
+  return `EXISTS (SELECT 1 FROM students st
+                  WHERE st.email = cq.email::citext
+                    AND ${mu.sqlNormSchool('st.school')} IN (${ph}))`;
+}
+
+/* `schools` omitted = every query (admin). An array scopes the list, and an
+   empty array (staff with no schools assigned) sees nothing. */
 async function listQueries({ status, limit = 200, offset = 0, schools } = {}) {
-  // School scoping: join students on email (CITEXT → case-insensitive join),
-  // then filter on students.school. That column is plain TEXT, so the school
-  // comparison must lower-case BOTH sides — otherwise a casing mismatch between
-  // the stored school name and the caller's assigned-school list silently drops
-  // queries. Mirrors dashboard-db.js's `LOWER(s.school) IN (lowercased list)`.
-  if (Array.isArray(schools) && schools.length) {
-    // Trim as well as lower-case: students.school is free text and can carry
-    // padding from imports, and the caller's assigned-school list comes from a
-    // different table, so the two sides must be normalised identically.
-    const lowered = schools.map(s => String(s).trim().toLowerCase());
-    // Build positional placeholders for the school list.
-    if (status) {
-      const ph = lowered.map((_, i) => `$${i + 1}`).join(',');
-      const params = [...lowered, status, limit, offset];
-      return pg.many(
-        `SELECT cq.* FROM counsellor_queries cq
-         JOIN students st ON st.email = cq.email
-         WHERE LOWER(BTRIM(st.school)) IN (${ph})
-           AND cq.status = $${lowered.length + 1}
-         ORDER BY cq.submitted_at DESC
-         LIMIT $${lowered.length + 2} OFFSET $${lowered.length + 3}`,
-        params
-      );
-    }
-    const ph = lowered.map((_, i) => `$${i + 1}`).join(',');
-    const params = [...lowered, limit, offset];
-    return pg.many(
-      `SELECT cq.* FROM counsellor_queries cq
-       JOIN students st ON st.email = cq.email
-       WHERE LOWER(BTRIM(st.school)) IN (${ph})
-       ORDER BY cq.submitted_at DESC
-       LIMIT $${lowered.length + 1} OFFSET $${lowered.length + 2}`,
-      params
-    );
-  }
-  if (status) {
-    return pg.many(
-      `SELECT * FROM counsellor_queries WHERE status = $1 ORDER BY submitted_at DESC LIMIT $2 OFFSET $3`,
-      [status, limit, offset]
-    );
-  }
+  if (Array.isArray(schools) && !schools.length) return [];
+  const params = [], where = [];
+  if (Array.isArray(schools)) where.push(_queryScopeSql(schools, params));
+  if (status) { params.push(status); where.push(`cq.status = $${params.length}`); }
+  params.push(limit, offset);
   return pg.many(
-    `SELECT * FROM counsellor_queries ORDER BY submitted_at DESC LIMIT $1 OFFSET $2`,
-    [limit, offset]
+    `SELECT cq.* FROM counsellor_queries cq
+     ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+     ORDER BY cq.submitted_at DESC
+     LIMIT $${params.length - 1} OFFSET $${params.length}`,
+    params
   );
+}
+
+async function queryInSchools(id, schools) {
+  if (!Array.isArray(schools) || !schools.length) return false;
+  const params = [Number(id)];
+  const scope = _queryScopeSql(schools, params);
+  return !!(await pg.one(`SELECT 1 AS ok FROM counsellor_queries cq WHERE cq.id = $1 AND ${scope}`, params));
 }
 
 async function updateQuery(id, { status, adminNote } = {}) {
@@ -461,32 +452,6 @@ async function getStudentInsights(email, { questionLimit = 25, scanLimit = 300 }
   };
 }
 
-/* ─── Check if student has completed assessment (by email) ──────── */
-async function hasCompletedAssessment(email) {
-  const norm = _normIdentity(email);
-  if (!norm) return false;
-  const row = await pg.one(
-    `SELECT 1 FROM students s
-     LEFT JOIN assessments a      ON a.session_id  = s.session_id
-     LEFT JOIN report_summary rs  ON rs.session_id = s.session_id
-     WHERE s.email = $1
-       AND (
-         rs.session_id IS NOT NULL
-         OR (
-           a.nmap_scores_json    IS NOT NULL AND
-           a.cpi_scores_json     IS NOT NULL AND
-           a.sea_scores_json     IS NOT NULL AND
-           a.daab_va_scores_json IS NOT NULL
-         )
-         OR s.completed_at IS NOT NULL
-         OR a.session_id IS NOT NULL
-       )
-     LIMIT 1`,
-    [norm]
-  );
-  return !!row;
-}
-
 /* ─── Chat history ──────────────────────────────────────────────── */
 async function saveMessage({ email, sessionId, conversationId, role, content }) {
   const row = await pg.one(
@@ -777,10 +742,9 @@ async function pruneOtpStageTokens() {
 
 /* ─── Access-code login (Aria for email-less bulk-imported students) ─
    Access codes are already the primary credential for students who were
-   bulk-imported by a school and never gave an email. `redeemAccessCode`
-   exists in dashboard-db for the assessment-start flow — the verification
-   below is the same logic, duplicated here to avoid a circular require
-   (dashboard-db already requires counsellor-db).
+   bulk-imported by a school and never gave an email. Verification reuses
+   dashboard-db's redeemAccessCode (required lazily: dashboard-db already
+   requires this module).
 
    Downstream tables (chat_history, counsellor_sessions, conversation_summaries)
    are all keyed on the `email` column. Rather than change every schema, we
@@ -791,10 +755,6 @@ async function pruneOtpStageTokens() {
 
 function accessIdentityFor(sessionId) {
   return _AC_ID_PREFIX + String(sessionId);
-}
-
-function isAccessIdentity(id) {
-  return _isAccessId(id);
 }
 
 function sessionIdFromAccessIdentity(id) {
@@ -831,10 +791,10 @@ async function issueTokenForSession(sessionId) {
 async function close() { /* pool owned by pg-core; nothing to do here */ }
 
 module.exports = {
-  classifyThemes: _classifyThemes, THEME_LABELS: _THEME_RULES.map(r => ({ key: r.key, label: r.label })),
+  classifyThemes: _classifyThemes,
   init,
-  saveQuery, listQueries, updateQuery,
-  getReportByEmail, getReportBySessionId, hasCompletedAssessment, _invalidateReportCache,
+  saveQuery, listQueries, queryInSchools, updateQuery,
+  getReportByEmail, getReportBySessionId, _invalidateReportCache,
   _invalidateReportCacheBySession,
   getJourney, getStudentInsights,
   saveMessage, getHistory, getConversations, clearHistory,
@@ -846,6 +806,6 @@ module.exports = {
   createOtp, verifyOtp, pruneOtps,
   // Access-code login (for email-less students)
   redeemAccessCodeForCounsellor, issueTokenForSession,
-  accessIdentityFor, isAccessIdentity, sessionIdFromAccessIdentity,
+  accessIdentityFor, sessionIdFromAccessIdentity,
   close,
 };

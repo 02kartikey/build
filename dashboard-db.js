@@ -7,8 +7,9 @@
 
    Conventions:
      • Placeholders are positional ($1, $2 …), built dynamically for IN lists.
-     • students.school is plain TEXT, so comparisons use LOWER(BTRIM(school));
-       email columns and the staff school tables are CITEXT.
+     • School names compare by match.normSchool (case, spaces and punctuation
+       ignored) in JS and its twin match.sqlNormSchool in SQL — the one rule
+       for scoping, grouping and permission checks. Email columns are CITEXT.
      • permissions is JSONB and arrives already parsed.
      • Per-worker in-memory caches (session tokens, school list, branch map)
        expire on their own and are cleared on writes.
@@ -174,30 +175,11 @@ async function login(email, password) {
   return { token, user: { id: user.id, name: user.name, email: user.email, role: user.role, schools, permissions: _perms(user.permissions) } };
 }
 
-/* Token verification cache: 30s in-memory LRU per worker. */
-const _TOKEN_CACHE_TTL  = 30 * 1000;
-const _TOKEN_CACHE_MAX  = 2000;
-const _tokenCache       = new Map();
-
-function _tokenCacheGet(token) {
-  const entry = _tokenCache.get(token);
-  if (!entry) return undefined;
-  if (Date.now() - entry.cachedAt > _TOKEN_CACHE_TTL) { _tokenCache.delete(token); return undefined; }
-  return entry.user;
-}
-
-function _tokenCacheSet(token, user) {
-  if (_tokenCache.size >= _TOKEN_CACHE_MAX) {
-    _tokenCache.delete(_tokenCache.keys().next().value);
-  }
-  _tokenCache.set(token, { user, cachedAt: Date.now() });
-}
-
+/* Every request reads the session from the database (one indexed lookup), so
+   a sign-out, a deactivated account or changed schools/permissions take
+   effect on every PM2 worker at once. */
 async function verifyToken(token) {
   if (!token) return null;
-  const cached = _tokenCacheGet(token);
-  if (cached !== undefined) return cached;
-
   const now = new Date().toISOString();
   const session = await pg.one(
     `SELECT s.user_id, u.name, u.email, u.role, u.active, u.permissions
@@ -206,34 +188,28 @@ async function verifyToken(token) {
      WHERE s.token = $1 AND s.expires_at > $2`,
     [token, now]
   );
-  if (!session || !session.active) { _tokenCacheSet(token, null); return null; }
+  if (!session || !session.active) return null;
   const schoolsRows = await pg.many('SELECT school FROM dashboard_user_schools WHERE user_id = $1', [session.user_id]);
   const user = {
     id: session.user_id, name: session.name, email: session.email,
     role: session.role, schools: schoolsRows.map(r => r.school), permissions: _perms(session.permissions),
   };
-  _tokenCacheSet(token, user);
   return user;
 }
 
 async function logout(token) {
-  _tokenCache.delete(token);
   await pg.exec('DELETE FROM dashboard_sessions WHERE token = $1', [token]);
 }
 
 async function purgeExpiredSessions() {
   const now = new Date().toISOString();
-  try {
-    const info = await pg.tx(async (c) => {
-      const r = await c.query('DELETE FROM dashboard_sessions WHERE expires_at < $1', [now]);
-      await c.query('DELETE FROM password_reset_tokens WHERE expires_at < $1', [now]);
-      return r;
-    });
-    if (info && info.rowCount > 0) {
-      process.stderr.write('[INFO]  [Dashboard] Purged ' + info.rowCount + ' expired session(s).\n');
-    }
-  } catch (e) {
-    throw e;
+  const info = await pg.tx(async (c) => {
+    const r = await c.query('DELETE FROM dashboard_sessions WHERE expires_at < $1', [now]);
+    await c.query('DELETE FROM password_reset_tokens WHERE expires_at < $1', [now]);
+    return r;
+  });
+  if (info && info.rowCount > 0) {
+    process.stderr.write('[INFO]  [Dashboard] Purged ' + info.rowCount + ' expired session(s).\n');
   }
 }
 
@@ -307,21 +283,18 @@ async function getUserByEmail(email) {
    STUDENT DATA — scoped to school(s)
 ══════════════════════════════════════════════════════════════════ */
 
-/* Build a school IN clause with positional params starting at $start.
-   students.school is plain TEXT → compare LOWER(BTRIM(s.school)) against a
-   trimmed+lowered list, so padding on either side cannot drop rows. */
+/* Build a school IN clause with positional params starting at $start; use it
+   as `${match.sqlNormSchool('s.school')} IN (${ph})`. */
 function _schoolClause(schools, start = 1) {
   const list = (Array.isArray(schools) ? schools : [schools]).filter(Boolean);
   return {
     list,
     ph:     list.map((_, i) => `$${start + i}`).join(','),
-    // Every query compares against LOWER(BTRIM(s.school)), so the parameter
-    // is trimmed as well as lower-cased: getAllSchools returns the raw name,
-    // which can carry stray whitespace from imports.
-    params: list.map(x => String(x).trim().toLowerCase()),
+    // One school-equality rule everywhere: match.normSchool (case, spaces and
+    // punctuation ignored) here, its SQL twin match.sqlNormSchool in queries.
+    params: list.map(x => match.normSchool(x)),
   };
 }
-
 const _STATUS_CLAUSE = {
   completed:   'rs.session_id IS NOT NULL',
   in_progress: 'rs.session_id IS NULL AND a.session_id IS NOT NULL',
@@ -335,7 +308,7 @@ const _STATUS_CLAUSE = {
 async function _studentWhere(schools, { class: cls, section, search, status } = {}) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length) return null;
-  let where = `WHERE LOWER(BTRIM(s.school)) IN (${ph})`;
+  let where = `WHERE ${match.sqlNormSchool('s.school')} IN (${ph})`;
   const p   = [...params];
   let n = params.length + 1;
   if (cls) {
@@ -401,51 +374,8 @@ async function getStudentsBySchool(schools, opts = {}) {
   );
 }
 
-/* Stalled students: started, not completed, and no progress saved for
-   `days`. Students who never started are not included. */
-async function getAtRiskStudents(schools, { days = 3, limit = 1000 } = {}) {
-  const { ph, params } = _schoolClause(schools, 1);
-  if (!params.length) return [];
-  const cutoff = new Date(Date.now() - days * 86400000).toISOString();
-  const n = params.length + 1;
-  return pg.many(
-    `SELECT
-       s.session_id, s.first_name, s.last_name, s.full_name,
-       s.class, s.section, s.school, s.email, s.gender, s.age, s.registered_at,
-       a.saved_at AS last_activity,
-       'in_progress' AS status,
-       ${_MODULES_DONE_EXPR} AS modules_done
-     FROM students s
-     JOIN assessments         a  ON a.session_id  = s.session_id
-     LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})
-       AND rs.session_id IS NULL
-       AND a.saved_at < $${n}
-     ORDER BY a.saved_at ASC
-     LIMIT $${n + 1}`,
-    [...params, cutoff, limit]
-  );
-}
-
-async function getGenderStats(schools) {
-  const { ph, params } = _schoolClause(schools, 1);
-  if (!params.length) return [];
-  return pg.many(
-    `SELECT
-       COALESCE(NULLIF(TRIM(s.gender), ''), 'Other') AS gender,
-       COUNT(*)::int AS total,
-       SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)::int AS completed
-     FROM students s
-     LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})
-     GROUP BY COALESCE(NULLIF(TRIM(s.gender), ''), 'Other')`,
-    params
-  );
-}
-
 async function listCounsellorsForSchools(schools) {
-  // Trim + lower so the parameter matches LOWER(BTRIM(us.school)) below.
-  const list = (schools || []).map(s => String(s).trim().toLowerCase());
+  const list = (schools || []).map(s => match.normSchool(s));
   if (!list.length) return [];
   const ph = list.map((_, i) => `$${i + 1}`).join(',');
   const rows = await pg.many(
@@ -453,7 +383,7 @@ async function listCounsellorsForSchools(schools) {
      FROM dashboard_users u
      JOIN dashboard_user_schools us ON us.user_id = u.id
      WHERE u.role = 'counsellor' AND u.active = TRUE
-       AND LOWER(BTRIM(us.school)) IN (${ph})
+       AND ${match.sqlNormSchool('us.school')} IN (${ph})
      ORDER BY u.name`,
     list
   );
@@ -462,8 +392,7 @@ async function listCounsellorsForSchools(schools) {
     const srows = await pg.many('SELECT school FROM dashboard_user_schools WHERE user_id = $1 ORDER BY school', [r.id]);
     out.push({
       id: r.id, name: r.name, email: r.email, last_login: r.last_login,
-      // `list` is trimmed+lowered, so normalise this side identically.
-      schools: srows.map(x => x.school).filter(s => list.includes(String(s).trim().toLowerCase())),
+      schools: srows.map(x => x.school).filter(s => list.includes(match.normSchool(s))),
     });
   }
   return out;
@@ -483,69 +412,6 @@ async function countStudentsFiltered(schools, opts = {}) {
   return row ? row.n : 0;
 }
 
-async function countStudentsBySchool(schools) {
-  const { ph, params } = _schoolClause(schools, 1);
-  if (!params.length) return { total: 0, completed: 0, in_progress: 0, not_started: 0 };
-  return pg.one(
-    `SELECT
-       COUNT(*)::int AS total,
-       SUM(CASE WHEN rs.session_id IS NOT NULL                          THEN 1 ELSE 0 END)::int AS completed,
-       SUM(CASE WHEN rs.session_id IS NULL AND a.session_id IS NOT NULL THEN 1 ELSE 0 END)::int AS in_progress,
-       SUM(CASE WHEN a.session_id  IS NULL                              THEN 1 ELSE 0 END)::int AS not_started
-     FROM students s
-     LEFT JOIN assessments    a  ON a.session_id  = s.session_id
-     LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})`,
-    params
-  );
-}
-
-async function getSchoolSummaries(schools) {
-  const list = (Array.isArray(schools) ? schools : [schools]).filter(Boolean);
-  if (!list.length) return [];
-  const ph     = list.map((_, i) => `$${i + 1}`).join(',');
-  // Must match LOWER(BTRIM(s.school)) used below.
-  const params = list.map(x => String(x).trim().toLowerCase());
-
-  const rows = await pg.many(
-    `SELECT
-       s.school,
-       s.class,
-       COUNT(*)::int                                                                       AS total,
-       SUM(CASE WHEN rs.session_id IS NOT NULL THEN 1 ELSE 0 END)::int                    AS completed,
-       SUM(CASE WHEN rs.session_id IS NULL AND a.session_id IS NOT NULL THEN 1 ELSE 0 END)::int AS in_progress,
-       SUM(CASE WHEN a.session_id IS NULL THEN 1 ELSE 0 END)::int                         AS not_started
-     FROM students s
-     LEFT JOIN assessments    a  ON a.session_id  = s.session_id
-     LEFT JOIN report_summary rs ON rs.session_id = s.session_id
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})
-     GROUP BY LOWER(BTRIM(s.school)), s.school, s.class
-     ORDER BY s.school, s.class`,
-    params
-  );
-
-  const schoolMap = new Map();
-  for (const row of rows) {
-    const key = row.school.trim().toLowerCase();
-    if (!schoolMap.has(key)) {
-      schoolMap.set(key, { school: row.school, total: 0, completed: 0, in_progress: 0, not_started: 0, classes: [] });
-    }
-    const s = schoolMap.get(key);
-    s.total       += row.total;
-    s.completed   += row.completed;
-    s.in_progress += row.in_progress;
-    s.not_started += row.not_started;
-    // Group raw class labels ("10", "X", "Class 10") into one class so the
-    // per-class bars match the class-wise breakdown and drill-down lists.
-    const g = classGroupOf(row.class);
-    let c = s.classes.find(x => x.class_key === g.key);
-    if (!c) { c = { class: row.class, class_key: g.key, class_label: g.label, order: g.order, total: 0, completed: 0, in_progress: 0, not_started: 0 }; s.classes.push(c); }
-    c.total += row.total; c.completed += row.completed; c.in_progress += row.in_progress; c.not_started += row.not_started;
-  }
-  for (const s of schoolMap.values()) s.classes.sort((a, b) => a.order - b.order || a.class_label.localeCompare(b.class_label));
-  return [...schoolMap.values()];
-}
-
 /* Every school name students have registered under, with student counts.
    Read fresh each time (one grouped scan, a few milliseconds): a per-worker
    cache would keep showing a merged or renamed school on the other workers. */
@@ -554,16 +420,9 @@ async function getAllSchools() {
     `SELECT MIN(school) AS school, COUNT(*)::int AS total_students
      FROM students
      WHERE school IS NOT NULL AND school != ''
-     GROUP BY LOWER(BTRIM(school))
+     GROUP BY ${match.sqlNormSchool('school')}
      ORDER BY school`
   );
-}
-
-function _dropAnalyticsCache() {
-  // Roster edits (class moves, imports, deletes) do not change the data
-  // version fingerprint, so drop the shared aggregates outright.
-  // Call AFTER the write commits, so a read in between cannot re-cache old rows.
-  return pg.exec('DELETE FROM analytics_cache').catch(() => {});
 }
 
 /* Contact details for a list of students, limited to the given schools
@@ -579,7 +438,7 @@ async function getStudentContacts(sessionIds, schools) {
   if (!params.length) return [];
   return pg.many(
     `SELECT session_id, email, full_name, first_name, school, class, section FROM students
-      WHERE session_id = ANY($1) AND LOWER(BTRIM(school)) IN (${ph})`, [ids, ...params]);
+      WHERE session_id = ANY($1) AND ${match.sqlNormSchool('school')} IN (${ph})`, [ids, ...params]);
 }
 
 async function getStudentBySessionId(sessionId) {
@@ -609,39 +468,6 @@ async function getStudentBySessionId(sessionId) {
 /* ══════════════════════════════════════════════════════════════════
    AGGREGATE ANALYTICS
 ══════════════════════════════════════════════════════════════════ */
-async function getAggregateScores(schools) {
-  const { ph, params } = _schoolClause(schools, 1);
-  if (!params.length) return {};
-  return (await pg.one(
-    `SELECT
-       COUNT(*)::int                                                        AS total_completed,
-       ROUND(AVG(rs.fit_score)::numeric, 1)::float8                        AS avg_fit_score,
-       ROUND(AVG(rs.avg_personality_stanine)::numeric, 2)::float8          AS avg_personality_stanine,
-       ROUND(AVG(rs.avg_aptitude_stanine)::numeric, 2)::float8             AS avg_aptitude_stanine,
-       SUM(CASE WHEN rs.fit_tier = 'Strong Fit'      THEN 1 ELSE 0 END)::int AS fit_strong,
-       SUM(CASE WHEN rs.fit_tier = 'Emerging Fit'    THEN 1 ELSE 0 END)::int AS fit_emerging,
-       SUM(CASE WHEN rs.fit_tier = 'Exploratory Fit' THEN 1 ELSE 0 END)::int AS fit_exploratory,
-       SUM(CASE WHEN rs.personality_status = 'Strength'       THEN 1 ELSE 0 END)::int AS pers_strength,
-       SUM(CASE WHEN rs.personality_status = 'Developing'     THEN 1 ELSE 0 END)::int AS pers_developing,
-       SUM(CASE WHEN rs.personality_status = 'Support Needed' THEN 1 ELSE 0 END)::int AS pers_support,
-       SUM(CASE WHEN rs.aptitude_status    = 'Strength'       THEN 1 ELSE 0 END)::int AS apt_strength,
-       SUM(CASE WHEN rs.aptitude_status    = 'Developing'     THEN 1 ELSE 0 END)::int AS apt_developing,
-       SUM(CASE WHEN rs.aptitude_status    = 'Support Needed' THEN 1 ELSE 0 END)::int AS apt_support,
-       SUM(CASE WHEN rs.interest_status    = 'Strength'       THEN 1 ELSE 0 END)::int AS int_strength,
-       SUM(CASE WHEN rs.interest_status    = 'Developing'     THEN 1 ELSE 0 END)::int AS int_developing,
-       SUM(CASE WHEN rs.interest_status    = 'Support Needed' THEN 1 ELSE 0 END)::int AS int_support,
-       SUM(CASE WHEN rs.seaa_status = 'Strength'          THEN 1 ELSE 0 END)::int AS sea_strength,
-       SUM(CASE WHEN rs.seaa_status = 'Developing'        THEN 1 ELSE 0 END)::int AS sea_developing,
-       SUM(CASE WHEN rs.seaa_status = 'Support Needed'    THEN 1 ELSE 0 END)::int AS sea_support
-     FROM report_summary rs
-     JOIN students s ON s.session_id = rs.session_id
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})`,
-    params
-  )) || {};
-}
-
-/* Students whose overall wellbeing is in the needs-support band. Returns a
-   preview list plus the true total, so a "+N more" never under-reports. */
 /* SQL filter for a counsellor limited to certain classes or sections: the
    same predicate the facts-based views use, turned into an id list so
    SQL-based figures (trend, timing, wellbeing list) agree with them.
@@ -878,7 +704,6 @@ async function mergeSchools({ names, school, group, userId }) {
     }
     return { school: target, group: grp || null, names_merged: otherKeys.length, students_moved: moved };
   });
-  await _dropAnalyticsCache();
   return result;
 }
 
@@ -943,29 +768,6 @@ function wellbeingAreaCounts(list) {
   return c;
 }
 
-async function getWellbeingAlerts(schools, { limit = 20, predicate = null } = {}) {
-  const { ph, params } = _schoolClause(schools, 1);
-  if (!params.length) return { alerts: [], total: 0 };
-  const p = [...params, require('./db.js').SUMMARY_STATUS.SUPPORT];
-  const scope = `LOWER(BTRIM(s.school)) IN (${ph}) AND rs.seaa_status = $${params.length + 1}` + await _predicateFilter(schools, predicate, p);
-  const totalRow = await pg.one(
-    `SELECT COUNT(*)::int AS n FROM report_summary rs JOIN students s ON s.session_id = rs.session_id WHERE ${scope}`, p);
-  const rows = await pg.many(
-    `SELECT s.session_id, s.full_name, s.first_name, s.school, s.class, s.section,
-            s.email, s.gender, rs.seaa_status, rs.fit_score, rs.fit_tier,
-            COALESCE((SELECT json_agg(json_build_object('title', se.title, 'score', se.score,
-                       'category', se.category, 'cat_label', se.cat_label) ORDER BY se.key)
-                FROM report_seaa se WHERE se.session_id = rs.session_id), '[]'::json) AS seaa
-       FROM report_summary rs
-       JOIN students s ON s.session_id = rs.session_id
-      WHERE ${scope}
-      ORDER BY rs.fit_score ASC NULLS LAST, s.full_name
-      LIMIT $${p.length + 1}`,
-    [...p, Math.min(Math.max(parseInt(limit, 10) || 20, 1), 200)]
-  );
-  return { alerts: rows, total: totalRow ? totalRow.n : 0 };
-}
-
 /* Career distribution for the overview chart. by = 'career_area' | 'stream'.
    Built from getBreakdown, so every completed student is counted exactly once
    (including a "Not available yet" bar when a report lacks interest data) and
@@ -1005,7 +807,7 @@ async function getModuleTiming(schools, { predicate = null } = {}) {
               ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ${m.secs}) / 60.0)::numeric, 1)::float8 AS median_minutes
          FROM assessments a
          JOIN students s ON s.session_id = a.session_id
-        WHERE LOWER(BTRIM(s.school)) IN (${ph})${only} AND ${m.done} AND ${m.secs} > 0`,
+        WHERE ${match.sqlNormSchool('s.school')} IN (${ph})${only} AND ${m.done} AND ${m.secs} > 0`,
       params
     );
     out.push({
@@ -1019,100 +821,13 @@ async function getModuleTiming(schools, { predicate = null } = {}) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
-   ANALYTICS CACHE
+   HOUSEKEEPING
+   Every dashboard number is computed live from the same student facts, so
+   no aggregate is cached. analytics_cache (left by earlier builds) is
+   emptied, and AI analyses older than 30 days are dropped.
 ══════════════════════════════════════════════════════════════════ */
-const _CACHE_VERSION = 2; // 2: values wrapped with the data version they were computed from
-const _CACHE_TTL_MS  = 5 * 60 * 1000;
-
-function _cacheKey(scope, schools) {
-  const sorted = (Array.isArray(schools) ? schools : [schools])
-    .filter(Boolean).map(s => s.toLowerCase()).sort().join('|');
-  return `${scope}:${sorted}`;
-}
-
-/* A cheap fingerprint of the data every cached aggregate depends on. A cached
-   value is only served while this is unchanged, so a new registration, a saved
-   section or a new report invalidates every aggregate immediately instead of
-   leaving dashboards up to five minutes behind. */
-async function _dataVersion() {
-  const r = await pg.one(
-    `SELECT (SELECT COUNT(*) FROM students)::text || '|' ||
-            COALESCE((SELECT MAX(registered_at) FROM students)::text, '') || '|' ||
-            (SELECT COUNT(*) FROM report_summary)::text || '|' ||
-            COALESCE((SELECT MAX(generated_at) FROM report_summary)::text, '') || '|' ||
-            COALESCE((SELECT MAX(saved_at) FROM assessments)::text, '') AS v`);
-  return r ? r.v : '';
-}
-
-async function _cacheRead(key) {
-  const row = await pg.one(
-    'SELECT cache_value, computed_at, cache_version FROM analytics_cache WHERE cache_key = $1', [key]
-  );
-  if (!row) return null;
-  if (row.cache_version !== _CACHE_VERSION) return null;
-  if (Date.now() - new Date(row.computed_at).getTime() > _CACHE_TTL_MS) return null;
-  let parsed; try { parsed = JSON.parse(row.cache_value); } catch { return null; }
-  if (!parsed || typeof parsed !== 'object' || !('v' in parsed)) return null;
-  return parsed.v === await _dataVersion() ? parsed.data : null;
-}
-
-async function _cacheWrite(key, value, version) {
-  const v = version !== undefined ? version : await _dataVersion();
-  await pg.exec(
-    `INSERT INTO analytics_cache (cache_key, cache_value, computed_at, cache_version)
-     VALUES ($1,$2,$3,$4)
-     ON CONFLICT (cache_key) DO UPDATE SET
-       cache_value   = EXCLUDED.cache_value,
-       computed_at   = EXCLUDED.computed_at,
-       cache_version = EXCLUDED.cache_version`,
-    [key, JSON.stringify({ v, data: value }), new Date().toISOString(), _CACHE_VERSION]
-  );
-}
-
-async function getAggregateScoresCached(schools) {
-  const key = _cacheKey('agg', schools);
-  const cached = await _cacheRead(key);
-  if (cached !== null) return cached;
-  const fresh = await getAggregateScores(schools);
-  await _cacheWrite(key, fresh);
-  return fresh;
-}
-
-async function getSchoolSummariesCached(schools) {
-  const key = _cacheKey('schools', schools);
-  const cached = await _cacheRead(key);
-  if (cached !== null) return cached;
-  const fresh = await getSchoolSummaries(schools);
-  await _cacheWrite(key, fresh);
-  return fresh;
-}
-
-
-async function getModuleTimingCached(schools, opts = {}) {
-  // A class/section-limited view is computed live (the cache is per school).
-  if (opts.predicate) return getModuleTiming(schools, opts);
-  const key = _cacheKey('timing', schools);
-  const cached = await _cacheRead(key);
-  if (cached !== null) return cached;
-  const fresh = await getModuleTiming(schools);
-  await _cacheWrite(key, fresh);
-  return fresh;
-}
-
-
-async function refreshAnalyticsCache() {
-  const schoolsAll = (await getAllSchools()).map(s => s.school);
-  if (!schoolsAll.length) return;
-  const v = await _dataVersion();
-  for (const scope of [schoolsAll, ...schoolsAll.map(x => [x])]) {
-    await _cacheWrite(_cacheKey('agg',     scope), await getAggregateScores(scope), v);
-    await _cacheWrite(_cacheKey('schools', scope), await getSchoolSummaries(scope), v);
-    await _cacheWrite(_cacheKey('timing',  scope), await getModuleTiming(scope), v);
-  }
-  await pg.exec(
-    'DELETE FROM analytics_cache WHERE computed_at < $1',
-    [new Date(Date.now() - 2 * _CACHE_TTL_MS).toISOString()]
-  );
+async function pruneCaches() {
+  await pg.exec('DELETE FROM analytics_cache');
   await pg.exec("DELETE FROM ai_insights_cache WHERE created_at < now() - interval '30 days'");
 }
 
@@ -1274,16 +989,20 @@ async function getReminderLog({ sentBy, studentEmail, schools, limit = 100 } = {
   if (sentBy) {
     return pg.many('SELECT * FROM reminder_log WHERE sent_by = $1 ORDER BY sent_at DESC LIMIT $2', [sentBy, limit]);
   }
-  if (Array.isArray(schools) && schools.length) {
+  // An array scopes the log to those schools; an empty one (staff with no
+  // schools assigned) sees nothing rather than everything.
+  if (Array.isArray(schools)) {
+    if (!schools.length) return [];
     const ph = schools.map((_, i) => `$${i + 1}`).join(',');
-    // Must match LOWER(BTRIM(st.school)) used below.
-    const params = schools.map(s => String(s).trim().toLowerCase());
+    const params = schools.map(s => match.normSchool(s));
+    // EXISTS, not JOIN: a student with several attempts must not repeat a row.
     return pg.many(
       `SELECT rl.*, du.name AS sent_by_name
        FROM reminder_log rl
        LEFT JOIN dashboard_users du ON du.id = rl.sent_by
-       JOIN students st ON LOWER(st.email) = LOWER(rl.student_email)
-       WHERE LOWER(BTRIM(st.school)) IN (${ph})
+       WHERE EXISTS (SELECT 1 FROM students st
+                     WHERE st.email = rl.student_email::citext
+                       AND ${match.sqlNormSchool('st.school')} IN (${ph}))
        ORDER BY rl.sent_at DESC LIMIT $${params.length + 1}`,
       [...params, limit]
     );
@@ -1377,12 +1096,11 @@ async function upsertStudent({ session_id, first_name, last_name, full_name, ema
     if (_isUidConflict(e)) throw Object.assign(new Error(`Unique School ID ${uid} is already used by another student at this school.`), { status: 409, code: 'UID_TAKEN' });
     if (norm && e.code === '23505') {
       const row = await pg.one('SELECT session_id, school FROM students WHERE email = $1', [norm]);
-      if (row && match.schoolMatches(schoolName, row.school)) { await _dropAnalyticsCache(); return row.session_id; }
+      if (row && match.schoolMatches(schoolName, row.school)) return row.session_id;
       throw Object.assign(new Error('This email is already used by another student.'), { status: 409 });
     }
     throw e;
   }
-  await _dropAnalyticsCache();
   return resultSid;
 }
 
@@ -1861,7 +1579,6 @@ async function runImportTransaction(rows) {
       }
     }
   });
-  await _dropAnalyticsCache();
   return { imported, updated, skipped,
            errors:   errors.slice(0, 50),
            warnings: warnings.slice(0, 50) };
@@ -1869,7 +1586,6 @@ async function runImportTransaction(rows) {
 
 async function deleteStudent(sessionId) {
   await pg.exec('DELETE FROM students WHERE session_id = $1', [sessionId]);
-  await _dropAnalyticsCache();
 }
 
 async function resetStudentAssessment(sessionId) {
@@ -1907,7 +1623,6 @@ async function moveStudent(sessionId, fields) {
     if (_isUidConflict(e)) throw Object.assign(new Error('That Unique School ID is already used by another student at this school.'), { status: 409, code: 'UID_TAKEN' });
     throw e;
   }
-  await _dropAnalyticsCache();
 }
 
 /* ══════════════════════════════════════════════════════════════════
@@ -2143,7 +1858,7 @@ async function _classLabelsMatching(schools, cls) {
   const { ph, params } = _schoolClause(schools, 1);
   if (!params.length || !cls) return [];
   const rows = await pg.many(
-    `SELECT DISTINCT class FROM students WHERE LOWER(BTRIM(school)) IN (${ph}) AND class IS NOT NULL`, params);
+    `SELECT DISTINCT class FROM students WHERE ${match.sqlNormSchool('school')} IN (${ph}) AND class IS NOT NULL`, params);
   const want = String(cls).trim();
   const wantGroup = want.startsWith('g') || want.startsWith('x:') || want === 'none' ? want : null;
   return rows.map(r => r.class).filter(c =>
@@ -2155,7 +1870,7 @@ async function listClasses(schools) {
   if (!params.length) return [];
   const rows = await pg.many(
     `SELECT class, COUNT(*)::int AS n FROM students
-      WHERE LOWER(BTRIM(school)) IN (${ph}) GROUP BY class`, params);
+      WHERE ${match.sqlNormSchool('school')} IN (${ph}) GROUP BY class`, params);
   const map = new Map();
   for (const r of rows) {
     const g = classGroupOf(r.class);
@@ -2197,7 +1912,7 @@ async function getStudentFacts(schools, { predicate } = {}) {
      LEFT JOIN assessments      a  ON a.session_id  = s.session_id
      LEFT JOIN report_summary   rs ON rs.session_id = s.session_id
      LEFT JOIN report_interests ri ON ri.session_id = s.session_id AND ri.rank = 1
-     WHERE LOWER(BTRIM(s.school)) IN (${ph})`,
+     WHERE ${match.sqlNormSchool('s.school')} IN (${ph})`,
     // The wellbeing scorer's "needs support" label (same word as the summary status).
     [...params, _core.SUMMARY_STATUS.SUPPORT]
   );
@@ -2571,7 +2286,7 @@ async function getProgrammeTrend(schools, { granularity = 'week', from = null, t
   const tzIdx = params.length + 1, unitIdx = params.length + 2;
   const bucketSql = (col) => `to_char(date_trunc($${unitIdx}, (${col}) AT TIME ZONE $${tzIdx}), 'YYYY-MM-DD')`;
   const p = [...params, APP_TIMEZONE, unit];
-  const scope = `LOWER(BTRIM(s.school)) IN (${ph})` + await _predicateFilter(schools, predicate, p);
+  const scope = `${match.sqlNormSchool('s.school')} IN (${ph})` + await _predicateFilter(schools, predicate, p);
   // "Started" uses the same rule as the In-progress/Completed status: the
   // student has an assessment record. Its date is the earliest evidence of
   // activity (first saved part, any completed part, or the last save).
@@ -2666,11 +2381,20 @@ async function getSchoolSummary(schools, { predicate } = {}) {
                    follow_up: c.follow_up, support: c.support, support_areas: c.areas, completion_pct: pct(c.completed, c.total), top_career: top(c.careers) }));
     return { school: sc.school, total: sc.total, completed: sc.completed, in_progress: sc.in_progress, not_started: sc.not_started,
              follow_up: sc.follow_up, support: sc.support, support_areas: sc.areas, completion_pct: pct(sc.completed, sc.total),
+             standing: targetStanding(pct(sc.completed, sc.total), set.completion_target_pct),
              completed_recent: sc.completed_recent, recent_days: PULSE_WINDOW_DAYS,
              target_pct: set.completion_target_pct, follow_up_after_days: set.follow_up_after_days,
              top_career: top(sc.careers), classes };
   }).sort((a, b) => a.school.localeCompare(b.school));
 }
+/* Where a completion rate stands against its target. Below this share of
+   the target a school is "far behind" (a critical alert, shown red). */
+const TARGET_FAR_BEHIND_SHARE = 0.75;
+function targetStanding(pct, target) {
+  if (target == null) return null;
+  return pct >= target ? 'met' : pct < target * TARGET_FAR_BEHIND_SHARE ? 'far_behind' : 'behind';
+}
+
 /* ── Pace and momentum (Insights) ───────────────────────────────────
    Rolling windows ending now: "this week" is the last 7 days. */
 const PULSE_WINDOW_DAYS   = 7;    // one "week" for this-week vs last-week
@@ -2808,7 +2532,7 @@ async function getAlerts(schools, { facts: preFacts, predicate } = {}) {
       .sort((a, b) => a.done / a.n - b.done / b.n);
     alerts.push({
       id: 'below_target:' + match.normSchool(name), type: 'below_target',
-      severity: pct < target * 0.75 ? 'critical' : 'warning',
+      severity: targetStanding(pct, target) === 'far_behind' ? 'critical' : 'warning',
       title: `${name}: ${pct}% completed — target is ${target}%`,
       detail: `${done} of ${rows.length} registered students have completed. ${needed} more completion${needed === 1 ? '' : 's'} needed to reach the target.`
         + (lagging.length ? ` Furthest behind: ${lagging.slice(0, 4).map(c => `${c.label} ${Math.round(c.done / c.n * 100)}% (${c.done}/${c.n})`).join(', ')}.` : ''),
@@ -3040,10 +2764,8 @@ module.exports = {
   /* students */
   getStudentsBySchool,
   countStudentsFiltered,
-  getAtRiskStudents,
-  getGenderStats,
   listCounsellorsForSchools, getStudentBySessionId, getStudentContacts, getReportPdfData,
-  countStudentsBySchool, getAllSchools,
+  getAllSchools,
   /* student CRUD */
   upsertStudent, deleteStudent, resetStudentAssessment, moveStudent, runImportTransaction, getStudentByEmail,
   /* access codes */
@@ -3061,13 +2783,10 @@ module.exports = {
   listRegisteredSchools, upsertRegisteredSchool, deleteRegisteredSchool,
   /* password reset */
   createPasswordResetToken, consumePasswordResetToken,
-  /* analytics — cached wrappers */
-  getAggregateScores:    getAggregateScoresCached,
-  getModuleTiming:       getModuleTimingCached,
-  getSchoolSummaries:    getSchoolSummariesCached,
-  getWellbeingAlerts,
+  /* analytics */
+  getModuleTiming,
   getCareerDistribution,
-  refreshAnalyticsCache,
+  pruneCaches,
   /* programme analytics (live; one source for charts, lists, alerts, AI) */
   getCareerAreas, getDimensions, getStudentFacts, getBreakdown, getDrillStudents, getPulse,
   getProgrammeTrend, getAlerts, getAriaThemes, getGlossary, listClasses, getSchoolSummary, getFollowUpGroups,

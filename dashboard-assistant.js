@@ -670,8 +670,8 @@ async function _runTool(name, args, env) {
     }
     case 'get_activity': {
       const schools = await env.resolveSchools('');
-      const emailsIn = `SELECT LOWER(email) FROM students WHERE COALESCE(email,'') <> ''` + (user.role === 'admin' ? '' : ` AND LOWER(BTRIM(school)) = ANY($1)`);
-      const sp = user.role === 'admin' ? [] : [schools.map(x => String(x).trim().toLowerCase())];
+      const emailsIn = `SELECT LOWER(email) FROM students WHERE COALESCE(email,'') <> ''` + (user.role === 'admin' ? '' : ` AND ${match.sqlNormSchool('school')} = ANY($1)`);
+      const sp = user.role === 'admin' ? [] : [schools.map(x => match.normSchool(x))];
       const rem = await pg.one(`SELECT COUNT(*) FILTER (WHERE sent_at > now() - interval '7 days')::int AS last_7_days,
                                        COUNT(*) FILTER (WHERE sent_at > now() - interval '30 days')::int AS last_30_days
                                   FROM reminder_log WHERE LOWER(student_email) IN (${emailsIn})`, sp);
@@ -706,7 +706,7 @@ async function _runTool(name, args, env) {
       }
       const action = { id: crypto.randomBytes(6).toString('hex'), type, title: _clip(args.title, 140) };
       const mySchools = await env.resolveSchools('');
-      const schoolOpt = (v) => { const want = String(v || '').trim().toLowerCase(); return mySchools.find(x => x.toLowerCase() === want) || ''; };
+      const schoolOpt = (v) => { const want = match.normSchool(v); return mySchools.find(x => match.normSchool(x) === want) || ''; };
       // The student a code points at, checked against the user's scope.
       const studentOf = async () => {
         const sid = env.vault.sidOf(args.student);

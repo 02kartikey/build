@@ -17,8 +17,6 @@
 
 const pg = require('./pg-core.js');
 
-const _norm = (email) => String(email || '').toLowerCase().trim();
-
 /* Access-code students carry a synthetic identifier `access:<session_id>`
    in every place other students have an email. Detect the prefix here so
    goals + milestones + custom context queries route straight to the row
@@ -189,18 +187,6 @@ async function deleteMilestone(email, id) {
   return { ok: true };
 }
 
-/* Milestones whose target_date is today or past and still active — used by
-   the in-app "due" surfacing (and, later, an email reminder job). */
-async function getDueMilestones(email) {
-  const all = await getMilestones(email);
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  return all.filter((m) => {
-    if (m.status === 'completed' || !m.target_date) return false;
-    const d = new Date(m.target_date + 'T00:00:00');
-    return d <= today;
-  });
-}
-
 function _validDate(v) {
   if (v == null || v === '') return null;
   const s = String(v).slice(0, 10);
@@ -266,7 +252,6 @@ module.exports = {
   getCustomContext,
   saveCustomContext,
   getMilestones,
-  getDueMilestones,
   addMilestone,
   updateMilestone,
   setMilestoneStatus,
