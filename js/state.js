@@ -31,19 +31,16 @@ const _log = (function() {
   };
 })();
 
-// Read auth tokens from <meta> tags injected server-side.
-// APP_TOKEN is never exposed as window._APP_TOKEN — it's read from
-// <meta name="app-token"> so it stays out of the global JS scope.
+// server.js injects APP_TOKEN as <meta name="app-token">; it is never a window global.
+function appToken() {
+  const m = document.querySelector('meta[name="app-token"]');
+  return (m && m.getAttribute('content')) || '';
+}
+
 function _getRequestHeaders() {
-  const csrfMeta  = document.querySelector('meta[name="csrf-token"]');
-  const appMeta   = document.querySelector('meta[name="app-token"]');
   const h = { 'Content-Type': 'application/json' };
-  // The server injects the app token as a meta tag; a window global is the fallback.
-  const appToken = appMeta
-    ? (appMeta.getAttribute('content') || '')
-    : ((typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '');
-  if (appToken)  h['X-App-Token']  = appToken;
-  if (csrfMeta)  h['X-CSRF-Token'] = csrfMeta.getAttribute('content') || '';
+  const t = appToken();
+  if (t) h['X-App-Token'] = t;
   return h;
 }
 
@@ -368,4 +365,4 @@ function resetAssessmentState() {
   }
 })();
 
-export { _isConfigured, DB, S, _SESSION_KEY, _saveSession, _clearSession, _restoreSession, saveState, loadState, clearState, resetAssessmentState };
+export { _isConfigured, appToken, DB, S, _SESSION_KEY, _saveSession, _clearSession, _restoreSession, saveState, loadState, clearState, resetAssessmentState };

@@ -56,6 +56,7 @@
 
   /* ── styles (use the host page's CSS variables) ──────────────────── */
   const CSS = `
+.nm-restart{margin:0 0 16px;padding:12px 16px;border-radius:12px;border:1px solid color-mix(in srgb,var(--danger) 35%,transparent);background:color-mix(in srgb,var(--danger) 8%,transparent);color:var(--ink2);font-size:13px;line-height:1.5}.nm-restart b{color:var(--danger)}
 .nm-help{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1px solid var(--border2,#ccd);background:var(--surface,#fff);color:var(--ink4,#678);font:700 10px/1 var(--font,sans-serif);cursor:help;margin-left:5px;vertical-align:middle;padding:0}
 .nm-help:hover{border-color:var(--brand2);color:var(--brand2)}
 .nm-pop{position:fixed;z-index:3000;max-width:340px;background:var(--surface,#fff);border:1px solid var(--border2,#ccd);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18);padding:12px 14px;font:13px/1.55 var(--font,sans-serif);color:var(--ink2,#234)}
@@ -265,10 +266,19 @@ body.nm-modal-open .overlay.open{z-index:2600}
 
   /* ── session context (who is signed in, catalogue, classes) ──────── */
   let _ctxPromise = null;
+  /* Admins only: the app's files were replaced but the server was not
+     restarted, so new pages talk to old server code and parts fail. */
+  function restartNotice(cat) {
+    const host = document.querySelector('.content');
+    const old = document.getElementById('nm-restart');
+    if (!cat.restart_needed || !host) { if (old) old.remove(); return; }
+    if (old) return;
+    host.insertAdjacentHTML('afterbegin', `<div id="nm-restart" class="nm-restart" role="alert"><b>Restart the server.</b> The app’s files were updated after the server started, so it is still running the previous version and some pages will not work. Stop it and start it again (npm start, or pm2 restart), then reload this page.</div>`);
+  }
   NM.ready = function () {
     if (!_ctxPromise) {
       _ctxPromise = Promise.all([api('GET', '/api/dashboard/me'), api('GET', '/api/dashboard/catalogue'), api('GET', '/api/dashboard/classes')])
-        .then(([me, cat, cls]) => { NM.me = me.user; NM.cat = cat; NM.classes = cls.classes || []; return NM; })
+        .then(([me, cat, cls]) => { NM.me = me.user; NM.cat = cat; NM.classes = cls.classes || []; restartNotice(cat); return NM; })
         .catch(e => { _ctxPromise = null; throw e; });
     }
     return _ctxPromise;
@@ -336,7 +346,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
     document.body.appendChild(ov); syncBody();
     return { el: ov, body: ov.querySelector('.nm-mb'), foot: ov.querySelector('.nm-mf'), close };
   }
-  NM.modal = modal;
 
   /* ── open a student's profile from anywhere ─────────────────────── */
   // Each dashboard's openDrawer() loads the student itself, so a profile
@@ -521,13 +530,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
     } catch (e) { el.innerHTML = `<div class="nm-empty">${esc(e.message)}</div>`; }
   };
 
-  /* ── short preview of any list with a "View all" button ───────────── */
-  // "3+ days" when every school in view uses the same follow-up setting.
-  NM.followUpText = (settings) => {
-    const list = (settings.schools || []).map(x => x.settings.follow_up_after_days);
-    const vals = [...new Set(list.length ? list : [settings.global.follow_up_after_days])];
-    return vals.length === 1 ? vals[0] + '+ day' + (vals[0] === 1 ? '' : 's') : 'longer than each school’s follow-up setting';
-  };
   NM.sinceText = (iso) => {
     if (!iso) return '—';
     const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
@@ -574,11 +576,6 @@ body.nm-modal-open .overlay.open{z-index:2600}
     } catch (e) { toast('Export failed: ' + e.message, 'error'); }
   };
 
-  // Download any list as CSV without opening it (every matching student).
-  NM.exportList = function (drill, label) {
-    const d = normDrill(drill);
-    return exportCsv({ dimension: d.dimension, groups: d.groups, class: d.classKey, school: d.school, status: d.status, search: d.search }, label || d.title || 'students');
-  };
 
   /* ── reminders to any list ──────────────────────────────────────── */
   const REMINDER_CHUNK = 200; // well under the server's per-request maximum
@@ -606,6 +603,29 @@ body.nm-modal-open .overlay.open{z-index:2600}
         toast(`${sent} email${sent === 1 ? '' : 's'} sent` + (failed ? `, ${failed} failed` : '') + (noEmail ? `, ${noEmail} without an email skipped` : ''), sent ? 'success' : 'error');
         m.close(); if (onSent) onSent(sent);
       } catch (err) { toast(err.message, 'error'); b.disabled = false; b.textContent = 'Send emails'; }
+    });
+  };
+
+  /* ── change own password (all three dashboards) ─────────────────── */
+  NM.changePassword = function () {
+    const m = modal({ title: 'Change password', sub: 'You will be signed out and asked to sign in with the new password.', small: true, footer: true });
+    const field = (f, label) => `<label style="font-size:12px;font-weight:700;color:var(--ink3)">${label}</label><input class="nm-in" type="password" data-f="${f}" style="width:100%;margin:4px 0 12px">`;
+    m.body.innerHTML = field('old', 'Current password') + field('new', 'New password (at least 8 characters)') + field('conf', 'Confirm new password');
+    m.foot.innerHTML = '<button class="nm-btn" data-f="cancel">Cancel</button><button class="nm-btn pri" data-f="save">Update password</button>';
+    m.el.querySelector('[data-f="old"]').focus();
+    m.foot.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-f]'); if (!b) return;
+      if (b.dataset.f === 'cancel') return m.close();
+      const v = (f) => m.el.querySelector(`[data-f="${f}"]`).value;
+      if (!v('old') || !v('new')) return toast('Fill in all three fields.', 'error');
+      if (v('new').length < 8) return toast('The new password must be at least 8 characters.', 'error');
+      if (v('new') !== v('conf')) return toast('The new passwords do not match.', 'error');
+      b.disabled = true; b.textContent = 'Updating…';
+      try {
+        await api('POST', '/api/dashboard/change-password', { current_password: v('old'), new_password: v('new') });
+        toast('Password changed. Please sign in again.', 'success');
+        m.close(); setTimeout(() => window.doLogout(), 1500);
+      } catch (err) { toast(err.message, 'error'); b.disabled = false; b.textContent = 'Update password'; }
     });
   };
 
@@ -1260,7 +1280,7 @@ body.nm-modal-open .overlay.open{z-index:2600}
     if (NM.scope.school) list = list.filter(x => x.school === NM.scope.school);
     if (!list.length) { el.innerHTML = '<div class="nm-empty">No schools are assigned to your account yet.</div>'; return; }
     let cur = list.find(x => x.school === (opts.school || NM.scope.school)) || list[0];
-    const tone = (x) => x.completion_pct >= x.target_pct ? 'ok' : x.completion_pct >= x.target_pct * .75 ? 'warn' : 'bad';
+    const tone = (x) => ({ met: 'ok', behind: 'warn', far_behind: 'bad' }[x.standing] || '');   // standing is decided by the server
     const one = list.length === 1;
     el.innerHTML = `<div class="sb-wrap${one ? ' one' : ''}">${one ? '' : `<aside class="sb-list" aria-label="Schools">
         <input class="nm-in" type="search" data-f="sq" placeholder="Find a school" aria-label="Find a school">

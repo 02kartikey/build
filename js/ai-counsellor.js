@@ -1,12 +1,9 @@
 /* ════════════════════════════════════════════════════════════════════
-   ai-counsellor.js  —  Frontend AI Counsellor (page-only, no bubble)
+   ai-counsellor.js  —  Frontend AI Counsellor (Aria), full page.
 
-   Fixes applied:
-   • All fetch calls include X-App-Token header (fixes 401)
-   • Back to Report uses _goPageReal() not goPage() (fixes blank page)
-   • Floating bubble removed entirely
-   • hasCompletedAssessment on server now also passes on completed
-     sections even before report generation
+   • Every fetch sends X-App-Token; counsellor routes also send the
+     X-Counsellor-Token issued at unlock.
+   • Back to Report uses _goPageReal(), which keeps the rebuilt results page.
 ════════════════════════════════════════════════════════════════════ */
 
 /* ── Handle 401 from any counsellor endpoint ─────────────────────
@@ -53,15 +50,10 @@ function _acHandle401() {
   const emailEl = document.getElementById('acp-email-input');
   if (emailEl && _AC.email) { emailEl.value = _AC.email; emailEl.disabled = false; }
 }
-// Read APP_TOKEN from <meta name="app-token"> injected by server.
-// Falls back to window._APP_TOKEN for backwards compatibility.
-// The meta tag approach keeps the token out of JS global scope.
+// APP_TOKEN from <meta name="app-token">, injected by server.js.
 function _acToken() {
-  if (typeof document !== 'undefined') {
-    var meta = document.querySelector('meta[name="app-token"]');
-    if (meta) return meta.getAttribute('content') || '';
-  }
-  return (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
+  const meta = document.querySelector('meta[name="app-token"]');
+  return (meta && meta.getAttribute('content')) || '';
 }
 
 function _acHeaders(extra = {}) {
@@ -908,7 +900,7 @@ function goBackFromCounsellor() {
 function _acInputKeydown(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
-    // Call window.acSend so the counsellor-ui.js patch runs (shows acp-messages,
+    // Call window.acSend so the counsellor UI patch in index.html runs (shows acp-messages,
     // hides welcome screen, fires chip suggestions). Bare acSend() would bypass
     // the patch and leave the welcome screen up on the first Enter-key send.
     if (typeof window.acSend === 'function') window.acSend();

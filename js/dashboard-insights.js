@@ -101,7 +101,7 @@
     const label = 'Completions per week, oldest first: ' + weeks.map(w => w.completed).join(', ');
     return `<svg class="ins-spark" viewBox="0 0 100 ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">${weeks.map((w, i) => {
       const h = Math.max(w.completed ? 2 : 0.5, w.completed / max * (H - 2));
-      return `<rect x="${(i * W + W * 0.15).toFixed(2)}" y="${(H - h).toFixed(2)}" width="${(W * 0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="0.8"${i === weeks.length - 1 ? ' class="now"' : ''}><title>Week from ${NM.fmtDate(w.from)}: ${fmt(w.completed)}</title></rect>`;
+      return `<rect x="${(i * W + W * 0.15).toFixed(2)}" y="${(H - h).toFixed(2)}" width="${(W * 0.7).toFixed(2)}" height="${h.toFixed(2)}" rx="0.8"${i === weeks.length - 1 ? ' class="now"' : ''}><title>Week from ${esc(NM.fmtDate(w.from))}: ${fmt(w.completed)}</title></rect>`;
     }).join('')}</svg>`;
   }
   const monthYear = (iso) => new Date(iso).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
@@ -188,7 +188,7 @@
       if (!list.length) { el.innerHTML = '<div class="nm-empty">No schools yet.</div>'; return; }
       const state = { sort: SCHOOL_SORTS[store.get('schools-sort')] ? store.get('schools-sort') : 'behind', all: false, small: false };
       const SHOWN = NM.UI.TABLE_ROWS, days = list[0].recent_days;
-      const tone = (x) => x.completion_pct >= x.target_pct ? 'ok' : x.completion_pct >= x.target_pct * 0.75 ? 'warn' : 'bad';
+      const tone = (x) => ({ met: 'ok', behind: 'warn', far_behind: 'bad' }[x.standing] || '');   // standing is decided by the server
       const gap = (x) => Math.max(0, Math.ceil(x.total * x.target_pct / 100) - x.completed);
       const tr = (x, fold) => `<tr${fold ? ' class="fold"' : ''}><td><button class="nm-link" data-nm="school" data-school="${esc(x.school)}">${esc(x.school)}</button></td>
           <td class="r">${fmt(x.total)}</td>

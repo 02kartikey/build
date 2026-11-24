@@ -192,14 +192,24 @@
       drawPanel();
     }
 
+    // A load failure replaces the whole page with the reason and a retry,
+    // so a half-drawn page never looks like "no schools".
+    function showError(msg) {
+      st.data = null;
+      el.querySelector('.sr').innerHTML = `<div class="sr-card"><div class="sr-empty" role="alert"><p>${esc(msg)}</p><button type="button" class="nm-btn" data-f="retry">Try again</button></div></div>`;
+    }
     async function load() {
-      try {
-        st.data = await api('GET', '/api/dashboard/school-names');
-        const keys = new Set(rows().map(r => r.key));
-        [...st.sel].forEach(k => { if (!keys.has(k)) st.sel.delete(k); });
-        el.querySelector('#sr-groups').innerHTML = st.data.groups.map(g => `<option value="${esc(g)}">`).join('');
-        drawAll();
-      } catch (e) { $('list').innerHTML = `<div class="sr-empty">${esc(e.message)}</div>`; }
+      let data;
+      try { data = await api('GET', '/api/dashboard/school-names'); } catch (e) { return showError('The school list could not load: ' + e.message); }
+      // An older server answers without these fields: its code predates this page.
+      if (!data || !Array.isArray(data.names) || !Array.isArray(data.suggestions) || !data.names.every(n => 'registry' in n)) {
+        return showError('The server is running an older version of the app than this page. Restart the server (npm start, or pm2 restart), then reload the page.');
+      }
+      st.data = data;
+      const keys = new Set(rows().map(r => r.key));
+      [...st.sel].forEach(k => { if (!keys.has(k)) st.sel.delete(k); });
+      el.querySelector('#sr-groups').innerHTML = st.data.groups.map(g => `<option value="${esc(g)}">`).join('');
+      drawAll();
     }
 
     async function submit() {
@@ -220,8 +230,9 @@
       } finally { st.busy = false; drawPanel(); }
     }
 
-    el.addEventListener('change', (e) => { const k = e.target.dataset.key; if (k) select([k], e.target.checked); });
+    el.addEventListener('change', (e) => { const k = e.target.dataset.key; if (k && st.data) select([k], e.target.checked); });
     el.addEventListener('input', (e) => {
+      if (!st.data) return;
       const f = e.target.dataset.f;
       if (f === 'q') { st.q = e.target.value.trim(); drawList(); }
       if (f === 'rq') { st.regQ = e.target.value.trim(); drawRegistry(); }
@@ -234,6 +245,8 @@
     });
     el.addEventListener('click', (e) => {
       const t = e.target.closest('[data-f],[data-filter],[data-sugg],[data-edit],[data-del]'); if (!t) return;
+      if (t.dataset.f === 'retry') { const fresh = el.cloneNode(false); el.replaceWith(fresh); NM.mountSchoolRegistry(fresh); return; }   // drops this mount's listeners
+      if (!st.data && t.dataset.f !== 'add') return;
       if (t.dataset.filter) { st.filter = t.dataset.filter; drawList(); return; }
       if (t.dataset.sugg != null) {
         const g = $('sugg')._groups[Number(t.dataset.sugg)] || [];

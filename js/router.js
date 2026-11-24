@@ -3,13 +3,14 @@
    Page navigation, resume overlay, registration.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S, _clearSession, _restoreSession, _saveSession, DB, _isConfigured, resetAssessmentState } from './state.js';
+import { S, _clearSession, _saveSession, DB, resetAssessmentState } from './state.js';
 import { showDbStatus } from './db-status.js';
 import { startNMAP, renderNMAPPage, renderNMAPSidebarNav, startTimer } from './ui/nmap-page.js';
 import { renderCPIQ } from './ui/cpi-page.js';
 import { renderSEAPage, renderSEASidebarNav } from './ui/sea-page.js';
 import { renderDAABSub, renderDAABSideNav, clearDaabTimer } from './ui/daab-page.js';
 import { buildResults } from './ui/results.js';
+import { getSchoolValue } from './ui/registration.js';
 
 function navLogoClick() {
   const assessmentPages = ['nmap', 'daab', 'cpi', 'nseaas'];
@@ -19,10 +20,8 @@ function navLogoClick() {
     const ok = window.confirm('⚠️ You\'re in the middle of an assessment. Your progress is saved — you can resume when you come back. Leave anyway?');
     if (!ok) return;
     if (currentId === 'daab') {
-      // Use the dedicated stop helper from daab-page.js — it owns the
-      // timer state and resets it cleanly. (Earlier code reassigned an
-      // imported `daabTimerInt` directly, which is a TypeError because
-      // ES module imports are read-only bindings.)
+      // daab-page.js owns the timer state; ES module imports are read-only,
+      // so it must be stopped through its helper.
       clearDaabTimer();
     }
   }
@@ -374,11 +373,9 @@ async function doRegister() {
   const fn=document.getElementById('r-fn').value.trim(), ln=document.getElementById('r-ln').value.trim();
   const cls=document.getElementById('r-cls').value;
   // School: r-sch is a <select> whose "Other (type below)" option reveals a
-  // free-text input (r-sch-other). getSchoolValue() (global, index.html)
-  // resolves the real name; never persist the placeholder string itself.
-  let sch = (typeof getSchoolValue === 'function')
-    ? getSchoolValue()
-    : document.getElementById('r-sch').value.trim();
+  // free-text input (r-sch-other). getSchoolValue() resolves the real name;
+  // never persist the placeholder string itself.
+  let sch = getSchoolValue();
   if (sch === 'Other (type below)') sch = '';
   const gen=document.getElementById('r-gen').value, con=document.getElementById('r-con').checked;
   const state=document.getElementById('r-state').value, city=document.getElementById('r-city').value;

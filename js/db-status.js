@@ -3,7 +3,6 @@
    DB connectivity banner.
 ════════════════════════════════════════════════════════════════════ */
 
-import { _isConfigured } from './state.js';
 
 function showDbStatus(state, msg) {
   const w = document.getElementById('db-status');

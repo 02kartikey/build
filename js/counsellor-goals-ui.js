@@ -23,8 +23,7 @@
   /* ── Auth ────────────────────────────────────────────────────────── */
   function appToken() {
     var m = document.querySelector('meta[name="app-token"]');
-    if (m && m.getAttribute('content')) return m.getAttribute('content');
-    return window._APP_TOKEN || '';
+    return (m && m.getAttribute('content')) || '';
   }
   function counsellorToken() {
     try {
