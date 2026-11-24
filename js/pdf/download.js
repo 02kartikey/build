@@ -126,11 +126,8 @@ async function downloadPDF(override, opts = {}) {
     // ── Palette (matches template) ────────────────────────────────
     const PURPLE       = '#5A24C1';
     const PURPLE_LIGHT = '#7251BC';
-    const PURPLE_DARK  = '#43179C';
     const TEAL         = '#00B8D9';
     const YELLOW       = '#F5A623';
-    const GREEN        = '#2ECC71';
-    const PINK         = '#FF6B9D';
     const GRAY         = '#6B7280';
     const LIGHT_GRAY   = '#F7F5FF';
     const WHITE        = '#FFFFFF';
@@ -149,24 +146,10 @@ async function downloadPDF(override, opts = {}) {
     const A_STRONG  = { t: '#16A34A', fill: '#ECFDF5', bd: '#A7F3D0' }; // green  — strong / well-established
     const A_DEV     = { t: '#B45309', fill: '#FFFBEB', bd: '#FDE68A' }; // amber  — developing / emerging
     const A_EXPLORE = { t: '#0E7490', fill: '#ECFEFF', bd: '#A5F3FC' }; // teal   — exploratory
-    const A_FOCUS   = { t: '#BE185D', fill: '#FDF2F8', bd: '#FBCFE8' }; // pink   — needs support / attention
     const CARD_FILL = '#FBFAFF', CARD_BD = '#E9D5FF';                    // one neutral card skin
     // Spacing scale — one vertical rhythm used across the report instead of
-    // sprinkled magic gaps. distribute() spreads N block-heights evenly through
-    // an available band so a short page reads as designed whitespace, not a
-    // cluster stuck at the top.
+    // sprinkled magic gaps.
     const SP = { xs: 3, sm: 5, md: 8, lg: 12, xl: 18 };
-    const distribute = (top, bottom, heights, opts) => {
-      opts = opts || {};
-      const minGap = opts.minGap != null ? opts.minGap : SP.sm;
-      const maxGap = opts.maxGap != null ? opts.maxGap : SP.xl;
-      const used = heights.reduce((a, b) => a + b, 0);
-      let gap = (bottom - top - used) / (heights.length + 1);
-      gap = Math.max(minGap, Math.min(gap, maxGap));
-      const ys = []; let y = top + gap;
-      for (const h of heights) { ys.push(y); y += h + gap; }
-      return ys; // top-y of each block
-    };
     const W = 210, H = 297;
     // Guide page grid: content margin 44px (15.5mm), content width 507px (179mm).
     const M = 15.5;              // left/right content margin (guide: 15.5mm)
@@ -525,23 +508,11 @@ async function downloadPDF(override, opts = {}) {
     // NOTE: scoreNMAP returns each dim as { ...NMAP_DIMS[i], name: d.label,
     // stanine, label: <band>, cls }. So `name` holds the trait title
     // ('Leadership & Motivation') and `label` holds the stanine band ('High').
-    // We read `d.name` first; if a future scorer omits it we recover the trait
-    // title positionally via NMAP_DIMS[i].label (module-level constant), with a
-    // hardcoded title table as a final fallback.
-    const NMAP_TITLES_FALLBACK = [
-      'Leadership & Motivation','Assertiveness','Cautiousness','Adaptability & Flexibility',
-      'Ethical Awareness','Creativity & Innovation','Curiosity & Learning','Discipline & Sincerity',
-      'Patience & Resilience',
-    ];
-    const nmapTitleAt = (i) => {
-      try {
-        if (typeof NMAP_DIMS !== 'undefined' && NMAP_DIMS[i] && NMAP_DIMS[i].label) return NMAP_DIMS[i].label;
-      } catch (e) {}
-      return NMAP_TITLES_FALLBACK[i] || ('Dimension ' + (i + 1));
-    };
+    // We read `d.name` first; if a scorer omits it the trait title comes
+    // positionally from NMAP_DIMS[i].label (engine/nmap.js).
+    const nmapTitleAt = (i) => (NMAP_DIMS[i] && NMAP_DIMS[i].label) || ('Dimension ' + (i + 1));
     // Detect actual number of dims from live data (supports 9 or 10).
     const NMAP_DIM_COUNT = (nmap.dims && nmap.dims.length >= 10) ? 10 : 9;
-    const firstName = (safe(st.fullName) || 'The student').trim().split(/\s+/)[0];
     const personalityAll = (nmap.dims && nmap.dims.length ? nmap.dims : new Array(NMAP_DIM_COUNT).fill({}))
       .slice(0, NMAP_DIM_COUNT).map((d, i) => {
         const stn = d.stanine || 5;
@@ -552,15 +523,13 @@ async function downloadPDF(override, opts = {}) {
       const i = personalityAll.length;
       personalityAll.push({ name: nmapTitleAt(i), stanine: 5, label: stanineBand(5) });
     }
-    // Keep backward-compat alias used elsewhere in the file.
-    const personality9 = personalityAll;
 
     const topPersonality = personalityAll.slice().sort((a,b) => b.stanine - a.stanine).slice(0, 3);
 
     // ── 8 aptitude domains (live) ─────────────────────────────────
     // Real shape: S.daab is an object keyed by sub-test code (va, pa, na,
     // lsa, hma, ar, ma, sa); each S.daab[key].scores = { raw, max, stanine, label }.
-    // Display order matches DAAB_SUBS (defined elsewhere in app.js).
+    // Display order matches DAAB_SUBS (engine/daab.js).
     const DAAB_KEY_ORDER = ['va', 'pa', 'na', 'lsa', 'hma', 'ar', 'ma', 'sa'];
     const DAAB_TEMPLATE_LABELS = {
       va:  'Verbal Ability',
@@ -658,26 +627,6 @@ async function downloadPDF(override, opts = {}) {
     const SEAA_DISPLAY = { 'Strong Readiness': 'Well-Established', 'Developing Readiness': 'Developing', 'Support Needed': 'Needs Support' };
     const seaaShow = (lbl) => SEAA_DISPLAY[lbl] || lbl;
     seaCards.forEach(c => { c.displayLabel = seaaShow(c.label); });
-
-    // ── Integrated Fit Score ─────────────────────────────────────
-    const avgPers = personality9.reduce((s,d) => s + d.stanine, 0) / personality9.length;
-    // Average across attempted sub-tests only — unattempted now carry stanine 0
-    // and would otherwise drag the fit score (and aptStatus below) down. Falls
-    // back to the neutral mid-point when nothing was attempted so the maths
-    // stays defined.
-    const _aptDone = aptitude8.filter(a => a.attempted);
-    const avgApt  = _aptDone.length
-      ? _aptDone.reduce((s,d) => s + d.stanine, 0) / _aptDone.length
-      : 5;
-    const topInterestScore = (top3[0] && top3[0].score) || 0;
-    const stanineToPct = (s) => ((s - 1) / 8) * 100;
-    let fitRaw = (stanineToPct(avgPers) * 0.30) + (stanineToPct(avgApt) * 0.30) + ((topInterestScore / 20) * 100 * 0.40);
-    seaCards.forEach(c => {
-      if (c.label === 'Support Needed') fitRaw -= 7;
-      else if (c.label === 'Developing Readiness') fitRaw -= 3;
-    });
-    const fitScore = Math.max(0, Math.min(100, Math.round(fitRaw)));
-    const fitTier  = fitScore >= 75 ? 'Strong Fit' : fitScore >= 55 ? 'Emerging Fit' : 'Exploratory Fit';
 
     // ── Layout helpers ───────────────────────────────────────────
     // Note: page total isn't known up front because AI prose blocks may
@@ -994,10 +943,10 @@ async function downloadPDF(override, opts = {}) {
     setFill(C_FOCUS);      doc.circle(97.5, cy + 3.5, 2.5, 'F'); txt('Needs Attention', 101.5, cy + 5, { size: 7.5, color: '#1F2937' });
     cy += 11;
 
-    const persChartH = 8 + personality9.length * 7.5 + 4;
+    const persChartH = 8 + personalityAll.length * 7.5 + 4;
     rect(M, cy, CW, persChartH, '#FAFAFA', '#E5E7EB', 2);
-    txt('Personality Profile — ' + personality9.length + ' Dimensions', M + 4, cy + 6, { size: 8, color: GRAY, bold: true });
-    personality9.forEach((d, i) => stanineBar(d.name, d.stanine, cy + 15 + i * 7.5, stanineColor(d.stanine)));
+    txt('Personality Profile — ' + personalityAll.length + ' Dimensions', M + 4, cy + 6, { size: 8, color: GRAY, bold: true });
+    personalityAll.forEach((d, i) => stanineBar(d.name, d.stanine, cy + 15 + i * 7.5, stanineColor(d.stanine)));
     for (let i = 1; i <= 9; i++) {
       const bx = BAR_X + ((i - 1) / 8) * BAR_W;
       txt(String(i), bx, cy + persChartH + 2, { size: 6, color: GRAY, align: 'center' });
@@ -1046,7 +995,7 @@ async function downloadPDF(override, opts = {}) {
     };
     // Development Suggestions box sits at the bottom of this page (template p5).
     // Compute it first so the parameter cards can reserve room for it.
-    const persWeakP = personality9.slice().sort((a, b) => a.stanine - b.stanine).slice(0, 3);
+    const persWeakP = personalityAll.slice().sort((a, b) => a.stanine - b.stanine).slice(0, 3);
     const suggMapP = {
       'Leadership & Motivation':    'Take initiative on small group projects to build leadership confidence.',
       'Assertiveness':              'Practice expressing opinions in low-pressure settings such as class discussions.',
@@ -1068,15 +1017,15 @@ async function downloadPDF(override, opts = {}) {
     // text, with larger, more legible type than before.
     const descFont = 7, descLH = 4.3;
     const cardTextW = (isLast) => (isLast ? CW : 87.5) - 10;
-    const cardH = personality9.map((d, i) => {
-      const isLastAlone = (personality9.length % 2 === 1) && (i === personality9.length - 1);
+    const cardH = personalityAll.map((d, i) => {
+      const isLastAlone = (personalityAll.length % 2 === 1) && (i === personalityAll.length - 1);
       const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
       doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
       const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
       return 19 + dL.length * descLH + 4;
     });
     const descRows = [];
-    for (let i = 0; i < personality9.length; i += 2) descRows.push([i, i + 1 < personality9.length ? i + 1 : null]);
+    for (let i = 0; i < personalityAll.length; i += 2) descRows.push([i, i + 1 < personalityAll.length ? i + 1 : null]);
     const descRowH = descRows.map(r => Math.max(...r.filter(x => x != null).map(x => cardH[x])));
     const descTotalH = descRowH.reduce((a, b) => a + b, 0);
     const descBottom = BOTTOM - suggReserveP;
@@ -1090,8 +1039,8 @@ async function downloadPDF(override, opts = {}) {
       for (let col = 0; col < row.length; col++) {
         const idx = row[col];
         if (idx == null) continue;
-        const d = personality9[idx];
-        const isLastAlone = (personality9.length % 2 === 1) && (idx === personality9.length - 1);
+        const d = personalityAll[idx];
+        const isLastAlone = (personalityAll.length % 2 === 1) && (idx === personalityAll.length - 1);
         const desc = traitDescs[d.name] || (d.name + ' — ' + stanineBand(d.stanine) + '.');
         doc.setFontSize(descFont); doc.setFont('helvetica', 'normal');
         const dL = doc.splitTextToSize(desc, cardTextW(isLastAlone));
@@ -1464,7 +1413,6 @@ async function downloadPDF(override, opts = {}) {
       const s = seaSnapshot[i];
       const c = seaCards[i];
       const px = M + i * 60.8;
-      const bgByLabel = c.label === 'Strong Readiness' ? '#F0FDF4' : c.label === 'Developing Readiness' ? '#F5F3FF' : '#FFF1F2';
       const strengths = s.strengthsByLabel[c.label] || [];
       const focuses   = s.focusByLabel[c.label] || [];
       // compute wrapped lines for each bullet
@@ -1547,7 +1495,7 @@ async function downloadPDF(override, opts = {}) {
       if (hit && hit.attempted) return hit;
       return { name: name, stanine: 0, attempted: false };
     };
-    const findPers = (name) => personality9.find(p => p.name === name) || { name: name, stanine: 5 };
+    const findPers = (name) => personalityAll.find(p => p.name === name) || { name: name, stanine: 5 };
     const seaToReadiness9 = (key) => {
       const ps = sea.domScores[key] || 10;
       return Math.max(1, Math.min(9, Math.round(9 - (ps / 20) * 8)));
@@ -1995,7 +1943,7 @@ async function downloadPDF(override, opts = {}) {
       const _nsWeakApt  = _nsRated.slice().sort((a, b) => a.stanine - b.stanine)[0];
       const _nsStrongApt= _nsRated.slice().sort((a, b) => b.stanine - a.stanine)[0];
       const _nsSea      = seaCards.filter(c => c.label === 'Support Needed')[0] || seaCards.filter(c => c.label === 'Developing Readiness')[0];
-      const _nsPers     = personality9.slice().sort((a, b) => a.stanine - b.stanine)[0];
+      const _nsPers     = personalityAll.slice().sort((a, b) => a.stanine - b.stanine)[0];
       const nextSteps = [];
       if (_nsInterest) nextSteps.push(['Explore your top interest', 'Try one real activity in ' + _nsInterest + ' this term — a club, a project, a conversation with someone who works in it.']);
       if (_nsWeakApt)  nextSteps.push(['Ten minutes a day', 'Short, regular practice on ' + _nsWeakApt.name.replace(' Ability','').replace(' Apt.','') + ' beats an hour once a week — see the practice ideas on the aptitude page.']);
