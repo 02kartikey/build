@@ -3,7 +3,6 @@
    Deterministic fallback report when AI is unavailable.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S } from '../state.js';
 
 function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
   const firstName = stNorm.firstName;
@@ -127,12 +126,6 @@ function _buildFallbackReport(stNorm, cpi, sea, nmap, daabPayload) {
       : 'Wellbeing analysis will appear after completing the NSEAA assessment.');
 
   /* ── Career table — derived from CPI top interests + DAAB ── */
-  function fitLevel(isCpiTop, stanine) {
-    if (isCpiTop && stanine >= 6) return 'High';
-    if (isCpiTop || stanine >= 6) return 'Medium';
-    return 'Low';
-  }
-
   // Map CPI areas to typical career + stream pairs
   const CAREER_MAP = {
     'Science & Technology':         [{ career:'Software Engineer',      stream:'Science (PCM)'         }, { career:'Data Analyst',             stream:'Science (PCM)'          }],

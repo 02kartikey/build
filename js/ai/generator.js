@@ -3,7 +3,7 @@
    Main AI generation entry — abort, cooldown, generateAIReport, _personaliseReport, _callAPIWithStream.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S } from '../state.js';
+import { S, appToken as _getAppToken } from '../state.js';
 import { _CLIENT_RL, _AI_QUEUE, _fetchWithRetry } from './rate-limit.js';
 import { buildReportPrompt } from './prompt.js';
 import { _showPill, _hidePill, _updatePillMsg, _showToast } from './pill.js';
@@ -13,21 +13,7 @@ import { getStanine, stanineLabel } from '../engine/daab.js';
 
 var _aiAbortCtrl  = null;
 
-/* ── App token reader ─────────────────────────────────────────────
-   The server injects the token as <meta name="app-token">, NOT as
-   window._APP_TOKEN (which is always empty). Reading the meta tag
-   is the only correct way to get the token from an ES module.
-─────────────────────────────────────────────────────────────────── */
-function _getAppToken() {
-  try {
-    const m = document.querySelector('meta[name="app-token"]');
-    if (m && m.getAttribute('content')) return m.getAttribute('content');
-  } catch (_) {}
-  // Legacy fallback only — will be empty on current server builds
-  return (typeof window !== 'undefined' && window._APP_TOKEN) ? window._APP_TOKEN : '';
-}
-
-/* ── Save report + assessments to server-side SQLite ────────────────
+/* ── Save report + assessments to the server (PostgreSQL) ───────────
    Called after window._lastAIReport is set (both AI + fallback paths).
    POSTs registration + per-module raw answers/scores + the report
    text to /api/save-report. Fire-and-forget — a save failure must
@@ -113,12 +99,10 @@ function cancelReport() {
   if (_aiAbortCtrl) { _aiAbortCtrl.abort(); }
   _aiState.generating = false;
   _hidePill();
-  // Surface the error state so the user can retry. Null-safe: the idle panel and
-  // the generate/cancel buttons were removed with the inline preview.
+  // Surface the error state so the user can retry.
   const _d = (id, v) => { const el = document.getElementById(id); if (el) el.style.display = v; };
   _d('ai-report-loading', 'none');
   _d('ai-report-ready',   'none');
-  _d('ai-report-output',  'none');
   _d('ai-report-error',   'block');
   const msgEl = document.getElementById('ai-error-msg');
   if (msgEl) msgEl.textContent = 'Report preparation was cancelled.';
@@ -262,7 +246,7 @@ async function generateAIReport() {
     _hidePill();
     renderAIReport(window._lastAIReport);
     _showToast(stNorm.firstName); // notify user report is ready
-    _saveReportToServer(window._lastAIReport); // persist registration + assessments + report to SQLite
+    _saveReportToServer(window._lastAIReport); // persist registration + assessments + report
 
   } catch (err) {
     clearInterval(msgInterval);
@@ -298,12 +282,16 @@ async function generateAIReport() {
       _hidePill();
       renderAIReport(window._lastAIReport);
       _showToast(stNorm.firstName);
-      _saveReportToServer(window._lastAIReport); // persist registration + assessments + fallback report to SQLite
+      _saveReportToServer(window._lastAIReport); // persist registration + assessments + fallback report
+      // Shown inside the visible "ready" panel; replaced, not stacked, on a retry.
       setTimeout(function() {
-        const outEl = document.getElementById('ai-report-output');
+        const outEl = document.getElementById('ai-report-ready');
         if (!outEl) return;
+        const old = document.getElementById('ai-instant-notice');
+        if (old) old.remove();
         const notice = document.createElement('div');
-        notice.style.cssText = 'background:#fffbeb;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin-bottom:1.25rem;font-size:13px;color:#92400e;font-family:Poppins,sans-serif;display:flex;align-items:flex-start;gap:10px';
+        notice.id = 'ai-instant-notice';
+        notice.style.cssText = 'background:#fffbeb;border:1.5px solid #f59e0b;border-radius:12px;padding:12px 16px;margin:0 auto 1.25rem;max-width:560px;text-align:left;font-size:13px;color:#92400e;font-family:Poppins,sans-serif;display:flex;align-items:flex-start;gap:10px';
         notice.innerHTML = '<span style="font-size:16px;flex-shrink:0">⚡</span>' +
           '<div><strong>Instant Report</strong> — The AI service is temporarily busy. ' +
           'This report was generated instantly from your score data. ' +

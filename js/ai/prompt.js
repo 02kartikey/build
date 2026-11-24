@@ -3,7 +3,6 @@
    Token-efficient prompt builder for the AI report.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S } from '../state.js';
 
 function buildReportPrompt(st, cpi, sea, nmap, daabPayload) {
   const DAAB_NAMES = {
