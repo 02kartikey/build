@@ -4,8 +4,6 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { S, DB } from '../state.js';
-import { CPI_AREAS } from '../engine/cpi.js';
-import { NMAP_DIMS } from '../engine/nmap.js';
 import { DAAB_SUBS, scoreDAAB } from '../engine/daab.js';
 import { buildCPICharts } from '../charts/cpi-charts.js';
 import { buildSELCharts } from '../charts/sea-charts.js';
@@ -51,10 +49,6 @@ function buildResults() {
     setTimeout(function() { try { generateAIReport(); } catch(e) {} }, 300);
     return;
   }
-
-  // Safe accessors for sea.cls domain fields (defaults if missing)
-  const seaCat = d => (sea.cls && sea.cls[d] && sea.cls[d].cat)   || 'A';
-  const seaLvl = d => (sea.cls && sea.cls[d] && sea.cls[d].level) || 'Well-Established';
 
   document.getElementById('res-name').textContent = st.fullName;
   document.getElementById('res-meta').textContent = st.class+(st.section?' '+st.section:'')+' · '+st.school+(st.schoolLocation?' · '+st.schoolLocation:'');
@@ -117,7 +111,6 @@ function buildResults() {
     // Prepare automatically as soon as the assessment completes.
     _d('ai-report-ready',   'none');
     _d('ai-report-error',   'none');
-    _d('ai-report-output',  'none');
     _d('ai-report-loading', 'block');
     // Hold the PDF button until the report is ready — we want all AI fields baked in.
     const pdfBtn = document.getElementById('pdf-download-btn');

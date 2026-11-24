@@ -2,10 +2,13 @@
    ui/registration.js  —  NuMind MAPS
    State → City → School cascading dropdowns for the registration form.
 
-   Exported:
+   Exported (main.js exposes the first four on window for the inline
+   onchange handlers in index.html):
      initStateDropdown()   — called once on DOMContentLoaded
      populateCities()      — called by r-state onchange
      populateSchools()     — called by r-city onchange
+     handleSchoolChange()  — called by r-sch onchange
+     getSchoolValue()      — used by doRegister() in router.js
 
    School data:
      Covers all 28 states + 8 UTs of India.

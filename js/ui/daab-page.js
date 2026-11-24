@@ -3,8 +3,8 @@
    DAAB sub-test rendering, timers, navigation, results, AR/MA/SA renderers.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S, saveState, _saveSession, DB } from '../state.js';
-import { DAAB_SUBS, DAAB_KEYS, DAAB_VA_QS, DAAB_PA_QS, DAAB_NA_QS, DAAB_LSA_QS, DAAB_HMA_QS, scoreDAAB, getStanine, stanineLabel, DAAB_AR_QS, DAAB_MA_QS, DAAB_SA_ROW_IMAGES, DAAB_SA_QS } from '../engine/daab.js';
+import { S, _saveSession, DB } from '../state.js';
+import { DAAB_SUBS, DAAB_KEYS, DAAB_VA_QS, DAAB_PA_QS, DAAB_NA_QS, DAAB_LSA_QS, DAAB_HMA_QS, scoreDAAB, DAAB_AR_QS, DAAB_MA_QS, DAAB_SA_ROW_IMAGES, DAAB_SA_QS } from '../engine/daab.js';
 import { goPage, PIP_IDX } from '../router.js';
 
 /* ── DAAB Timer ── */
@@ -174,9 +174,7 @@ const _DAAB_INTERP_TEXT = {
   MA:  ['understanding how practical things work',   'hands-on building and how-things-work videos'],
   SA:  ['picturing and rotating shapes mentally',    'drawing, model-building and rotation puzzles'],
 };
-// Takes the stanine (1-9) and derives the band itself. It previously took
-// sc.label ('Average', 'High', ...) and compared it to band names that never
-// matched, so every area rendered as a focus area.
+// Takes the stanine (1-9) and derives the band itself.
 function _daabBand(stanine) {
   const n = Number(stanine) || 5;
   return n >= 7 ? 'Strength Area' : n >= 4 ? 'Developing Area' : 'Focus Area';
@@ -401,7 +399,6 @@ function renderVA(area, sub, mod) {
     // Page pills
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < 2; p++) {
-      const pDone = mod.answers.slice(p*10, p*10+10).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }
@@ -426,7 +423,6 @@ function renderVA(area, sub, mod) {
       </div>`;
     }).join('');
 
-    const pageDone = mod.answers.slice(start, end).filter(a=>a!==null).length;
     const isLast = pg === 1;
 
     area.innerHTML = daabHeader(sub, mod) +
@@ -491,7 +487,6 @@ function renderPA(area, sub, mod) {
     // Page pills
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < 5; p++) {
-      const pDone = mod.answers.slice(p*10, p*10+10).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }
@@ -512,7 +507,6 @@ function renderPA(area, sub, mod) {
       </div>`;
     }).join('');
 
-    const pageDone = mod.answers.slice(start, end).filter(a=>a!==null).length;
     const isLast = pg === 4;
 
     area.innerHTML = daabHeader(sub, mod) +
@@ -577,7 +571,6 @@ function renderNA(area, sub, mod) {
 
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < 2; p++) {
-      const pDone = mod.answers.slice(p*10, p*10+10).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }
@@ -659,7 +652,6 @@ function renderMCQ(area, sub, mod, questions) {
 
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < totalPages; p++) {
-      const pDone = mod.answers.slice(p*10, Math.min(p*10+10, questions.length)).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }
@@ -735,9 +727,7 @@ function renderMCQ(area, sub, mod, questions) {
 function buildDAABResults() {
   const grid = document.getElementById('r-daab-grid');
   if (!grid) return;
-  // Render every subtest the student actually completed. Previously this was
-  // gated on va.scores alone, so if Verbal was missing (or scored later) the
-  // entire DAAB section collapsed to "not available" and hid the other seven.
+  // Render every subtest the student actually completed, whichever ones those are.
   const done = DAAB_SUBS.filter(sub => S.daab[sub.key] && S.daab[sub.key].scores);
   if (!done.length) { grid.innerHTML = '<p style="color:var(--ink3);font-size:13px">DAAB data not available.</p>'; return; }
 
@@ -786,7 +776,6 @@ function renderAR(area, sub, mod) {
     // Page pills
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < 2; p++) {
-      const pDone = mod.answers.slice(p*10, p*10+10).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }
@@ -875,7 +864,6 @@ function renderMA(area, sub, mod) {
     // Page pills
     let pillsHtml = '<div class="daab-page-pills">';
     for (let p = 0; p < 2; p++) {
-      const pDone = mod.answers.slice(p*10, p*10+10).every(a=>a!==null);
       const cls = p < pg ? 'done' : p === pg ? 'active' : '';
       pillsHtml += `<div class="daab-page-pill ${cls}">${p+1}</div>`;
     }

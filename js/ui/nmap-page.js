@@ -3,8 +3,8 @@
    NMAP page rendering, navigation, submit, timer helpers.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S, saveState, _saveSession, DB } from '../state.js';
-import { NMAP_DIMS, NMAP_RAW_STMTS, NMAP_QS, NMAP_PAGES, NMAP_PAGE_QS, NMAP_ENCOURAGE } from '../engine/nmap.js';
+import { S, _saveSession, DB } from '../state.js';
+import { NMAP_DIMS, NMAP_QS, NMAP_PAGE_QS, NMAP_ENCOURAGE } from '../engine/nmap.js';
 import { ENGINE } from '../engine/scorers.js';
 import { goPage } from '../router.js';
 

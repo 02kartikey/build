@@ -3,8 +3,8 @@
    SEAA / NSEAAS page rendering, navigation, submit.
 ════════════════════════════════════════════════════════════════════ */
 
-import { S, saveState, _saveSession, DB } from '../state.js';
-import { SEA_DOMAINS, Q_DOMAIN, SEA_TYPES, SEA_QS, DOMAIN_NAME, PAGE_THEMES, SEA_ENCOURAGE } from '../engine/sea.js';
+import { S, _saveSession, DB } from '../state.js';
+import { SEA_QS, PAGE_THEMES, SEA_ENCOURAGE } from '../engine/sea.js';
 import { ENGINE } from '../engine/scorers.js';
 import { goPage } from '../router.js';
 import { startTimer, stopTimer } from './nmap-page.js';

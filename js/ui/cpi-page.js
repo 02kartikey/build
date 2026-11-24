@@ -1,5 +1,5 @@
 import { S, _saveSession, DB } from '../state.js';
-import { CPI_AREAS, CPI_QS } from '../engine/cpi.js';
+import { CPI_QS } from '../engine/cpi.js';
 import { ENGINE } from '../engine/scorers.js';
 import { goPage } from '../router.js';
 import { startTimer, stopTimer } from './nmap-page.js';
