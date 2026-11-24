@@ -94,7 +94,6 @@ const NMAP_QS = [];
 for (let k = 0; k < 63; k++) {
   const dim = k % 9;
   const stmtIdx = Math.floor(k / 9);
-  const rawIdx = stmtIdx * 9 + dim; // within the dim's block: dim*7 + stmtIdx
   const rawStmt = NMAP_RAW_STMTS[dim * 7 + stmtIdx];
   NMAP_QS.push({ text: rawStmt, dim });
 }

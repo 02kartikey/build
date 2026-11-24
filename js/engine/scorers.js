@@ -4,7 +4,7 @@
 ════════════════════════════════════════════════════════════════════ */
 
 import { CPI_AREAS } from './cpi.js';
-import { SEA_DOMAINS, Q_DOMAIN, SEA_TYPES, DOMAIN_NAME } from './sea.js';
+import { Q_DOMAIN, SEA_TYPES, DOMAIN_NAME } from './sea.js';
 import { NMAP_DIMS, NMAP_QS } from './nmap.js';
 
 const ENGINE = {
